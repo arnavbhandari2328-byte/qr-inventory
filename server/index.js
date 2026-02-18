@@ -7,22 +7,35 @@ dotenv.config();
 const { Pool } = pkg;
 
 const app = express();
-app.use(cors());
+
+/* ---------------- MIDDLEWARE ---------------- */
+
+app.use(cors({
+  origin: [
+    "http://localhost:5173",
+    "https://qr-inventory-azure.vercel.app"
+  ],
+  credentials: true
+}));
+
 app.use(express.json());
 
-/* ---------------- DATABASE ---------------- */
+/* ---------------- DATABASE (FIXED) ---------------- */
 
 const pool = new Pool({
-  host: process.env.DB_HOST,
-  user: process.env.DB_USER,
-  password: process.env.DB_PASSWORD,
-  database: process.env.DB_DATABASE,
-  port: process.env.DB_PORT,
+  connectionString: process.env.DATABASE_URL,
   ssl: {
     rejectUnauthorized: false
-  }
+  },
+  max: 5,
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 10000
 });
 
+/* Test DB connection on startup */
+pool.connect()
+  .then(() => console.log("✅ Database connected"))
+  .catch(err => console.error("❌ Database connection failed:", err));
 
 /* ================= API ROUTER ================= */
 
@@ -117,10 +130,15 @@ router.post("/transactions", async (req, res) => {
   }
 });
 
-/* IMPORTANT — THIS CREATES /api PREFIX */
+/* IMPORTANT — /api PREFIX */
 app.use("/api", router);
+
+/* ROOT ROUTE (IMPORTANT FOR RAILWAY HEALTH CHECK) */
+app.get("/", (req, res) => {
+  res.send("Server Alive");
+});
 
 /* ---------------- START SERVER ---------------- */
 
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log("Server running on port " + PORT));
+app.listen(PORT, () => console.log("🚀 Server running on port " + PORT));
