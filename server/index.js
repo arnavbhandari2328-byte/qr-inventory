@@ -3,101 +3,95 @@ import cors from "cors";
 import { pool, testConnection } from "./db.js";
 
 const app = express();
-const PORT = process.env.PORT || 10000;
-
-/* -------------------- MIDDLEWARE -------------------- */
-
 app.use(cors());
 app.use(express.json());
 
-/* -------------------- HEALTH CHECK -------------------- */
+const PORT = process.env.PORT || 10000;
 
+/* ---------------- HEALTH ---------------- */
 app.get("/", (req, res) => {
-  res.send("QR Inventory API is running 🚀");
+  res.send("QR Inventory API Running");
 });
 
-/* -------------------- GET ALL PRODUCTS -------------------- */
-
+/* ---------------- GET ALL PRODUCTS ---------------- */
 app.get("/api/products", async (req, res) => {
   try {
-    console.log("📦 Fetching products...");
-
     const result = await pool.query(`
       SELECT 
         id,
-        name,
-        size,
-        material,
-        quantity,
-        location,
+        product_id,
+        product_name,
+        low_stock_alert,
         created_at
       FROM products
-      ORDER BY id DESC
+      ORDER BY created_at DESC
     `);
 
-    console.log(`✅ Sent ${result.rows.length} products`);
     res.json(result.rows);
-
   } catch (err) {
-    console.error("❌ PRODUCT FETCH ERROR:", err.message);
+    console.error("FETCH PRODUCTS ERROR:", err);
     res.status(500).json({
       error: "Database failed",
-      details: err.message
+      details: err.message,
     });
   }
 });
 
-/* -------------------- ADD PRODUCT -------------------- */
-
-app.post("/api/products", async (req, res) => {
+/* ---------------- GET SINGLE PRODUCT ---------------- */
+app.get("/api/products/:pid", async (req, res) => {
   try {
-    const { name, size, material, quantity, location } = req.body;
-
-    if (!name) {
-      return res.status(400).json({ error: "Product name required" });
-    }
+    const { pid } = req.params;
 
     const result = await pool.query(
-      `INSERT INTO products (name, size, material, quantity, location)
-       VALUES ($1,$2,$3,$4,$5)
-       RETURNING *`,
-      [name, size, material, quantity || 0, location]
+      `SELECT * FROM products WHERE product_id = $1`,
+      [pid]
     );
 
-    console.log("➕ Product added:", result.rows[0].name);
+    if (result.rows.length === 0)
+      return res.status(404).json({ error: "Product not found" });
+
     res.json(result.rows[0]);
-
   } catch (err) {
-    console.error("❌ ADD PRODUCT ERROR:", err.message);
-    res.status(500).json({ error: err.message });
+    console.error("FETCH ONE ERROR:", err);
+    res.status(500).json({ error: "Database failed" });
   }
 });
 
-/* -------------------- DELETE PRODUCT -------------------- */
-
-app.delete("/api/products/:id", async (req, res) => {
+/* ---------------- ADD PRODUCT ---------------- */
+app.post("/api/products", async (req, res) => {
   try {
-    const { id } = req.params;
+    const { product_id, product_name, low_stock_alert } = req.body;
 
-    await pool.query("DELETE FROM products WHERE id = $1", [id]);
+    const result = await pool.query(
+      `INSERT INTO products (product_id, product_name, low_stock_alert)
+       VALUES ($1,$2,$3)
+       RETURNING *`,
+      [product_id, product_name, low_stock_alert]
+    );
 
-    console.log("🗑 Deleted product:", id);
-    res.json({ success: true });
-
+    res.json(result.rows[0]);
   } catch (err) {
-    console.error("❌ DELETE ERROR:", err.message);
-    res.status(500).json({ error: err.message });
+    console.error("ADD ERROR:", err);
+    res.status(500).json({ error: "Insert failed" });
   }
 });
 
-/* -------------------- START SERVER -------------------- */
+/* ---------------- DELETE ---------------- */
+app.delete("/api/products/:pid", async (req, res) => {
+  try {
+    await pool.query(`DELETE FROM products WHERE product_id = $1`, [
+      req.params.pid,
+    ]);
 
-async function startServer() {
+    res.json({ success: true });
+  } catch (err) {
+    console.error("DELETE ERROR:", err);
+    res.status(500).json({ error: "Delete failed" });
+  }
+});
+
+/* ---------------- START SERVER ---------------- */
+app.listen(PORT, async () => {
+  console.log(`🚀 Server running on port ${PORT}`);
   await testConnection();
-
-  app.listen(PORT, () => {
-    console.log(`🚀 Server running on port ${PORT}`);
-  });
-}
-
-startServer();
+});
