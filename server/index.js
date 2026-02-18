@@ -22,15 +22,7 @@ app.use(express.json());
 
 /* ---------------- DATABASE (FIXED) ---------------- */
 
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: {
-    rejectUnauthorized: false
-  },
-  max: 5,
-  idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 10000
-});
+import pool from "./db.js";
 
 /* Test DB connection on startup */
 pool.connect()

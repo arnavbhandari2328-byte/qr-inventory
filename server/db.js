@@ -2,14 +2,11 @@ import pkg from "pg";
 const { Pool } = pkg;
 
 const pool = new Pool({
-  host: "aws-1-ap-southeast-1.pooler.supabase.com",
-  port: 6543,
-  user: "postgres.tybioqoldfdabbprtcz",
-  password: "Test1234",   // <-- your DB password
-  database: "postgres",
+  connectionString: process.env.DATABASE_URL,
   ssl: {
-    rejectUnauthorized: false,
+    rejectUnauthorized: false
   },
+  family: 4 // FORCE IPv4 (THIS FIXES EVERYTHING)
 });
 
 export default pool;
