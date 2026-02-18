@@ -1,31 +1,37 @@
 import pkg from "pg";
-const { Pool } = pkg;
+const { Client } = pkg;
 
-// Render + Supabase compatible connection
-const connectionString = process.env.DATABASE_URL;
+/*
+  This is a serverless-safe DB connector
+  Every request:
+  connect -> query -> disconnect
 
-if (!connectionString) {
-  console.error("❌ DATABASE_URL missing in environment variables");
-  process.exit(1);
-}
+  Prevents:
+  - Render sleep crashes
+  - Supabase pool exhaustion
+  - Random hanging APIs
+*/
 
-export const pool = new Pool({
-  connectionString,
-  ssl: {
-    rejectUnauthorized: false, // REQUIRED for Supabase
-  },
-  max: 5, // prevent Render memory kill
-  idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 10000,
-});
+export async function query(sql, params = []) {
+  const client = new Client({
+    connectionString: process.env.DATABASE_URL,
+    ssl: { rejectUnauthorized: false },
+    connectionTimeoutMillis: 5000
+  });
 
-// Test connection at startup
-export async function testConnection() {
   try {
-    const client = await pool.connect();
-    console.log("✅ Connected to Supabase database");
-    client.release();
+    await client.connect();
+
+    const result = await client.query(sql, params);
+
+    return result.rows;
+
   } catch (err) {
-    console.error("❌ Database connection failed:", err.message);
+    console.error("DB QUERY ERROR:", err);
+    throw err;
+
+  } finally {
+    // 🔥 MOST IMPORTANT LINE
+    await client.end();
   }
 }
