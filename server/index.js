@@ -4,11 +4,36 @@ import dotenv from "dotenv";
 import pkg from "pg";
 
 dotenv.config();
-
 const { Pool } = pkg;
 
 const app = express();
-app.use(cors());
+
+/* ---------------- CORS FIX ---------------- */
+
+const allowedOrigins = [
+  "http://localhost:5173",
+  "http://localhost:3000",
+  "https://qr-inventory-azure.vercel.app"
+];
+
+app.use(
+  cors({
+    origin: function (origin, callback) {
+      // allow mobile scanner / postman / same-origin
+      if (!origin) return callback(null, true);
+
+      if (allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        console.log("Blocked by CORS:", origin);
+        callback(new Error("Not allowed by CORS"));
+      }
+    },
+    methods: ["GET", "POST", "PUT", "DELETE"],
+    credentials: true
+  })
+);
+
 app.use(express.json());
 
 /* ---------------- DATABASE ---------------- */
@@ -28,7 +53,7 @@ app.get("/", (req, res) => {
   res.send("API Running");
 });
 
-/* ---------------- GET PRODUCTS ---------------- */
+/* ================= PRODUCTS ================= */
 
 app.get("/products", async (req, res) => {
   try {
@@ -43,17 +68,15 @@ app.get("/products", async (req, res) => {
       ORDER BY created_at DESC
     `);
 
-    console.log("Products fetched:", result.rows.length);
     res.json(result.rows);
-
   } catch (err) {
     console.error("PRODUCT FETCH ERROR:", err);
     res.status(500).json({ error: err.message });
   }
 });
-// ================= LOCATIONS =================
 
-// GET all locations
+/* ================= LOCATIONS ================= */
+
 app.get("/locations", async (req, res) => {
   try {
     const result = await pool.query("SELECT * FROM locations ORDER BY name");
@@ -64,7 +87,6 @@ app.get("/locations", async (req, res) => {
   }
 });
 
-// ADD location (optional but useful)
 app.post("/locations", async (req, res) => {
   try {
     const { name } = req.body;
@@ -79,8 +101,7 @@ app.post("/locations", async (req, res) => {
   }
 });
 
-
-/* ---------------- GET TRANSACTIONS ---------------- */
+/* ================= TRANSACTIONS ================= */
 
 app.get("/transactions", async (req, res) => {
   try {
@@ -92,37 +113,38 @@ app.get("/transactions", async (req, res) => {
         t.transaction_type,
         t.quantity,
         t.created_at,
+        t.party,
         l.name AS location_name
       FROM transactions t
       LEFT JOIN locations l ON t.location_id = l.id
-      ORDER BY t.id DESC
+      ORDER BY t.created_at DESC
     `);
 
     res.json(result.rows);
-
   } catch (err) {
     console.error("Transactions fetch error:", err);
     res.status(500).json({ error: "Failed to fetch transactions" });
   }
 });
 
-
-/* ---------------- ADD TRANSACTION ---------------- */
-
 app.post("/transactions", async (req, res) => {
-  const { product_id, location_id, transaction_type, quantity, party } = req.body;
+  try {
+    const { product_id, location_id, transaction_type, quantity, party } = req.body;
 
-  await pool.query(
-    `INSERT INTO transactions(product_id, location_id, transaction_type, quantity, party)
-     VALUES ($1,$2,$3,$4,$5)`,
-    [product_id, location_id, transaction_type, quantity, party]
-  );
+    await pool.query(
+      `INSERT INTO transactions(product_id, location_id, transaction_type, quantity, party)
+       VALUES ($1,$2,$3,$4,$5)`,
+      [product_id, location_id, transaction_type, quantity, party]
+    );
 
-  res.json({ success: true });
+    res.json({ success: true });
+  } catch (err) {
+    console.error("Insert transaction error:", err);
+    res.status(500).json({ error: "Insert failed" });
+  }
 });
 
 /* ---------------- START SERVER ---------------- */
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log("Server running on port " + PORT));
-
