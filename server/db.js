@@ -1,19 +1,31 @@
 import pkg from "pg";
 const { Pool } = pkg;
 
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
+// Render + Supabase compatible connection
+const connectionString = process.env.DATABASE_URL;
+
+if (!connectionString) {
+  console.error("❌ DATABASE_URL missing in environment variables");
+  process.exit(1);
+}
+
+export const pool = new Pool({
+  connectionString,
   ssl: {
-    rejectUnauthorized: false,
+    rejectUnauthorized: false, // REQUIRED for Supabase
   },
+  max: 5, // prevent Render memory kill
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 10000,
 });
 
-pool.on("connect", () => {
-  console.log("✅ Connected to Supabase");
-});
-
-pool.on("error", (err) => {
-  console.error("❌ Unexpected DB error", err);
-});
-
-export default pool;
+// Test connection at startup
+export async function testConnection() {
+  try {
+    const client = await pool.connect();
+    console.log("✅ Connected to Supabase database");
+    client.release();
+  } catch (err) {
+    console.error("❌ Database connection failed:", err.message);
+  }
+}
