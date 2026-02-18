@@ -7,33 +7,7 @@ dotenv.config();
 const { Pool } = pkg;
 
 const app = express();
-
-/* ---------------- CORS FIX ---------------- */
-
-const allowedOrigins = [
-  "http://localhost:5173",
-  "http://localhost:3000",
-  "https://qr-inventory-azure.vercel.app"
-];
-
-app.use(
-  cors({
-    origin: function (origin, callback) {
-      // allow mobile scanner / postman / same-origin
-      if (!origin) return callback(null, true);
-
-      if (allowedOrigins.includes(origin)) {
-        callback(null, true);
-      } else {
-        console.log("Blocked by CORS:", origin);
-        callback(new Error("Not allowed by CORS"));
-      }
-    },
-    methods: ["GET", "POST", "PUT", "DELETE"],
-    credentials: true
-  })
-);
-
+app.use(cors());
 app.use(express.json());
 
 /* ---------------- DATABASE ---------------- */
@@ -47,27 +21,24 @@ pool.connect()
   .then(() => console.log("Database connected"))
   .catch(err => console.log("DB Error:", err.message));
 
-/* ---------------- TEST ROUTE ---------------- */
+/* ================= API ROUTER ================= */
 
-app.get("/", (req, res) => {
+const router = express.Router();
+
+/* TEST */
+router.get("/", (req, res) => {
   res.send("API Running");
 });
 
-/* ================= PRODUCTS ================= */
+/* ---------------- PRODUCTS ---------------- */
 
-app.get("/products", async (req, res) => {
+router.get("/products", async (req, res) => {
   try {
     const result = await pool.query(`
-      SELECT 
-        id,
-        product_id,
-        product_name,
-        low_stock_alert,
-        created_at
+      SELECT id, product_id, product_name, low_stock_alert, created_at
       FROM products
       ORDER BY created_at DESC
     `);
-
     res.json(result.rows);
   } catch (err) {
     console.error("PRODUCT FETCH ERROR:", err);
@@ -75,9 +46,9 @@ app.get("/products", async (req, res) => {
   }
 });
 
-/* ================= LOCATIONS ================= */
+/* ---------------- LOCATIONS ---------------- */
 
-app.get("/locations", async (req, res) => {
+router.get("/locations", async (req, res) => {
   try {
     const result = await pool.query("SELECT * FROM locations ORDER BY name");
     res.json(result.rows);
@@ -87,7 +58,7 @@ app.get("/locations", async (req, res) => {
   }
 });
 
-app.post("/locations", async (req, res) => {
+router.post("/locations", async (req, res) => {
   try {
     const { name } = req.body;
     const result = await pool.query(
@@ -101,9 +72,9 @@ app.post("/locations", async (req, res) => {
   }
 });
 
-/* ================= TRANSACTIONS ================= */
+/* ---------------- TRANSACTIONS ---------------- */
 
-app.get("/transactions", async (req, res) => {
+router.get("/transactions", async (req, res) => {
   try {
     const result = await pool.query(`
       SELECT 
@@ -112,14 +83,13 @@ app.get("/transactions", async (req, res) => {
         t.location_id,
         t.transaction_type,
         t.quantity,
-        t.created_at,
         t.party,
+        t.created_at,
         l.name AS location_name
       FROM transactions t
       LEFT JOIN locations l ON t.location_id = l.id
-      ORDER BY t.created_at DESC
+      ORDER BY t.id DESC
     `);
-
     res.json(result.rows);
   } catch (err) {
     console.error("Transactions fetch error:", err);
@@ -127,7 +97,7 @@ app.get("/transactions", async (req, res) => {
   }
 });
 
-app.post("/transactions", async (req, res) => {
+router.post("/transactions", async (req, res) => {
   try {
     const { product_id, location_id, transaction_type, quantity, party } = req.body;
 
@@ -139,10 +109,13 @@ app.post("/transactions", async (req, res) => {
 
     res.json({ success: true });
   } catch (err) {
-    console.error("Insert transaction error:", err);
-    res.status(500).json({ error: "Insert failed" });
+    console.error("Add transaction error:", err);
+    res.status(500).json({ error: "Failed to add transaction" });
   }
 });
+
+/* IMPORTANT — THIS CREATES /api PREFIX */
+app.use("/api", router);
 
 /* ---------------- START SERVER ---------------- */
 
