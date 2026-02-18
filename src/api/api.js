@@ -1,4 +1,4 @@
-const API_URL = "http://localhost:5000";
+const API_URL = "https://qr-inventory.onrender.com";
 
 /* PRODUCTS */
 export const getProducts = async () => {
