@@ -4,9 +4,16 @@ const { Pool } = pkg;
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: {
-    rejectUnauthorized: false
+    rejectUnauthorized: false,
   },
-  family: 4 // FORCE IPv4 (THIS FIXES EVERYTHING)
+});
+
+pool.on("connect", () => {
+  console.log("✅ Connected to Supabase");
+});
+
+pool.on("error", (err) => {
+  console.error("❌ Unexpected DB error", err);
 });
 
 export default pool;
