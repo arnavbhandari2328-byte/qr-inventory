@@ -1,37 +1,22 @@
 import pkg from "pg";
-const { Client } = pkg;
+const { Pool } = pkg;
 
-/*
-  This is a serverless-safe DB connector
-  Every request:
-  connect -> query -> disconnect
+const connectionString = process.env.DATABASE_URL;
 
-  Prevents:
-  - Render sleep crashes
-  - Supabase pool exhaustion
-  - Random hanging APIs
-*/
+export const pool = new Pool({
+  connectionString,
+  ssl: {
+    rejectUnauthorized: false,
+  },
+});
 
-export async function query(sql, params = []) {
-  const client = new Client({
-    connectionString: process.env.DATABASE_URL,
-    ssl: { rejectUnauthorized: false },
-    connectionTimeoutMillis: 5000
-  });
-
+/* Test DB Connection */
+export async function testConnection() {
   try {
-    await client.connect();
-
-    const result = await client.query(sql, params);
-
-    return result.rows;
-
+    const client = await pool.connect();
+    console.log("✅ Connected to Supabase PostgreSQL");
+    client.release();
   } catch (err) {
-    console.error("DB QUERY ERROR:", err);
-    throw err;
-
-  } finally {
-    // 🔥 MOST IMPORTANT LINE
-    await client.end();
+    console.error("❌ Database connection failed:", err.message);
   }
 }
