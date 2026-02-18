@@ -1,49 +1,52 @@
-app.get("/", (req, res) => {
-  res.send("QR Inventory API is running");
-});
-
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
-import { query } from "./db.js";
+import { pool, testConnection } from "./db.js";
 
 dotenv.config();
 
 const app = express();
+
+/* ---------------- MIDDLEWARE ---------------- */
 app.use(cors());
 app.use(express.json());
 
-/* ================= API ROUTER ================= */
+/* ---------------- ROOT ROUTE (HEALTH CHECK) ---------------- */
+app.get("/", (req, res) => {
+  res.send("QR Inventory API is running");
+});
+
+/* ================= API ROUTES ================= */
 
 const router = express.Router();
 
+/* TEST */
 router.get("/", (req, res) => {
   res.send("API Running");
 });
 
 /* ---------------- PRODUCTS ---------------- */
-
 router.get("/products", async (req, res) => {
   try {
-    const rows = await query(`
+    const result = await pool.query(`
       SELECT id, product_id, product_name, low_stock_alert, created_at
       FROM products
       ORDER BY created_at DESC
     `);
-    res.json(rows);
+    res.json(result.rows);
   } catch (err) {
     console.error("PRODUCT FETCH ERROR:", err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: "Failed to fetch products" });
   }
 });
 
 /* ---------------- LOCATIONS ---------------- */
-
 router.get("/locations", async (req, res) => {
   try {
-    const rows = await query(`SELECT * FROM locations ORDER BY name`);
-    res.json(rows);
-  } catch {
+    const result = await pool.query(`SELECT * FROM locations ORDER BY name`);
+    res.json(result.rows);
+  } catch (err) {
+    console.error("Locations error:", err);
     res.status(500).json({ error: "Failed to fetch locations" });
   }
 });
@@ -51,23 +54,21 @@ router.get("/locations", async (req, res) => {
 router.post("/locations", async (req, res) => {
   try {
     const { name } = req.body;
-
-    const rows = await query(
+    const result = await pool.query(
       `INSERT INTO locations (name) VALUES ($1) RETURNING *`,
       [name]
     );
-
-    res.json(rows[0]);
-  } catch {
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error("Add location error:", err);
     res.status(500).json({ error: "Failed to add location" });
   }
 });
 
 /* ---------------- TRANSACTIONS ---------------- */
-
 router.get("/transactions", async (req, res) => {
   try {
-    const rows = await query(`
+    const result = await pool.query(`
       SELECT 
         t.id,
         t.product_id,
@@ -81,8 +82,7 @@ router.get("/transactions", async (req, res) => {
       LEFT JOIN locations l ON t.location_id = l.id
       ORDER BY t.id DESC
     `);
-
-    res.json(rows);
+    res.json(result.rows);
   } catch (err) {
     console.error("Transactions fetch error:", err);
     res.status(500).json({ error: "Failed to fetch transactions" });
@@ -93,25 +93,26 @@ router.post("/transactions", async (req, res) => {
   try {
     const { product_id, location_id, transaction_type, quantity, party } = req.body;
 
-    await query(
+    await pool.query(
       `INSERT INTO transactions(product_id, location_id, transaction_type, quantity, party)
        VALUES ($1,$2,$3,$4,$5)`,
       [product_id, location_id, transaction_type, quantity, party]
     );
 
     res.json({ success: true });
-  } catch {
+  } catch (err) {
+    console.error("Add transaction error:", err);
     res.status(500).json({ error: "Failed to add transaction" });
   }
 });
 
-/* IMPORTANT — PREFIX */
+/* IMPORTANT — /api prefix */
 app.use("/api", router);
 
-/* START SERVER */
-
+/* ---------------- START SERVER ---------------- */
 const PORT = process.env.PORT || 10000;
 
-app.listen(PORT, () => {
-  console.log("🚀 Server running on port", PORT);
+app.listen(PORT, async () => {
+  console.log(`🚀 Server running on port ${PORT}`);
+  await testConnection();
 });
