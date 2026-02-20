@@ -100,12 +100,15 @@ app.delete("/api/products/:pid", async (req, res) => {
 ========================================================= */
 
 /* GET ALL TRANSACTIONS */
+/* GET ALL TRANSACTIONS */
 app.get("/api/transactions", async (req, res) => {
   try {
+    // We added a LEFT JOIN here to grab the location name and attach it as 'location_name'
     const result = await pool.query(`
-      SELECT *
-      FROM transactions
-      ORDER BY created_at DESC
+      SELECT t.*, l.name AS location_name
+      FROM transactions t
+      LEFT JOIN locations l ON t.location_id = l.id
+      ORDER BY t.created_at DESC
     `);
 
     res.json(result.rows);
