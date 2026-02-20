@@ -23,62 +23,74 @@ export default function Transactions() {
 
   // ✅ FETCH FROM BACKEND
   async function fetchAll() {
-    const prod = await fetch(`${API}/products`).then(r => r.json());
-    const loc = await fetch(`${API}/locations`).then(r => r.json());
-    const trans = await fetch(`${API}/transactions`).then(r => r.json());
+    try {
+      const prod = await fetch(`${API}/products`).then(r => r.json());
+      const loc = await fetch(`${API}/locations`).then(r => r.json());
+      const trans = await fetch(`${API}/transactions`).then(r => r.json());
 
-    // newest first (since backend returns plain array)
-    trans.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+      // newest first (since backend returns plain array)
+      trans.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
 
-    setProducts(prod || []);
-    setLocations(loc || []);
-    setTransactions(trans || []);
+      setProducts(prod || []);
+      setLocations(loc || []);
+      setTransactions(trans || []);
+    } catch (err) {
+      console.error("Failed fetching transactions data", err);
+    }
   }
 
   // ✅ ADD TRANSACTION
   const handleAdd = async () => {
     if (!form.product_id || !form.location_id || !form.quantity) {
-      alert("Fill required fields");
+      alert("Please fill required fields (Product, Location, Quantity)");
       return;
     }
 
-    await fetch(`${API}/transactions`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        product_id: form.product_id,
-        location_id: form.location_id,
-        transaction_type: form.transaction_type,
-        quantity: Number(form.quantity),
-        party: form.party
-      })
-    });
+    try {
+      await fetch(`${API}/transactions`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          product_id: form.product_id,
+          location_id: form.location_id,
+          transaction_type: form.transaction_type,
+          quantity: Number(form.quantity),
+          party: form.party
+        })
+      });
 
-    setForm({
-      product_id: "",
-      location_id: "",
-      transaction_type: "inward",
-      quantity: "",
-      party: ""
-    });
+      setForm({
+        product_id: "",
+        location_id: "",
+        transaction_type: "inward",
+        quantity: "",
+        party: ""
+      });
 
-    fetchAll();
+      fetchAll();
+    } catch (err) {
+      console.error("ADD TRANSACTION ERROR:", err);
+      alert("Failed to add transaction. Check console.");
+    }
   };
 
   // ✅ DELETE
   const handleDelete = async (id) => {
     if (!window.confirm("Delete transaction?")) return;
 
-    await fetch(`${API}/transactions/${id}`, {
-      method: "DELETE"
-    });
-
-    fetchAll();
+    try {
+      await fetch(`${API}/transactions/${id}`, {
+        method: "DELETE"
+      });
+      fetchAll();
+    } catch (err) {
+      console.error("DELETE ERROR:", err);
+    }
   };
 
-  // 📊 EXPORT EXCEL (UNCHANGED)
+  // 📊 EXPORT EXCEL
   const exportToExcel = () => {
     if (!transactions.length) {
       alert("No transactions to export");

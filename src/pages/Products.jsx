@@ -84,6 +84,33 @@ export default function Products() {
     XLSX.writeFile(wb, "Products_Report.xlsx");
   };
 
+  /* ---------------- ADD PRODUCT ---------------- */
+  const handleAddProduct = async () => {
+    if (!form.product_id || !form.product_name || !form.low_stock_alert) {
+      alert("Please fill in all fields.");
+      return;
+    }
+
+    try {
+      const API_URL = import.meta.env.VITE_API_URL;
+      await fetch(`${API_URL}/products`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          product_id: form.product_id,
+          product_name: form.product_name,
+          low_stock_alert: Number(form.low_stock_alert)
+        }),
+      });
+
+      // Clear the form and refresh the table
+      setForm({ product_id: "", product_name: "", low_stock_alert: "" });
+      loadProducts(); 
+    } catch (err) {
+      console.error("Failed to add product", err);
+    }
+  };
+
   /* ---------------- DELETE PRODUCT ---------------- */
   const handleDeleteProduct = async (e, productId) => {
     e.stopPropagation(); // Prevents the row's onClick (openLedger) from firing
@@ -118,8 +145,8 @@ export default function Products() {
       <div className="bg-white shadow rounded p-4 mb-6 flex gap-3 items-center">
         <input name="product_id" placeholder="Product ID" value={form.product_id} onChange={handleChange} className="border p-2 rounded w-1/4" />
         <input name="product_name" placeholder="Product Name" value={form.product_name} onChange={handleChange} className="border p-2 rounded w-1/4" />
-        <input name="low_stock_alert" placeholder="Low Stock Alert" value={form.low_stock_alert} onChange={handleChange} className="border p-2 rounded w-1/4" />
-        <button className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded">Add</button>
+        <input name="low_stock_alert" placeholder="Low Stock Alert" type="number" value={form.low_stock_alert} onChange={handleChange} className="border p-2 rounded w-1/4" />
+        <button onClick={handleAddProduct} className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded">Add</button>
         <button onClick={handleExportExcel} className="ml-auto bg-green-600 hover:bg-green-700 text-white px-6 py-2 rounded">Export Excel</button>
       </div>
 
