@@ -1,4 +1,4 @@
-const API_URL = import.meta.env.VITE_API_URL;
+const API_URL = "https://qr-inventory.onrender.com";
 
 export const getProducts = async () => {
   const res = await fetch(`${API_URL}/products`);
