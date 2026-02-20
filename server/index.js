@@ -139,19 +139,21 @@ app.get("/api/transactions", async (req, res) => {
 /* ADD TRANSACTION */
 app.post("/api/transactions", async (req, res) => {
   try {
-    const { product_id, type, quantity } = req.body;
+    // 1. Grab ALL the fields sent from the React frontend
+    const { product_id, location_id, transaction_type, quantity, party } = req.body;
 
+    // 2. Insert them ALL into the database
     const result = await pool.query(
-      `INSERT INTO transactions (product_id, type, quantity)
-       VALUES ($1,$2,$3)
+      `INSERT INTO transactions (product_id, location_id, transaction_type, quantity, party)
+       VALUES ($1, $2, $3, $4, $5)
        RETURNING *`,
-      [product_id, type, quantity]
+      [product_id, location_id, transaction_type, quantity, party]
     );
 
     res.json(result.rows[0]);
   } catch (err) {
     console.error("ADD TRANSACTION ERROR:", err);
-    res.status(500).json({ error: "Failed to add transaction" });
+    res.status(500).json({ error: "Failed to add transaction", details: err.message });
   }
 });
 
