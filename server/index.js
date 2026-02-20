@@ -3,7 +3,26 @@ import cors from "cors";
 import { pool, testConnection } from "./db.js";
 
 const app = express();
-app.use(cors());
+
+// ✅ 1. Exact Custom Domains Allowed
+const allowedOrigins = [
+  "http://localhost:5173", 
+  "https://niveeinventory.app", 
+  "https://www.niveeinventory.app"
+];
+
+app.use(
+  cors({
+    origin: function (origin, callback) {
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        callback(new Error("Not allowed by CORS"));
+      }
+    },
+  })
+);
+
 app.use(express.json());
 
 const PORT = process.env.PORT || 10000;
@@ -96,14 +115,13 @@ app.delete("/api/products/:pid", async (req, res) => {
 
 
 /* =========================================================
-   TRANSACTIONS  (ADDED — REQUIRED BY FRONTEND)
+   TRANSACTIONS
 ========================================================= */
 
 /* GET ALL TRANSACTIONS */
-/* GET ALL TRANSACTIONS */
 app.get("/api/transactions", async (req, res) => {
   try {
-    // We added a LEFT JOIN here to grab the location name and attach it as 'location_name'
+    // ✅ Includes the LEFT JOIN fix for locations
     const result = await pool.query(`
       SELECT t.*, l.name AS location_name
       FROM transactions t
@@ -139,7 +157,7 @@ app.post("/api/transactions", async (req, res) => {
 
 
 /* =========================================================
-   LOCATIONS  (ADDED — REQUIRED BY FRONTEND)
+   LOCATIONS
 ========================================================= */
 
 app.get("/api/locations", async (req, res) => {
