@@ -1,9 +1,17 @@
+const mapProduct = (p) => ({
+  id: p.id,
+  name: p.product_name,
+  sku: p.product_id,
+  lowStock: p.low_stock_alert,
+  createdAt: p.created_at,
+});
 const API_URL = "https://qr-inventory.onrender.com/api";
 
 /* PRODUCTS */
 export const getProducts = async () => {
   const res = await fetch(`${API_URL}/products`);
-  return res.json();
+  const data = await res.json();
+  return data.map(mapProduct);
 };
 
 /* LOCATIONS */
@@ -15,7 +23,8 @@ export const getLocations = async () => {
 /* TRANSACTIONS */
 export const getTransactions = async () => {
   const res = await fetch(`${API_URL}/transactions`);
-  return res.json();
+  const data = await res.json();
+return data || [];
 };
 
 export const addTransaction = async (data) => {
