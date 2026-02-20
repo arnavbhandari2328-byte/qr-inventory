@@ -13,6 +13,10 @@ app.get("/", (req, res) => {
   res.send("QR Inventory API Running");
 });
 
+/* =========================================================
+   PRODUCTS
+========================================================= */
+
 /* ---------------- GET ALL PRODUCTS ---------------- */
 app.get("/api/products", async (req, res) => {
   try {
@@ -76,7 +80,7 @@ app.post("/api/products", async (req, res) => {
   }
 });
 
-/* ---------------- DELETE ---------------- */
+/* ---------------- DELETE PRODUCT ---------------- */
 app.delete("/api/products/:pid", async (req, res) => {
   try {
     await pool.query(`DELETE FROM products WHERE product_id = $1`, [
@@ -89,6 +93,67 @@ app.delete("/api/products/:pid", async (req, res) => {
     res.status(500).json({ error: "Delete failed" });
   }
 });
+
+
+/* =========================================================
+   TRANSACTIONS  (ADDED — REQUIRED BY FRONTEND)
+========================================================= */
+
+/* GET ALL TRANSACTIONS */
+app.get("/api/transactions", async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT *
+      FROM transactions
+      ORDER BY created_at DESC
+    `);
+
+    res.json(result.rows);
+  } catch (err) {
+    console.error("FETCH TRANSACTIONS ERROR:", err);
+    res.status(500).json({ error: "Failed to fetch transactions" });
+  }
+});
+
+/* ADD TRANSACTION */
+app.post("/api/transactions", async (req, res) => {
+  try {
+    const { product_id, type, quantity } = req.body;
+
+    const result = await pool.query(
+      `INSERT INTO transactions (product_id, type, quantity)
+       VALUES ($1,$2,$3)
+       RETURNING *`,
+      [product_id, type, quantity]
+    );
+
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error("ADD TRANSACTION ERROR:", err);
+    res.status(500).json({ error: "Failed to add transaction" });
+  }
+});
+
+
+/* =========================================================
+   LOCATIONS  (ADDED — REQUIRED BY FRONTEND)
+========================================================= */
+
+app.get("/api/locations", async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT *
+      FROM locations
+      ORDER BY id ASC
+    `);
+
+    res.json(result.rows);
+  } catch (err) {
+    console.error("FETCH LOCATIONS ERROR:", err);
+    res.status(500).json({ error: "Failed to fetch locations" });
+  }
+});
+
 
 /* ---------------- START SERVER ---------------- */
 app.listen(PORT, async () => {
