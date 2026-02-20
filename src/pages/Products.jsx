@@ -84,6 +84,23 @@ export default function Products() {
     XLSX.writeFile(wb, "Products_Report.xlsx");
   };
 
+  /* ---------------- DELETE PRODUCT ---------------- */
+  const handleDeleteProduct = async (e, productId) => {
+    e.stopPropagation(); // Prevents the row's onClick (openLedger) from firing
+
+    if (!window.confirm("Are you sure you want to delete this product?")) return;
+
+    try {
+      const API_URL = import.meta.env.VITE_API_URL;
+      await fetch(`${API_URL}/products/${productId}`, {
+        method: "DELETE",
+      });
+      loadProducts(); // Refresh the table after deleting
+    } catch (err) {
+      console.error("Failed to delete product", err);
+    }
+  };
+
   const filtered = products.filter(
     (p) =>
       p.product_name?.toLowerCase().includes(search.toLowerCase()) ||
@@ -137,7 +154,14 @@ export default function Products() {
                       {p.low_stock_alert}
                     </span>
                   </td>
-                  <td className="p-3 text-red-500">Delete</td>
+                  <td className="p-3">
+                    <button 
+                      onClick={(e) => handleDeleteProduct(e, p.product_id)} 
+                      className="text-red-500 hover:text-red-700 font-semibold px-3 py-1 bg-red-50 rounded hover:bg-red-100 transition-colors"
+                    >
+                      Delete
+                    </button>
+                  </td>
                 </tr>
               ))
             )}
@@ -150,7 +174,7 @@ export default function Products() {
           <div className="bg-white w-4/5 max-h-[85vh] overflow-y-auto rounded-lg shadow-xl p-6">
             <div className="flex justify-between items-center mb-4">
               <h2 className="text-2xl font-bold">Ledger — {selectedProduct.product_name}</h2>
-              <button onClick={() => setSelectedProduct(null)} className="bg-red-500 text-white px-4 py-1 rounded">Close</button>
+              <button onClick={() => setSelectedProduct(null)} className="bg-red-500 text-white px-4 py-1 rounded hover:bg-red-600 transition-colors">Close</button>
             </div>
 
             <table className="w-full border">
