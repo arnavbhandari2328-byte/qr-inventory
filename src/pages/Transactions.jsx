@@ -7,7 +7,12 @@ export default function Transactions() {
   const [locations, setLocations] = useState([]);
   const [transactions, setTransactions] = useState([]);
   const [search, setSearch] = useState("");
-  const [editingId, setEditingId] = useState(null); // ✅ Tracks if editing
+  const [editingId, setEditingId] = useState(null);
+
+  // ✅ Pagination States
+  const [page, setPage] = useState(0);
+  const [totalCount, setTotalCount] = useState(0);
+  const PAGE_SIZE = 50; // Show 50 items per page
 
   const [form, setForm] = useState({
     product_id: "",
@@ -17,29 +22,45 @@ export default function Transactions() {
     party: ""
   });
 
+  // Fetch Dropdown data (Products/Locations) only once when page loads
   useEffect(() => {
-    fetchAll();
+    fetchDropdowns();
   }, []);
 
-  async function fetchAll() {
+  // Fetch Transactions whenever the `page` state changes
+  useEffect(() => {
+    fetchTransactions();
+  }, [page]);
+
+  async function fetchDropdowns() {
+    const { data: prod } = await supabase.from("products").select("*");
+    const { data: loc } = await supabase.from("locations").select("*");
+    setProducts(prod || []);
+    setLocations(loc || []);
+  }
+
+  // ✅ FETCH EXACTLY 50 TRANSACTIONS
+  async function fetchTransactions() {
     try {
-      const { data: prod } = await supabase.from("products").select("*");
-      const { data: loc } = await supabase.from("locations").select("*");
-      const { data: trans } = await supabase.from("transactions").select("*");
+      const from = page * PAGE_SIZE;
+      const to = from + PAGE_SIZE - 1;
 
-      if (trans) {
-        trans.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-      }
+      const { data: trans, count, error } = await supabase
+        .from("transactions")
+        .select("*", { count: "exact" })
+        .order("created_at", { ascending: false })
+        .range(from, to);
 
-      setProducts(prod || []);
-      setLocations(loc || []);
+      if (error) throw error;
+
       setTransactions(trans || []);
+      if (count !== null) setTotalCount(count);
     } catch (err) {
-      console.error("Failed fetching transactions data", err);
+      console.error("Failed fetching paginated transactions", err);
     }
   }
 
-  // ✅ SAVE TRANSACTION (ADD OR UPDATE)
+  // ✅ SAVE TRANSACTION
   const handleSave = async () => {
     if (!form.product_id || !form.location_id || !form.quantity) {
       alert("Please fill required fields (Product, Location, Quantity)");
@@ -48,7 +69,6 @@ export default function Transactions() {
 
     try {
       if (editingId) {
-        // UPDATE
         const { error } = await supabase.from("transactions").update({
           product_id: form.product_id,
           location_id: form.location_id,
@@ -58,7 +78,6 @@ export default function Transactions() {
         }).eq("id", editingId);
         if (error) throw error;
       } else {
-        // INSERT
         const { error } = await supabase.from("transactions").insert([{
           product_id: form.product_id,
           location_id: form.location_id,
@@ -69,17 +88,18 @@ export default function Transactions() {
         if (error) throw error;
       }
 
-      // Reset
       setForm({ product_id: "", location_id: "", transaction_type: "inward", quantity: "", party: "" });
       setEditingId(null);
-      fetchAll();
+      
+      // Reset to page 0 to see the newly added transaction at the top
+      setPage(0);
+      fetchTransactions();
     } catch (err) {
       console.error("SAVE TRANSACTION ERROR:", err.message);
       alert("Failed to save transaction. Check console.");
     }
   };
 
-  // ✅ EDIT BUTTON CLICK
   const handleEditClick = (t) => {
     setForm({
       product_id: t.product_id,
@@ -91,54 +111,67 @@ export default function Transactions() {
     setEditingId(t.id);
   };
 
-  // ✅ CANCEL EDIT
   const cancelEdit = () => {
     setForm({ product_id: "", location_id: "", transaction_type: "inward", quantity: "", party: "" });
     setEditingId(null);
   };
 
-  // ✅ DELETE
   const handleDelete = async (id) => {
     if (!window.confirm("Delete transaction?")) return;
-
     try {
       const { error } = await supabase.from("transactions").delete().eq("id", id);
       if (error) throw error;
-      fetchAll();
+      fetchTransactions();
     } catch (err) {
       console.error("DELETE ERROR:", err.message);
     }
   };
 
-  // 📊 EXPORT EXCEL
-  const exportToExcel = () => {
-    if (!transactions.length) return;
+  // 📊 EXPORT EXCEL (Fetches ALL records so backups are complete)
+  const exportToExcel = async () => {
+    try {
+      const { data: allTrans, error } = await supabase
+        .from("transactions")
+        .select("*")
+        .order("created_at", { ascending: false });
 
-    const exportData = transactions.map((t) => {
-      const product = products.find((p) => p.id === t.product_id);
-      const location = locations.find((l) => l.id === t.location_id);
+      if (error) throw error;
+      if (!allTrans || !allTrans.length) {
+        alert("No transactions to export");
+        return;
+      }
 
-      return {
-        Date: new Date(t.created_at).toLocaleString(),
-        Product: product?.product_name || "",
-        Product_Code: product?.product_id || "",
-        Type: t.transaction_type,
-        Quantity: t.quantity,
-        Location: location?.name || "",
-        Party: t.party || ""
-      };
-    });
+      const exportData = allTrans.map((t) => {
+        const product = products.find((p) => p.id === t.product_id);
+        const location = locations.find((l) => l.id === t.location_id);
 
-    const ws = XLSX.utils.json_to_sheet(exportData);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Transactions");
-    XLSX.writeFile(wb, "Inventory_Transactions.xlsx");
+        return {
+          Date: new Date(t.created_at).toLocaleString(),
+          Product: product?.product_name || "",
+          Product_Code: product?.product_id || "",
+          Type: t.transaction_type,
+          Quantity: t.quantity,
+          Location: location?.name || "",
+          Party: t.party || ""
+        };
+      });
+
+      const ws = XLSX.utils.json_to_sheet(exportData);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Transactions");
+      XLSX.writeFile(wb, "Inventory_Transactions.xlsx");
+    } catch (err) {
+      console.error("Export failed:", err.message);
+      alert("Failed to export data.");
+    }
   };
 
   const filtered = transactions.filter((t) => {
     const product = products.find((p) => p.id === t.product_id);
     return product?.product_name?.toLowerCase().includes(search.toLowerCase());
   });
+
+  const totalPages = Math.ceil(totalCount / PAGE_SIZE);
 
   return (
     <div className="p-8">
@@ -147,22 +180,18 @@ export default function Transactions() {
       {/* ADD / EDIT FORM */}
       <div className="bg-white shadow rounded p-6 mb-6 space-y-4">
         <div className="grid grid-cols-5 gap-4">
-
           <select value={form.product_id} onChange={(e) => setForm({ ...form, product_id: e.target.value })} className="border p-2 rounded">
             <option value="">Product</option>
             {products.map((p) => (<option key={p.id} value={p.id}>{p.product_name}</option>))}
           </select>
-
           <select value={form.location_id} onChange={(e) => setForm({ ...form, location_id: e.target.value })} className="border p-2 rounded">
             <option value="">Location</option>
             {locations.map((l) => (<option key={l.id} value={l.id}>{l.name}</option>))}
           </select>
-
           <select value={form.transaction_type} onChange={(e) => setForm({ ...form, transaction_type: e.target.value })} className="border p-2 rounded">
             <option value="inward">Inward</option>
             <option value="outward">Outward</option>
           </select>
-
           <input type="number" placeholder="Qty" value={form.quantity} onChange={(e) => setForm({ ...form, quantity: e.target.value })} className="border p-2 rounded" />
           <input placeholder="Party" value={form.party} onChange={(e) => setForm({ ...form, party: e.target.value })} className="border p-2 rounded" />
         </div>
@@ -171,7 +200,6 @@ export default function Transactions() {
           <button onClick={handleSave} className={`text-white px-6 py-2 rounded ${editingId ? 'bg-orange-500 hover:bg-orange-600' : 'bg-blue-600 hover:bg-blue-700'}`}>
             {editingId ? "Update Transaction" : "Add Transaction"}
           </button>
-          
           {editingId && (
             <button onClick={cancelEdit} className="bg-gray-400 hover:bg-gray-500 text-white px-6 py-2 rounded">
               Cancel
@@ -182,12 +210,12 @@ export default function Transactions() {
 
       {/* EXPORT + SEARCH */}
       <div className="flex justify-between mb-4">
-        <input placeholder="Search product..." value={search} onChange={(e) => setSearch(e.target.value)} className="border p-2 rounded w-64" />
+        <input placeholder="Search current page..." value={search} onChange={(e) => setSearch(e.target.value)} className="border p-2 rounded w-64" />
         <button onClick={exportToExcel} className="bg-green-600 text-white px-5 py-2 rounded hover:bg-green-700">Export Excel</button>
       </div>
 
       {/* TABLE */}
-      <div className="bg-white shadow rounded p-6 overflow-x-auto">
+      <div className="bg-white shadow rounded p-6 overflow-x-auto mb-4">
         <table className="w-full border-collapse">
           <thead>
             <tr className="border-b text-left">
@@ -216,12 +244,8 @@ export default function Transactions() {
                   <td className="p-2">{location?.name}</td>
                   <td className="p-2">{t.party}</td>
                   <td className="p-2 flex gap-2">
-                    <button onClick={() => handleEditClick(t)} className="text-blue-600 hover:text-blue-800 font-semibold px-3 py-1 bg-blue-50 rounded hover:bg-blue-100 transition-colors">
-                      Edit
-                    </button>
-                    <button onClick={() => handleDelete(t.id)} className="text-red-500 hover:text-red-700 font-semibold px-3 py-1 bg-red-50 rounded hover:bg-red-100 transition-colors">
-                      Delete
-                    </button>
+                    <button onClick={() => handleEditClick(t)} className="text-blue-600 hover:text-blue-800 font-semibold px-3 py-1 bg-blue-50 rounded hover:bg-blue-100 transition-colors">Edit</button>
+                    <button onClick={() => handleDelete(t.id)} className="text-red-500 hover:text-red-700 font-semibold px-3 py-1 bg-red-50 rounded hover:bg-red-100 transition-colors">Delete</button>
                   </td>
                 </tr>
               );
@@ -229,6 +253,28 @@ export default function Transactions() {
           </tbody>
         </table>
       </div>
+
+      {/* PAGINATION CONTROLS */}
+      <div className="flex justify-between items-center bg-gray-200 p-4 rounded-lg shadow-inner">
+        <button 
+          onClick={() => setPage(page - 1)} 
+          disabled={page === 0}
+          className={`px-4 py-2 rounded font-semibold ${page === 0 ? 'bg-gray-300 text-gray-500 cursor-not-allowed' : 'bg-blue-600 text-white hover:bg-blue-700'}`}
+        >
+          Previous
+        </button>
+        <span className="text-gray-700 font-medium">
+          Page {page + 1} of {totalPages || 1} ({totalCount} total records)
+        </span>
+        <button 
+          onClick={() => setPage(page + 1)} 
+          disabled={page + 1 >= totalPages}
+          className={`px-4 py-2 rounded font-semibold ${page + 1 >= totalPages ? 'bg-gray-300 text-gray-500 cursor-not-allowed' : 'bg-blue-600 text-white hover:bg-blue-700'}`}
+        >
+          Next
+        </button>
+      </div>
+
     </div>
   );
 }

@@ -1,10 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { supabase } from "../supabase";
 import * as XLSX from "xlsx";
 
 export default function Products() {
   const [products, setProducts] = useState([]);
   const [transactions, setTransactions] = useState([]);
+  const [locations, setLocations] = useState([]); // ✅ Needs locations to map Excel text to DB IDs
   const [search, setSearch] = useState("");
 
   const [form, setForm] = useState({
@@ -15,7 +16,10 @@ export default function Products() {
 
   const [selectedProduct, setSelectedProduct] = useState(null);
   const [ledger, setLedger] = useState([]);
-  const [editingId, setEditingId] = useState(null); // ✅ Tracks if we are editing
+  const [editingId, setEditingId] = useState(null);
+  
+  // ✅ Ref for the hidden file input
+  const fileInputRef = useRef(null);
 
   useEffect(() => {
     loadProducts();
@@ -25,9 +29,11 @@ export default function Products() {
     try {
       const { data: prod, error: prodErr } = await supabase.from("products").select("*");
       const { data: trans, error: transErr } = await supabase.from("transactions").select("*, locations(name)");
+      const { data: loc, error: locErr } = await supabase.from("locations").select("*");
 
       if (prodErr) throw prodErr;
       if (transErr) throw transErr;
+      if (locErr) throw locErr;
 
       const formattedTrans = (trans || []).map(t => ({
         ...t,
@@ -36,8 +42,9 @@ export default function Products() {
 
       setProducts(prod || []);
       setTransactions(formattedTrans);
+      setLocations(loc || []);
     } catch (err) {
-      console.error("Failed loading products from Supabase:", err.message);
+      console.error("Failed loading data from Supabase:", err.message);
     }
   };
 
@@ -94,6 +101,101 @@ export default function Products() {
     XLSX.writeFile(wb, "Products_Report.xlsx");
   };
 
+  /* ---------------- BULK UPLOAD EXCEL W/ OPENING STOCK ---------------- */
+  const handleBulkUpload = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = async (evt) => {
+      try {
+        const bstr = evt.target.result;
+        const wb = XLSX.read(bstr, { type: "binary" });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const data = XLSX.utils.sheet_to_json(ws);
+
+        // 1. Prepare products for insertion
+        const productsToInsert = [];
+        const validRows = []; // Keep track of valid rows to process stock later
+
+        data.forEach((row) => {
+          const pId = String(row.Product_ID || row.product_id || "");
+          const pName = String(row.Product_Name || row.product_name || "");
+          
+          if (pId && pName) {
+            productsToInsert.push({
+              product_id: pId,
+              product_name: pName,
+              low_stock_alert: Number(row.Low_Alert || row.low_stock_alert || 0)
+            });
+            validRows.push(row);
+          }
+        });
+
+        if (productsToInsert.length === 0) {
+          alert("No valid data found. Ensure headers are 'Product_ID' and 'Product_Name'.");
+          return;
+        }
+
+        // 2. Insert Products and get them back (so we have their internal DB IDs)
+        const { data: insertedProducts, error: prodErr } = await supabase
+          .from("products")
+          .insert(productsToInsert)
+          .select("*"); 
+
+        if (prodErr) throw prodErr;
+
+        // 3. Prepare Opening Stock Transactions
+        const transactionsToInsert = [];
+
+        validRows.forEach((row) => {
+          const stock = Number(row.Opening_Stock || row.opening_stock || 0);
+          const locName = String(row.Location || row.location || "").trim();
+
+          // If there is opening stock and a location provided
+          if (stock > 0 && locName) {
+            // Match the Excel Product_ID to the newly generated DB Product ID
+            const pIdStr = String(row.Product_ID || row.product_id);
+            const dbProduct = insertedProducts.find(p => p.product_id === pIdStr);
+            
+            // Match the Excel Location string to the internal DB Location ID
+            const dbLocation = locations.find(l => l.name.toLowerCase() === locName.toLowerCase());
+
+            if (dbProduct && dbLocation) {
+              transactionsToInsert.push({
+                product_id: dbProduct.id, // The internal UUID
+                location_id: dbLocation.id, // The internal UUID
+                transaction_type: "inward",
+                quantity: stock,
+                party: "Opening Balance"
+              });
+            } else if (!dbLocation) {
+              console.warn(`Location '${locName}' not found in database. Skipping opening stock for ${pIdStr}.`);
+            }
+          }
+        });
+
+        // 4. Insert Transactions (if any exist)
+        if (transactionsToInsert.length > 0) {
+          const { error: transErr } = await supabase
+            .from("transactions")
+            .insert(transactionsToInsert);
+          
+          if (transErr) throw transErr;
+        }
+
+        alert(`Success! Uploaded ${insertedProducts.length} products and created ${transactionsToInsert.length} Opening Stock records.`);
+        loadProducts(); // Refresh table to show everything
+      } catch (err) {
+        console.error("Bulk upload error:", err.message);
+        alert(`Upload Failed: ${err.message}. Ensure your Product IDs are unique and don't already exist in the system.`);
+      } finally {
+        e.target.value = null; // Reset file input
+      }
+    };
+    reader.readAsBinaryString(file);
+  };
+
   /* ---------------- SAVE PRODUCT (ADD OR UPDATE) ---------------- */
   const handleSaveProduct = async () => {
     if (!form.product_id || !form.product_name || !form.low_stock_alert) {
@@ -103,7 +205,6 @@ export default function Products() {
 
     try {
       if (editingId) {
-        // ✅ UPDATE EXISTING
         const { error } = await supabase.from("products").update({
           product_id: form.product_id,
           product_name: form.product_name,
@@ -111,7 +212,6 @@ export default function Products() {
         }).eq("id", editingId);
         if (error) throw error;
       } else {
-        // ✅ ADD NEW
         const { error } = await supabase.from("products").insert([{
           product_id: form.product_id,
           product_name: form.product_name,
@@ -120,7 +220,6 @@ export default function Products() {
         if (error) throw error;
       }
 
-      // Reset form and refresh table
       setForm({ product_id: "", product_name: "", low_stock_alert: "" });
       setEditingId(null);
       loadProducts(); 
@@ -130,9 +229,8 @@ export default function Products() {
     }
   };
 
-  /* ---------------- EDIT BUTTON CLICK ---------------- */
   const handleEditClick = (e, product) => {
-    e.stopPropagation(); // Prevent opening the ledger
+    e.stopPropagation(); 
     setForm({
       product_id: product.product_id,
       product_name: product.product_name,
@@ -141,13 +239,11 @@ export default function Products() {
     setEditingId(product.id);
   };
 
-  /* ---------------- CANCEL EDIT ---------------- */
   const cancelEdit = () => {
     setForm({ product_id: "", product_name: "", low_stock_alert: "" });
     setEditingId(null);
   };
 
-  /* ---------------- DELETE PRODUCT ---------------- */
   const handleDeleteProduct = async (e, productId) => {
     e.stopPropagation(); 
     if (!window.confirm("Are you sure you want to delete this product?")) return;
@@ -176,10 +272,10 @@ export default function Products() {
       <h1 className="text-3xl font-bold mb-4">Products</h1>
 
       {/* ADD / EDIT FORM */}
-      <div className="bg-white shadow rounded p-4 mb-6 flex gap-3 items-center">
-        <input name="product_id" placeholder="Product ID" value={form.product_id} onChange={handleChange} className="border p-2 rounded w-1/4" />
-        <input name="product_name" placeholder="Product Name" value={form.product_name} onChange={handleChange} className="border p-2 rounded w-1/4" />
-        <input name="low_stock_alert" placeholder="Low Stock Alert" type="number" value={form.low_stock_alert} onChange={handleChange} className="border p-2 rounded w-1/4" />
+      <div className="bg-white shadow rounded p-4 mb-6 flex gap-3 items-center flex-wrap">
+        <input name="product_id" placeholder="Product ID" value={form.product_id} onChange={handleChange} className="border p-2 rounded flex-1 min-w-[150px]" />
+        <input name="product_name" placeholder="Product Name" value={form.product_name} onChange={handleChange} className="border p-2 rounded flex-1 min-w-[150px]" />
+        <input name="low_stock_alert" placeholder="Low Alert Qty" type="number" value={form.low_stock_alert} onChange={handleChange} className="border p-2 rounded w-32" />
         
         <button onClick={handleSaveProduct} className={`text-white px-6 py-2 rounded ${editingId ? 'bg-orange-500 hover:bg-orange-600' : 'bg-blue-600 hover:bg-blue-700'}`}>
           {editingId ? "Update" : "Add"}
@@ -191,7 +287,31 @@ export default function Products() {
           </button>
         )}
 
-        <button onClick={handleExportExcel} className="ml-auto bg-green-600 hover:bg-green-700 text-white px-6 py-2 rounded">Export Excel</button>
+        {/* 🚀 BULK UPLOAD & EXPORT */}
+        <div className="ml-auto flex gap-2 items-center">
+          {/* Hidden File Input */}
+          <input 
+            type="file" 
+            accept=".xlsx, .xls" 
+            style={{ display: "none" }} 
+            ref={fileInputRef} 
+            onChange={handleBulkUpload} 
+          />
+          
+          <div className="flex flex-col items-end">
+            <button 
+              onClick={() => fileInputRef.current.click()} 
+              className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded transition-colors"
+            >
+              Bulk Upload
+            </button>
+            <span className="text-xs text-gray-500 mt-1">Headers: Product_ID, Product_Name, Low_Alert, Opening_Stock, Location</span>
+          </div>
+          
+          <button onClick={handleExportExcel} className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded transition-colors self-start">
+            Export Excel
+          </button>
+        </div>
       </div>
 
       <input placeholder="Search by ID or Name..." value={search} onChange={(e) => setSearch(e.target.value)} className="border p-2 rounded w-full mb-4" />
@@ -212,7 +332,7 @@ export default function Products() {
           </thead>
           <tbody>
             {filtered.length === 0 ? (
-              <tr><td colSpan="7" className="p-4 text-gray-500">No products found</td></tr>
+              <tr><td colSpan="7" className="p-4 text-gray-500 text-center">No products found</td></tr>
             ) : (
               filtered.map((p) => (
                 <tr key={p.id} className="border-b hover:bg-blue-50 cursor-pointer" onClick={() => openLedger(p)}>
@@ -247,7 +367,7 @@ export default function Products() {
         </table>
       </div>
 
-      {/* LEDGER MODAL (Unchanged) */}
+      {/* LEDGER MODAL */}
       {selectedProduct && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
           <div className="bg-white w-4/5 max-h-[85vh] overflow-y-auto rounded-lg shadow-xl p-6">
