@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
+import { supabase } from "../supabase";
 import * as XLSX from "xlsx";
-
-const API = import.meta.env.VITE_API_URL;
 
 export default function Transactions() {
   const [products, setProducts] = useState([]);
@@ -21,15 +20,17 @@ export default function Transactions() {
     fetchAll();
   }, []);
 
-  // ✅ FETCH FROM BACKEND
+  // ✅ FETCH DIRECTLY FROM SUPABASE
   async function fetchAll() {
     try {
-      const prod = await fetch(`${API}/products`).then(r => r.json());
-      const loc = await fetch(`${API}/locations`).then(r => r.json());
-      const trans = await fetch(`${API}/transactions`).then(r => r.json());
+      const { data: prod } = await supabase.from("products").select("*");
+      const { data: loc } = await supabase.from("locations").select("*");
+      const { data: trans } = await supabase.from("transactions").select("*");
 
-      // newest first (since backend returns plain array)
-      trans.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+      if (trans) {
+        // Sort newest first
+        trans.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+      }
 
       setProducts(prod || []);
       setLocations(loc || []);
@@ -39,7 +40,7 @@ export default function Transactions() {
     }
   }
 
-  // ✅ ADD TRANSACTION
+  // ✅ ADD TRANSACTION TO SUPABASE
   const handleAdd = async () => {
     if (!form.product_id || !form.location_id || !form.quantity) {
       alert("Please fill required fields (Product, Location, Quantity)");
@@ -47,19 +48,15 @@ export default function Transactions() {
     }
 
     try {
-      await fetch(`${API}/transactions`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          product_id: form.product_id,
-          location_id: form.location_id,
-          transaction_type: form.transaction_type,
-          quantity: Number(form.quantity),
-          party: form.party
-        })
-      });
+      const { error } = await supabase.from("transactions").insert([{
+        product_id: form.product_id,
+        location_id: form.location_id,
+        transaction_type: form.transaction_type,
+        quantity: Number(form.quantity),
+        party: form.party
+      }]);
+
+      if (error) throw error;
 
       setForm({
         product_id: "",
@@ -71,22 +68,22 @@ export default function Transactions() {
 
       fetchAll();
     } catch (err) {
-      console.error("ADD TRANSACTION ERROR:", err);
+      console.error("ADD TRANSACTION ERROR:", err.message);
       alert("Failed to add transaction. Check console.");
     }
   };
 
-  // ✅ DELETE
+  // ✅ DELETE FROM SUPABASE
   const handleDelete = async (id) => {
     if (!window.confirm("Delete transaction?")) return;
 
     try {
-      await fetch(`${API}/transactions/${id}`, {
-        method: "DELETE"
-      });
+      const { error } = await supabase.from("transactions").delete().eq("id", id);
+      if (error) throw error;
+      
       fetchAll();
     } catch (err) {
-      console.error("DELETE ERROR:", err);
+      console.error("DELETE ERROR:", err.message);
     }
   };
 

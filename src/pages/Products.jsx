@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { getProducts, getTransactions } from "../api/api";
+import { supabase } from "../supabase";
 import * as XLSX from "xlsx";
 
 export default function Products() {
@@ -22,12 +22,24 @@ export default function Products() {
 
   const loadProducts = async () => {
     try {
-      const prod = await getProducts();
-      const trans = await getTransactions();
+      // Fetch directly from Supabase
+      const { data: prod, error: prodErr } = await supabase.from("products").select("*");
+      // Fetch transactions and join the location name
+      const { data: trans, error: transErr } = await supabase.from("transactions").select("*, locations(name)");
+
+      if (prodErr) throw prodErr;
+      if (transErr) throw transErr;
+
+      // Format transactions to easily grab location_name for the stock calculator
+      const formattedTrans = (trans || []).map(t => ({
+        ...t,
+        location_name: t.locations?.name || ""
+      }));
+
       setProducts(prod || []);
-      setTransactions(trans || []);
+      setTransactions(formattedTrans);
     } catch (err) {
-      console.error("Failed loading products", err);
+      console.error("Failed loading products from Supabase:", err.message);
     }
   };
 
@@ -92,39 +104,35 @@ export default function Products() {
     }
 
     try {
-      const API_URL = import.meta.env.VITE_API_URL;
-      await fetch(`${API_URL}/products`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          product_id: form.product_id,
-          product_name: form.product_name,
-          low_stock_alert: Number(form.low_stock_alert)
-        }),
-      });
+      const { error } = await supabase.from("products").insert([{
+        product_id: form.product_id,
+        product_name: form.product_name,
+        low_stock_alert: Number(form.low_stock_alert)
+      }]);
 
-      // Clear the form and refresh the table
+      if (error) throw error;
+
       setForm({ product_id: "", product_name: "", low_stock_alert: "" });
       loadProducts(); 
     } catch (err) {
-      console.error("Failed to add product", err);
+      console.error("Failed to add product:", err.message);
+      alert("Error adding product. Is the ID already taken?");
     }
   };
 
   /* ---------------- DELETE PRODUCT ---------------- */
   const handleDeleteProduct = async (e, productId) => {
-    e.stopPropagation(); // Prevents the row's onClick (openLedger) from firing
+    e.stopPropagation();
 
     if (!window.confirm("Are you sure you want to delete this product?")) return;
 
     try {
-      const API_URL = import.meta.env.VITE_API_URL;
-      await fetch(`${API_URL}/products/${productId}`, {
-        method: "DELETE",
-      });
-      loadProducts(); // Refresh the table after deleting
+      const { error } = await supabase.from("products").delete().eq("product_id", productId);
+      if (error) throw error;
+      
+      loadProducts();
     } catch (err) {
-      console.error("Failed to delete product", err);
+      console.error("Failed to delete product:", err.message);
     }
   };
 
