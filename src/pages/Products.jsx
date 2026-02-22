@@ -15,6 +15,7 @@ export default function Products() {
 
   const [selectedProduct, setSelectedProduct] = useState(null);
   const [ledger, setLedger] = useState([]);
+  const [editingId, setEditingId] = useState(null); // ✅ Tracks if we are editing
 
   useEffect(() => {
     loadProducts();
@@ -22,15 +23,12 @@ export default function Products() {
 
   const loadProducts = async () => {
     try {
-      // Fetch directly from Supabase
       const { data: prod, error: prodErr } = await supabase.from("products").select("*");
-      // Fetch transactions and join the location name
       const { data: trans, error: transErr } = await supabase.from("transactions").select("*, locations(name)");
 
       if (prodErr) throw prodErr;
       if (transErr) throw transErr;
 
-      // Format transactions to easily grab location_name for the stock calculator
       const formattedTrans = (trans || []).map(t => ({
         ...t,
         location_name: t.locations?.name || ""
@@ -96,40 +94,67 @@ export default function Products() {
     XLSX.writeFile(wb, "Products_Report.xlsx");
   };
 
-  /* ---------------- ADD PRODUCT ---------------- */
-  const handleAddProduct = async () => {
+  /* ---------------- SAVE PRODUCT (ADD OR UPDATE) ---------------- */
+  const handleSaveProduct = async () => {
     if (!form.product_id || !form.product_name || !form.low_stock_alert) {
       alert("Please fill in all fields.");
       return;
     }
 
     try {
-      const { error } = await supabase.from("products").insert([{
-        product_id: form.product_id,
-        product_name: form.product_name,
-        low_stock_alert: Number(form.low_stock_alert)
-      }]);
+      if (editingId) {
+        // ✅ UPDATE EXISTING
+        const { error } = await supabase.from("products").update({
+          product_id: form.product_id,
+          product_name: form.product_name,
+          low_stock_alert: Number(form.low_stock_alert)
+        }).eq("id", editingId);
+        if (error) throw error;
+      } else {
+        // ✅ ADD NEW
+        const { error } = await supabase.from("products").insert([{
+          product_id: form.product_id,
+          product_name: form.product_name,
+          low_stock_alert: Number(form.low_stock_alert)
+        }]);
+        if (error) throw error;
+      }
 
-      if (error) throw error;
-
+      // Reset form and refresh table
       setForm({ product_id: "", product_name: "", low_stock_alert: "" });
+      setEditingId(null);
       loadProducts(); 
     } catch (err) {
-      console.error("Failed to add product:", err.message);
-      alert("Error adding product. Is the ID already taken?");
+      console.error("Failed to save product:", err.message);
+      alert("Error saving product. Is the ID already taken?");
     }
+  };
+
+  /* ---------------- EDIT BUTTON CLICK ---------------- */
+  const handleEditClick = (e, product) => {
+    e.stopPropagation(); // Prevent opening the ledger
+    setForm({
+      product_id: product.product_id,
+      product_name: product.product_name,
+      low_stock_alert: product.low_stock_alert,
+    });
+    setEditingId(product.id);
+  };
+
+  /* ---------------- CANCEL EDIT ---------------- */
+  const cancelEdit = () => {
+    setForm({ product_id: "", product_name: "", low_stock_alert: "" });
+    setEditingId(null);
   };
 
   /* ---------------- DELETE PRODUCT ---------------- */
   const handleDeleteProduct = async (e, productId) => {
-    e.stopPropagation();
-
+    e.stopPropagation(); 
     if (!window.confirm("Are you sure you want to delete this product?")) return;
 
     try {
       const { error } = await supabase.from("products").delete().eq("product_id", productId);
       if (error) throw error;
-      
       loadProducts();
     } catch (err) {
       console.error("Failed to delete product:", err.message);
@@ -150,16 +175,28 @@ export default function Products() {
     <div className="p-6">
       <h1 className="text-3xl font-bold mb-4">Products</h1>
 
+      {/* ADD / EDIT FORM */}
       <div className="bg-white shadow rounded p-4 mb-6 flex gap-3 items-center">
         <input name="product_id" placeholder="Product ID" value={form.product_id} onChange={handleChange} className="border p-2 rounded w-1/4" />
         <input name="product_name" placeholder="Product Name" value={form.product_name} onChange={handleChange} className="border p-2 rounded w-1/4" />
         <input name="low_stock_alert" placeholder="Low Stock Alert" type="number" value={form.low_stock_alert} onChange={handleChange} className="border p-2 rounded w-1/4" />
-        <button onClick={handleAddProduct} className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded">Add</button>
+        
+        <button onClick={handleSaveProduct} className={`text-white px-6 py-2 rounded ${editingId ? 'bg-orange-500 hover:bg-orange-600' : 'bg-blue-600 hover:bg-blue-700'}`}>
+          {editingId ? "Update" : "Add"}
+        </button>
+        
+        {editingId && (
+          <button onClick={cancelEdit} className="bg-gray-400 hover:bg-gray-500 text-white px-4 py-2 rounded">
+            Cancel
+          </button>
+        )}
+
         <button onClick={handleExportExcel} className="ml-auto bg-green-600 hover:bg-green-700 text-white px-6 py-2 rounded">Export Excel</button>
       </div>
 
       <input placeholder="Search by ID or Name..." value={search} onChange={(e) => setSearch(e.target.value)} className="border p-2 rounded w-full mb-4" />
 
+      {/* TABLE */}
       <div className="bg-white shadow rounded overflow-hidden">
         <table className="w-full">
           <thead className="bg-gray-100 border-b">
@@ -189,7 +226,13 @@ export default function Products() {
                       {p.low_stock_alert}
                     </span>
                   </td>
-                  <td className="p-3">
+                  <td className="p-3 flex gap-2">
+                    <button 
+                      onClick={(e) => handleEditClick(e, p)} 
+                      className="text-blue-600 hover:text-blue-800 font-semibold px-3 py-1 bg-blue-50 rounded hover:bg-blue-100 transition-colors"
+                    >
+                      Edit
+                    </button>
                     <button 
                       onClick={(e) => handleDeleteProduct(e, p.product_id)} 
                       className="text-red-500 hover:text-red-700 font-semibold px-3 py-1 bg-red-50 rounded hover:bg-red-100 transition-colors"
@@ -204,6 +247,7 @@ export default function Products() {
         </table>
       </div>
 
+      {/* LEDGER MODAL (Unchanged) */}
       {selectedProduct && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
           <div className="bg-white w-4/5 max-h-[85vh] overflow-y-auto rounded-lg shadow-xl p-6">
