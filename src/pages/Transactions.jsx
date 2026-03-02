@@ -9,10 +9,10 @@ export default function Transactions() {
   const [search, setSearch] = useState("");
   const [editingId, setEditingId] = useState(null);
 
-  // ✅ Pagination States
+  // Pagination States
   const [page, setPage] = useState(0);
   const [totalCount, setTotalCount] = useState(0);
-  const PAGE_SIZE = 50; // Show 50 items per page
+  const PAGE_SIZE = 50; 
 
   const [form, setForm] = useState({
     product_id: "",
@@ -22,12 +22,10 @@ export default function Transactions() {
     party: ""
   });
 
-  // Fetch Dropdown data (Products/Locations) only once when page loads
   useEffect(() => {
     fetchDropdowns();
   }, []);
 
-  // Fetch Transactions whenever the `page` state changes
   useEffect(() => {
     fetchTransactions();
   }, [page]);
@@ -39,7 +37,6 @@ export default function Transactions() {
     setLocations(loc || []);
   }
 
-  // ✅ FETCH EXACTLY 50 TRANSACTIONS
   async function fetchTransactions() {
     try {
       const from = page * PAGE_SIZE;
@@ -60,7 +57,6 @@ export default function Transactions() {
     }
   }
 
-  // ✅ SAVE TRANSACTION
   const handleSave = async () => {
     if (!form.product_id || !form.location_id || !form.quantity) {
       alert("Please fill required fields (Product, Location, Quantity)");
@@ -68,35 +64,32 @@ export default function Transactions() {
     }
 
     try {
+      // Identify current employee
+      const { data: { user } } = await supabase.auth.getUser();
+
+      const payload = {
+        product_id: form.product_id,
+        location_id: form.location_id,
+        transaction_type: form.transaction_type,
+        quantity: Number(form.quantity),
+        party: form.party,
+        created_by_email: user?.email || "Manual Entry" // Logs current user
+      };
+
       if (editingId) {
-        const { error } = await supabase.from("transactions").update({
-          product_id: form.product_id,
-          location_id: form.location_id,
-          transaction_type: form.transaction_type,
-          quantity: Number(form.quantity),
-          party: form.party
-        }).eq("id", editingId);
+        const { error } = await supabase.from("transactions").update(payload).eq("id", editingId);
         if (error) throw error;
       } else {
-        const { error } = await supabase.from("transactions").insert([{
-          product_id: form.product_id,
-          location_id: form.location_id,
-          transaction_type: form.transaction_type,
-          quantity: Number(form.quantity),
-          party: form.party
-        }]);
+        const { error } = await supabase.from("transactions").insert([payload]);
         if (error) throw error;
       }
 
       setForm({ product_id: "", location_id: "", transaction_type: "inward", quantity: "", party: "" });
       setEditingId(null);
-      
-      // Reset to page 0 to see the newly added transaction at the top
       setPage(0);
       fetchTransactions();
     } catch (err) {
-      console.error("SAVE TRANSACTION ERROR:", err.message);
-      alert("Failed to save transaction. Check console.");
+      alert("Failed to save transaction.");
     }
   };
 
@@ -127,7 +120,6 @@ export default function Transactions() {
     }
   };
 
-  // 📊 EXPORT EXCEL (Fetches ALL records so backups are complete)
   const exportToExcel = async () => {
     try {
       const { data: allTrans, error } = await supabase
@@ -136,7 +128,7 @@ export default function Transactions() {
         .order("created_at", { ascending: false });
 
       if (error) throw error;
-      if (!allTrans || !allTrans.length) {
+      if (!allTrans?.length) {
         alert("No transactions to export");
         return;
       }
@@ -149,20 +141,20 @@ export default function Transactions() {
           Date: new Date(t.created_at).toLocaleString(),
           Product: product?.product_name || "",
           Product_Code: product?.product_id || "",
-          Type: t.transaction_type,
+          Type: t.transaction_type.toUpperCase(),
           Quantity: t.quantity,
           Location: location?.name || "",
-          Party: t.party || ""
+          Party: t.party || "",
+          Done_By: t.created_by_email || "System" // ✅ Includes Employee in Excel
         };
       });
 
       const ws = XLSX.utils.json_to_sheet(exportData);
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, "Transactions");
-      XLSX.writeFile(wb, "Inventory_Transactions.xlsx");
+      XLSX.writeFile(wb, "Nivee_Metal_Transactions.xlsx");
     } catch (err) {
-      console.error("Export failed:", err.message);
-      alert("Failed to export data.");
+      alert("Export failed.");
     }
   };
 
@@ -177,55 +169,49 @@ export default function Transactions() {
     <div className="p-8">
       <h1 className="text-3xl font-bold mb-6">Transactions</h1>
 
-      {/* ADD / EDIT FORM */}
+      {/* FORM SECTION */}
       <div className="bg-white shadow rounded p-6 mb-6 space-y-4">
-        <div className="grid grid-cols-5 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
           <select value={form.product_id} onChange={(e) => setForm({ ...form, product_id: e.target.value })} className="border p-2 rounded">
-            <option value="">Product</option>
+            <option value="">Select Product</option>
             {products.map((p) => (<option key={p.id} value={p.id}>{p.product_name}</option>))}
           </select>
           <select value={form.location_id} onChange={(e) => setForm({ ...form, location_id: e.target.value })} className="border p-2 rounded">
-            <option value="">Location</option>
+            <option value="">Select Location</option>
             {locations.map((l) => (<option key={l.id} value={l.id}>{l.name}</option>))}
           </select>
-          <select value={form.transaction_type} onChange={(e) => setForm({ ...form, transaction_type: e.target.value })} className="border p-2 rounded">
-            <option value="inward">Inward</option>
-            <option value="outward">Outward</option>
+          <select value={form.transaction_type} onChange={(e) => setForm({ ...form, transaction_type: e.target.value })} className="border p-2 rounded font-bold">
+            <option value="inward">INWARD (+)</option>
+            <option value="outward">OUTWARD (-)</option>
           </select>
           <input type="number" placeholder="Qty" value={form.quantity} onChange={(e) => setForm({ ...form, quantity: e.target.value })} className="border p-2 rounded" />
-          <input placeholder="Party" value={form.party} onChange={(e) => setForm({ ...form, party: e.target.value })} className="border p-2 rounded" />
+          <input placeholder="Party Name" value={form.party} onChange={(e) => setForm({ ...form, party: e.target.value })} className="border p-2 rounded" />
         </div>
-
-        <div className="flex gap-3 mt-4">
-          <button onClick={handleSave} className={`text-white px-6 py-2 rounded ${editingId ? 'bg-orange-500 hover:bg-orange-600' : 'bg-blue-600 hover:bg-blue-700'}`}>
-            {editingId ? "Update Transaction" : "Add Transaction"}
+        <div className="flex gap-3">
+          <button onClick={handleSave} className={`text-white px-8 py-2 rounded font-bold ${editingId ? 'bg-orange-500 shadow-orange-100' : 'bg-blue-600 shadow-blue-100'}`}>
+            {editingId ? "Update Entry" : "Save Entry"}
           </button>
-          {editingId && (
-            <button onClick={cancelEdit} className="bg-gray-400 hover:bg-gray-500 text-white px-6 py-2 rounded">
-              Cancel
-            </button>
-          )}
+          {editingId && <button onClick={cancelEdit} className="bg-gray-400 text-white px-6 py-2 rounded">Cancel</button>}
         </div>
       </div>
 
-      {/* EXPORT + SEARCH */}
-      <div className="flex justify-between mb-4">
-        <input placeholder="Search current page..." value={search} onChange={(e) => setSearch(e.target.value)} className="border p-2 rounded w-64" />
-        <button onClick={exportToExcel} className="bg-green-600 text-white px-5 py-2 rounded hover:bg-green-700">Export Excel</button>
+      <div className="flex justify-between items-center mb-4">
+        <input placeholder="Search products on this page..." value={search} onChange={(e) => setSearch(e.target.value)} className="border p-3 rounded w-80 shadow-sm" />
+        <button onClick={exportToExcel} className="bg-green-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-green-700 shadow-lg transition-all">Export to Excel</button>
       </div>
 
-      {/* TABLE */}
-      <div className="bg-white shadow rounded p-6 overflow-x-auto mb-4">
-        <table className="w-full border-collapse">
-          <thead>
-            <tr className="border-b text-left">
-              <th className="p-2">Date</th>
-              <th className="p-2">Product</th>
-              <th className="p-2">Type</th>
-              <th className="p-2">Qty</th>
-              <th className="p-2">Location</th>
-              <th className="p-2">Party</th>
-              <th className="p-2">Action</th>
+      {/* TABLE SECTION */}
+      <div className="bg-white shadow rounded overflow-x-auto mb-6">
+        <table className="w-full text-left">
+          <thead className="bg-gray-50 border-b">
+            <tr>
+              <th className="p-4 text-xs font-bold text-gray-400 uppercase">Date</th>
+              <th className="p-4 text-xs font-bold text-gray-400 uppercase">Product</th>
+              <th className="p-4 text-xs font-bold text-gray-400 uppercase">Type</th>
+              <th className="p-4 text-xs font-bold text-gray-400 uppercase">Qty</th>
+              <th className="p-4 text-xs font-bold text-gray-400 uppercase">Location</th>
+              <th className="p-4 text-xs font-bold text-gray-400 uppercase">Employee</th> {/* ✅ Display Column */}
+              <th className="p-4 text-xs font-bold text-gray-400 uppercase">Action</th>
             </tr>
           </thead>
           <tbody>
@@ -234,18 +220,20 @@ export default function Transactions() {
               const location = locations.find((l) => l.id === t.location_id);
 
               return (
-                <tr key={t.id} className="border-b">
-                  <td className="p-2">{new Date(t.created_at).toLocaleString()}</td>
-                  <td className="p-2">{product?.product_name}</td>
-                  <td className={`p-2 font-semibold ${t.transaction_type === "inward" ? "text-green-600" : "text-red-600"}`}>
-                    {t.transaction_type}
+                <tr key={t.id} className="border-b hover:bg-gray-50 transition-colors">
+                  <td className="p-4 text-sm text-gray-600">{new Date(t.created_at).toLocaleString()}</td>
+                  <td className="p-4 font-bold text-gray-800">{product?.product_name}</td>
+                  <td className={`p-4 font-black ${t.transaction_type === "inward" ? "text-green-600" : "text-red-600"}`}>
+                    {t.transaction_type.toUpperCase()}
                   </td>
-                  <td className="p-2">{t.quantity}</td>
-                  <td className="p-2">{location?.name}</td>
-                  <td className="p-2">{t.party}</td>
-                  <td className="p-2 flex gap-2">
-                    <button onClick={() => handleEditClick(t)} className="text-blue-600 hover:text-blue-800 font-semibold px-3 py-1 bg-blue-50 rounded hover:bg-blue-100 transition-colors">Edit</button>
-                    <button onClick={() => handleDelete(t.id)} className="text-red-500 hover:text-red-700 font-semibold px-3 py-1 bg-red-50 rounded hover:bg-red-100 transition-colors">Delete</button>
+                  <td className="p-4 font-mono font-bold">{t.quantity}</td>
+                  <td className="p-4 text-sm text-gray-600">{location?.name}</td>
+                  <td className="p-4 text-xs font-medium text-blue-500 italic">
+                    {t.created_by_email || "System"} {/* ✅ Show employee email */}
+                  </td>
+                  <td className="p-4 flex gap-2">
+                    <button onClick={() => handleEditClick(t)} className="text-blue-600 font-bold hover:underline">Edit</button>
+                    <button onClick={() => handleDelete(t.id)} className="text-red-500 font-bold hover:underline">Delete</button>
                   </td>
                 </tr>
               );
@@ -254,27 +242,12 @@ export default function Transactions() {
         </table>
       </div>
 
-      {/* PAGINATION CONTROLS */}
-      <div className="flex justify-between items-center bg-gray-200 p-4 rounded-lg shadow-inner">
-        <button 
-          onClick={() => setPage(page - 1)} 
-          disabled={page === 0}
-          className={`px-4 py-2 rounded font-semibold ${page === 0 ? 'bg-gray-300 text-gray-500 cursor-not-allowed' : 'bg-blue-600 text-white hover:bg-blue-700'}`}
-        >
-          Previous
-        </button>
-        <span className="text-gray-700 font-medium">
-          Page {page + 1} of {totalPages || 1} ({totalCount} total records)
-        </span>
-        <button 
-          onClick={() => setPage(page + 1)} 
-          disabled={page + 1 >= totalPages}
-          className={`px-4 py-2 rounded font-semibold ${page + 1 >= totalPages ? 'bg-gray-300 text-gray-500 cursor-not-allowed' : 'bg-blue-600 text-white hover:bg-blue-700'}`}
-        >
-          Next
-        </button>
+      {/* PAGINATION */}
+      <div className="flex justify-between items-center p-4 bg-white rounded-xl shadow-sm">
+        <button onClick={() => setPage(page - 1)} disabled={page === 0} className={`px-6 py-2 rounded-lg font-bold ${page === 0 ? 'bg-gray-100 text-gray-400' : 'bg-blue-600 text-white shadow-md'}`}>Prev</button>
+        <span className="text-sm font-bold text-gray-500 uppercase tracking-widest">Page {page + 1} of {totalPages || 1}</span>
+        <button onClick={() => setPage(page + 1)} disabled={page + 1 >= totalPages} className={`px-6 py-2 rounded-lg font-bold ${page + 1 >= totalPages ? 'bg-gray-100 text-gray-400' : 'bg-blue-600 text-white shadow-md'}`}>Next</button>
       </div>
-
     </div>
   );
 }
