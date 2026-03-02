@@ -47,8 +47,9 @@ export default function QRPrint() {
       {/* QR GRID */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6 print:grid-cols-3 print:gap-4">
         {products.map((p) => {
-          // ✅ THIS IS THE FIX: Build the full URL with the encoded ID
-          const qrUrl = `https://niveeinventory.app/scan/${encodeURIComponent(p.product_id)}`;
+          // ✅ FIX: The QR code now only contains the ID, not the full URL.
+          // This prevents the "Double URL" Not Found error.
+          const qrData = p.product_id;
 
           return (
             <div 
@@ -61,9 +62,9 @@ export default function QRPrint() {
               
               <div className="p-2 bg-white rounded-lg border border-gray-50">
                 <QRCodeCanvas 
-                  value={qrUrl} 
+                  value={qrData} 
                   size={120} 
-                  level="H" // High error correction for metallic environments
+                  level="H" 
                   includeMargin={true}
                 />
               </div>
