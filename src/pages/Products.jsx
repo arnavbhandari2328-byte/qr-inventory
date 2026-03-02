@@ -8,7 +8,6 @@ export default function Products() {
   const [locations, setLocations] = useState([]); 
   const [search, setSearch] = useState("");
   
-  // ✅ NEW: Admin State
   const [isAdmin, setIsAdmin] = useState(false);
 
   const [form, setForm] = useState({
@@ -25,11 +24,10 @@ export default function Products() {
   const fileInputRef = useRef(null);
 
   useEffect(() => {
-    checkUserRole(); // ✅ Check who is logged in first
+    checkUserRole(); 
     loadProducts();
   }, []);
 
-  // ✅ NEW: Identify if the logged-in user is the Master Admin
   const checkUserRole = async () => {
     const { data: { user } } = await supabase.auth.getUser();
     if (user?.email === "niveemetals@gmail.com") {
@@ -143,9 +141,12 @@ export default function Products() {
 
         if (data.length === 0) throw new Error("Spreadsheet is empty.");
 
+        // ✅ NEW: Bulletproof normalizer (strips spaces, underscores, makes lowercase)
+        const normalize = (str) => String(str).toLowerCase().replace(/[\s_]/g, '');
+
         const locationMap = [];
         locations.forEach(loc => {
-          const match = Object.keys(data[0]).find(k => k.toLowerCase().trim() === loc.name.toLowerCase().trim());
+          const match = Object.keys(data[0]).find(k => normalize(k) === normalize(loc.name));
           if (match) {
             locationMap.push({ id: loc.id, name: loc.name, headerKey: match });
           }
@@ -160,10 +161,10 @@ export default function Products() {
 
         data.forEach((row) => {
           const keys = Object.keys(row);
-          const idKey = keys.find(k => k.toLowerCase().trim() === 'product_id');
-          const nameKey = keys.find(k => k.toLowerCase().trim() === 'product_name');
-          const lowAlertKey = keys.find(k => k.toLowerCase().trim() === 'low_alert' || k.toLowerCase().trim() === 'low_stock_alert');
-          const highAlertKey = keys.find(k => k.toLowerCase().trim() === 'high_alert' || k.toLowerCase().trim() === 'high_stock_alert');
+          const idKey = keys.find(k => normalize(k) === 'productid');
+          const nameKey = keys.find(k => normalize(k) === 'productname');
+          const lowAlertKey = keys.find(k => normalize(k) === 'lowalert' || normalize(k) === 'lowstockalert');
+          const highAlertKey = keys.find(k => normalize(k) === 'highalert' || normalize(k) === 'highstockalert');
           
           if (idKey && row[idKey] && nameKey && row[nameKey]) {
             productsToUpsert.push({
@@ -177,7 +178,7 @@ export default function Products() {
         });
 
         if (productsToUpsert.length === 0) {
-          alert("No valid data found. Ensure headers include 'Product_ID' and 'Product_Name'.");
+          alert("No valid data found. Ensure headers include 'Product ID' and 'Product Name'.");
           return;
         }
 
@@ -192,7 +193,7 @@ export default function Products() {
 
         validRows.forEach((row) => {
           const keys = Object.keys(row);
-          const idKey = keys.find(k => k.toLowerCase().trim() === 'product_id');
+          const idKey = keys.find(k => normalize(k) === 'productid');
           const pIdStr = String(row[idKey]);
           const dbProduct = upsertedProducts.find(p => p.product_id === pIdStr);
 
@@ -283,7 +284,6 @@ export default function Products() {
   const handleDeleteProduct = async (e, productId) => {
     e.stopPropagation(); 
     
-    // ✅ NEW: Double-lock the function just in case
     if (!isAdmin) {
       alert("Unauthorized: Only the Master Admin can delete products.");
       return;
@@ -349,7 +349,7 @@ export default function Products() {
             >
               Bulk Upload
             </button>
-            <span className="text-xs text-gray-500 mt-1">Headers: Product_ID, Product_Name, Low_Alert, High_Alert, Office, Godown, Warehouse</span>
+            <span className="text-xs text-gray-500 mt-1">Headers: Product ID, Product Name, Low Alert, High Alert, Office, Godown, Warehouse</span>
           </div>
           
           <button onClick={handleExportExcel} className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded transition-colors self-start">
@@ -404,7 +404,6 @@ export default function Products() {
                       Edit
                     </button>
                     
-                    {/* ✅ NEW: Only render the Delete button if isAdmin is TRUE */}
                     {isAdmin && (
                       <button 
                         onClick={(e) => handleDeleteProduct(e, p.product_id)} 
