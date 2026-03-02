@@ -5,7 +5,7 @@ import * as XLSX from "xlsx";
 export default function Products() {
   const [products, setProducts] = useState([]);
   const [transactions, setTransactions] = useState([]);
-  const [locations, setLocations] = useState([]); // ✅ Needs locations to map Excel text to DB IDs
+  const [locations, setLocations] = useState([]); 
   const [search, setSearch] = useState("");
 
   const [form, setForm] = useState({
@@ -18,7 +18,6 @@ export default function Products() {
   const [ledger, setLedger] = useState([]);
   const [editingId, setEditingId] = useState(null);
   
-  // ✅ Ref for the hidden file input
   const fileInputRef = useRef(null);
 
   useEffect(() => {
@@ -46,6 +45,21 @@ export default function Products() {
     } catch (err) {
       console.error("Failed loading data from Supabase:", err.message);
     }
+  };
+
+  // ✅ IST Time Formatter (for Ledger)
+  const formatIST = (utcString) => {
+    if (!utcString) return "Unknown Date";
+    const date = new Date(utcString.endsWith("Z") ? utcString : utcString + "Z");
+    return date.toLocaleString("en-IN", {
+      timeZone: "Asia/Kolkata",
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: true
+    });
   };
 
   /* ---------------- STOCK CALCULATOR ---------------- */
@@ -101,7 +115,7 @@ export default function Products() {
     XLSX.writeFile(wb, "Products_Report.xlsx");
   };
 
-  /* ---------------- BULK UPLOAD EXCEL W/ OPENING STOCK ---------------- */
+  /* ---------------- SMART MULTI-LOCATION BULK UPLOAD ---------------- */
   const handleBulkUpload = (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -109,73 +123,90 @@ export default function Products() {
     const reader = new FileReader();
     reader.onload = async (evt) => {
       try {
+        const { data: { user } } = await supabase.auth.getUser();
+        const employeeEmail = user?.email || "System Admin";
+
         const bstr = evt.target.result;
         const wb = XLSX.read(bstr, { type: "binary" });
         const ws = wb.Sheets[wb.SheetNames[0]];
-        const data = XLSX.utils.sheet_to_json(ws);
+        const data = XLSX.utils.sheet_to_json(ws, { defval: "" });
 
-        // 1. Prepare products for insertion
-        const productsToInsert = [];
-        const validRows = []; // Keep track of valid rows to process stock later
+        if (data.length === 0) throw new Error("Spreadsheet is empty.");
+
+        // Identify Location columns dynamically from Excel headers
+        const locationMap = [];
+        locations.forEach(loc => {
+          const match = Object.keys(data[0]).find(k => k.toLowerCase().trim() === loc.name.toLowerCase().trim());
+          if (match) {
+            locationMap.push({ id: loc.id, name: loc.name, headerKey: match });
+          }
+        });
+
+        if (locationMap.length === 0) {
+          throw new Error(`We couldn't find any location columns. Add columns named: ${locations.map(l => l.name).join(", ")}`);
+        }
+
+        // 1. Prepare products for UPSERT (Updates existing, inserts new)
+        const productsToUpsert = [];
+        const validRows = []; 
 
         data.forEach((row) => {
-          const pId = String(row.Product_ID || row.product_id || "");
-          const pName = String(row.Product_Name || row.product_name || "");
+          const keys = Object.keys(row);
+          const idKey = keys.find(k => k.toLowerCase().trim() === 'product_id');
+          const nameKey = keys.find(k => k.toLowerCase().trim() === 'product_name');
+          const alertKey = keys.find(k => k.toLowerCase().trim() === 'low_alert' || k.toLowerCase().trim() === 'low_stock_alert');
           
-          if (pId && pName) {
-            productsToInsert.push({
-              product_id: pId,
-              product_name: pName,
-              low_stock_alert: Number(row.Low_Alert || row.low_stock_alert || 0)
+          if (idKey && row[idKey] && nameKey && row[nameKey]) {
+            productsToUpsert.push({
+              product_id: String(row[idKey]),
+              product_name: String(row[nameKey]),
+              low_stock_alert: Number(row[alertKey] || 0)
             });
             validRows.push(row);
           }
         });
 
-        if (productsToInsert.length === 0) {
-          alert("No valid data found. Ensure headers are 'Product_ID' and 'Product_Name'.");
+        if (productsToUpsert.length === 0) {
+          alert("No valid data found. Ensure headers include 'Product_ID' and 'Product_Name'.");
           return;
         }
 
-        // 2. Insert Products and get them back (so we have their internal DB IDs)
-        const { data: insertedProducts, error: prodErr } = await supabase
+        // 2. UPSERT Products and get them back with DB IDs
+        const { data: upsertedProducts, error: prodErr } = await supabase
           .from("products")
-          .insert(productsToInsert)
+          .upsert(productsToUpsert, { onConflict: "product_id" }) // ✅ Prevents Duplicate Error
           .select("*"); 
 
         if (prodErr) throw prodErr;
 
-        // 3. Prepare Opening Stock Transactions
+        // 3. Prepare Opening Stock Transactions across multiple locations
         const transactionsToInsert = [];
 
         validRows.forEach((row) => {
-          const stock = Number(row.Opening_Stock || row.opening_stock || 0);
-          const locName = String(row.Location || row.location || "").trim();
+          const keys = Object.keys(row);
+          const idKey = keys.find(k => k.toLowerCase().trim() === 'product_id');
+          const pIdStr = String(row[idKey]);
+          const dbProduct = upsertedProducts.find(p => p.product_id === pIdStr);
 
-          // If there is opening stock and a location provided
-          if (stock > 0 && locName) {
-            // Match the Excel Product_ID to the newly generated DB Product ID
-            const pIdStr = String(row.Product_ID || row.product_id);
-            const dbProduct = insertedProducts.find(p => p.product_id === pIdStr);
-            
-            // Match the Excel Location string to the internal DB Location ID
-            const dbLocation = locations.find(l => l.name.toLowerCase() === locName.toLowerCase());
-
-            if (dbProduct && dbLocation) {
-              transactionsToInsert.push({
-                product_id: dbProduct.id, // The internal UUID
-                location_id: dbLocation.id, // The internal UUID
-                transaction_type: "inward",
-                quantity: stock,
-                party: "Opening Balance"
-              });
-            } else if (!dbLocation) {
-              console.warn(`Location '${locName}' not found in database. Skipping opening stock for ${pIdStr}.`);
-            }
+          if (dbProduct) {
+            // Loop through every mapped location column and generate transactions
+            locationMap.forEach(loc => {
+              const stock = Number(row[loc.headerKey] || 0);
+              if (stock > 0) {
+                transactionsToInsert.push({
+                  product_id: dbProduct.id, 
+                  location_id: loc.id, 
+                  transaction_type: "inward",
+                  quantity: stock,
+                  party: "Bulk Opening Stock",
+                  created_by_email: employeeEmail
+                });
+              }
+            });
           }
         });
 
-        // 4. Insert Transactions (if any exist)
+        // 4. Insert Transactions 
         if (transactionsToInsert.length > 0) {
           const { error: transErr } = await supabase
             .from("transactions")
@@ -184,11 +215,11 @@ export default function Products() {
           if (transErr) throw transErr;
         }
 
-        alert(`Success! Uploaded ${insertedProducts.length} products and created ${transactionsToInsert.length} Opening Stock records.`);
-        loadProducts(); // Refresh table to show everything
+        alert(`Success! Updated ${upsertedProducts.length} products and logged ${transactionsToInsert.length} stock allocations.`);
+        loadProducts(); // Refresh table
       } catch (err) {
         console.error("Bulk upload error:", err.message);
-        alert(`Upload Failed: ${err.message}. Ensure your Product IDs are unique and don't already exist in the system.`);
+        alert(`Upload Failed: ${err.message}`);
       } finally {
         e.target.value = null; // Reset file input
       }
@@ -289,10 +320,9 @@ export default function Products() {
 
         {/* 🚀 BULK UPLOAD & EXPORT */}
         <div className="ml-auto flex gap-2 items-center">
-          {/* Hidden File Input */}
           <input 
             type="file" 
-            accept=".xlsx, .xls" 
+            accept=".xlsx, .xls, .csv" 
             style={{ display: "none" }} 
             ref={fileInputRef} 
             onChange={handleBulkUpload} 
@@ -305,7 +335,7 @@ export default function Products() {
             >
               Bulk Upload
             </button>
-            <span className="text-xs text-gray-500 mt-1">Headers: Product_ID, Product_Name, Low_Alert, Opening_Stock, Location</span>
+            <span className="text-xs text-gray-500 mt-1">Headers: Product_ID, Product_Name, Office, Godown, Warehouse</span>
           </div>
           
           <button onClick={handleExportExcel} className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded transition-colors self-start">
@@ -390,7 +420,8 @@ export default function Products() {
                   <tr><td colSpan="4" className="p-4 text-gray-500 text-center">No transactions</td></tr>
                 ) : ledger.map((l) => (
                   <tr key={l.id}>
-                    <td className="border p-2">{new Date(l.created_at).toLocaleString()}</td>
+                    {/* ✅ FIX: Corrected IST Time formatting for Ledger */}
+                    <td className="border p-2">{formatIST(l.created_at)}</td>
                     <td className={`border p-2 font-semibold ${l.transaction_type === "inward" ? "text-green-600" : "text-red-600"}`}>{l.transaction_type}</td>
                     <td className="border p-2">{l.quantity}</td>
                     <td className="border p-2 font-bold">{l.balance}</td>
