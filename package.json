@@ -12,6 +12,7 @@
   "dependencies": {
     "@supabase/supabase-js": "^2.95.3",
     "file-saver": "^2.0.5",
+    "html5-qrcode": "^2.3.8",
     "papaparse": "^5.5.3",
     "qrcode.react": "^4.2.0",
     "react": "^19.2.0",
