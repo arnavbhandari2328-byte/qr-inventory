@@ -138,14 +138,23 @@ export default function Transactions() {
         const location = locations.find((l) => l.id === t.location_id);
 
         return {
-          Date: new Date(t.created_at).toLocaleString(),
+          // ✅ FIX 1: Timezone applied to Excel Export
+          Date: new Date(t.created_at).toLocaleString("en-IN", {
+            timeZone: "Asia/Kolkata",
+            day: "2-digit",
+            month: "short",
+            year: "numeric",
+            hour: "2-digit",
+            minute: "2-digit",
+            hour12: true
+          }),
           Product: product?.product_name || "",
           Product_Code: product?.product_id || "",
           Type: t.transaction_type.toUpperCase(),
           Quantity: t.quantity,
           Location: location?.name || "",
           Party: t.party || "",
-          Done_By: t.created_by_email || "System" // ✅ Includes Employee in Excel
+          Done_By: t.created_by_email || "System" 
         };
       });
 
@@ -210,7 +219,7 @@ export default function Transactions() {
               <th className="p-4 text-xs font-bold text-gray-400 uppercase">Type</th>
               <th className="p-4 text-xs font-bold text-gray-400 uppercase">Qty</th>
               <th className="p-4 text-xs font-bold text-gray-400 uppercase">Location</th>
-              <th className="p-4 text-xs font-bold text-gray-400 uppercase">Employee</th> {/* ✅ Display Column */}
+              <th className="p-4 text-xs font-bold text-gray-400 uppercase">Employee</th>
               <th className="p-4 text-xs font-bold text-gray-400 uppercase">Action</th>
             </tr>
           </thead>
@@ -221,7 +230,18 @@ export default function Transactions() {
 
               return (
                 <tr key={t.id} className="border-b hover:bg-gray-50 transition-colors">
-                  <td className="p-4 text-sm text-gray-600">{new Date(t.created_at).toLocaleString()}</td>
+                  {/* ✅ FIX 2: Timezone applied to Table Display */}
+                  <td className="p-4 text-sm text-gray-600 whitespace-nowrap">
+                    {new Date(t.created_at).toLocaleString("en-IN", {
+                      timeZone: "Asia/Kolkata",
+                      day: "2-digit",
+                      month: "short",
+                      year: "numeric",
+                      hour: "2-digit",
+                      minute: "2-digit",
+                      hour12: true
+                    })}
+                  </td>
                   <td className="p-4 font-bold text-gray-800">{product?.product_name}</td>
                   <td className={`p-4 font-black ${t.transaction_type === "inward" ? "text-green-600" : "text-red-600"}`}>
                     {t.transaction_type.toUpperCase()}
@@ -229,7 +249,7 @@ export default function Transactions() {
                   <td className="p-4 font-mono font-bold">{t.quantity}</td>
                   <td className="p-4 text-sm text-gray-600">{location?.name}</td>
                   <td className="p-4 text-xs font-medium text-blue-500 italic">
-                    {t.created_by_email || "System"} {/* ✅ Show employee email */}
+                    {t.created_by_email || "System"} 
                   </td>
                   <td className="p-4 flex gap-2">
                     <button onClick={() => handleEditClick(t)} className="text-blue-600 font-bold hover:underline">Edit</button>
