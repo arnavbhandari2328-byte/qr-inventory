@@ -1,12 +1,10 @@
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { supabase } from "../supabase";
-import { Html5Qrcode } from "html5-qrcode"; // ✅ Switched to the core class for more control
 
 export default function Scan() {
   const { productId } = useParams();
   const navigate = useNavigate();
-  const scannerRef = useRef(null);
 
   const [manualId, setManualId] = useState("");
   const [product, setProduct] = useState(null);
@@ -19,34 +17,6 @@ export default function Scan() {
     quantity: "",
     party: ""
   });
-
-  // 📸 AUTOMATIC CAMERA START
-  useEffect(() => {
-    if (!productId) {
-      const html5QrCode = new Html5Qrcode("reader");
-      scannerRef.current = html5QrCode;
-
-      const config = { fps: 15, qrbox: { width: 250, height: 250 } };
-
-      // ✅ Force the back camera ('environment') to avoid questions
-      html5QrCode.start(
-        { facingMode: "environment" }, 
-        config,
-        (decodedText) => {
-          html5QrCode.stop().then(() => {
-            navigate(`/scan/${encodeURIComponent(decodedText)}`);
-          });
-        },
-        () => {} // Silent ignore of scan failures
-      ).catch(err => console.error("Camera start error:", err));
-
-      return () => {
-        if (scannerRef.current?.isScanning) {
-          scannerRef.current.stop().catch(e => console.error(e));
-        }
-      };
-    }
-  }, [productId, navigate]);
 
   useEffect(() => {
     fetchLocations();
@@ -63,6 +33,8 @@ export default function Scan() {
     try {
       setLoading(true);
       const decodedId = decodeURIComponent(productId);
+      
+      // Exact match for those complex IDs with / and "
       const { data, error } = await supabase
         .from("products")
         .select("*")
@@ -79,7 +51,7 @@ export default function Scan() {
   };
 
   const handleSubmit = async () => {
-    if (!form.location_id || !form.quantity) return alert("Fill all fields");
+    if (!form.location_id || !form.quantity) return alert("Select Location and Quantity");
     try {
       const { error } = await supabase.from("transactions").insert([{
         product_id: product.id,
@@ -89,95 +61,122 @@ export default function Scan() {
         party: form.party
       }]);
       if (error) throw error;
-      alert("Success!");
-      navigate("/scan");
+      alert("Inventory Updated!");
+      navigate("/scan"); // Go back to lookup
     } catch (err) {
       alert("Save failed!");
     }
   };
 
-  /* --- LOOKUP / AUTOMATIC SCANNER VIEW --- */
+  /* --- VIEW 1: SEARCH / LOOKUP --- */
   if (!productId) {
     return (
-      <div className="min-h-screen bg-black flex flex-col items-center">
-        {/* Full screen camera feel */}
-        <div id="reader" className="w-full h-[60vh] bg-black"></div>
-        
-        <div className="w-full flex-1 bg-white rounded-t-[3rem] -mt-10 p-8 shadow-2xl z-10">
-          <div className="w-12 h-1.5 bg-gray-200 rounded-full mx-auto mb-6"></div>
-          <h1 className="text-xl font-black text-center mb-6 text-gray-800">Quick Scan</h1>
+      <div className="min-h-screen bg-gray-100 flex flex-col items-center justify-center p-4">
+        <div className="w-full max-w-md bg-white rounded-3xl shadow-xl p-8 text-center">
+          <h1 className="text-2xl font-black text-gray-800 mb-2">Product Lookup</h1>
+          <p className="text-gray-500 text-sm mb-8">Enter the Product ID to manage stock</p>
           
-          <div className="space-y-4">
-            <input 
-              className="w-full p-4 border-2 border-gray-100 rounded-2xl text-center font-mono uppercase focus:border-blue-500 transition-all outline-none"
-              placeholder="ENTER PRODUCT ID"
-              value={manualId}
-              onChange={e => setManualId(e.target.value)}
-            />
-            <button 
-              onClick={() => manualId && navigate(`/scan/${encodeURIComponent(manualId.toUpperCase())}`)}
-              className="w-full bg-blue-600 text-white font-bold py-4 rounded-2xl shadow-lg active:scale-95 transition-transform"
-            >
-              Manual Lookup
-            </button>
-          </div>
+          <input 
+            className="w-full p-5 border-2 border-gray-100 rounded-2xl text-center text-lg font-mono mb-4 focus:border-blue-500 outline-none uppercase"
+            placeholder="e.g. NM-PPR-304..."
+            value={manualId}
+            onChange={e => setManualId(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && manualId && navigate(`/scan/${encodeURIComponent(manualId)}`)}
+          />
+          
+          <button 
+            onClick={() => manualId && navigate(`/scan/${encodeURIComponent(manualId)}`)}
+            className="w-full bg-blue-600 text-white font-black py-5 rounded-2xl text-xl shadow-lg active:scale-95 transition-transform"
+          >
+            SEARCH PRODUCT
+          </button>
         </div>
       </div>
     );
   }
 
-  if (loading) return <div className="p-20 text-center font-bold text-gray-400">Fetching Product Details...</div>;
+  if (loading) return <div className="p-20 text-center font-bold text-gray-400">Searching...</div>;
 
   if (!product) return (
     <div className="flex flex-col items-center justify-center min-h-screen p-6 text-center">
-      <div className="bg-red-50 p-6 rounded-full mb-4">
-        <span className="text-4xl">⚠️</span>
+      <div className="bg-white p-8 rounded-3xl shadow-lg w-full max-w-sm">
+        <h2 className="text-4xl mb-4">⚠️</h2>
+        <h2 className="text-xl font-bold text-red-500 mb-2">ID Not Found</h2>
+        <p className="text-gray-500 text-sm mb-8">"{decodeURIComponent(productId)}" doesn't exist in the database.</p>
+        <button onClick={() => navigate("/scan")} className="w-full bg-gray-800 text-white py-4 rounded-2xl font-bold">Try Again</button>
       </div>
-      <h2 className="text-2xl font-black text-gray-800 mb-2">Item Not Recognized</h2>
-      <p className="text-gray-400 text-sm mb-8 leading-relaxed">The ID <span className="font-mono font-bold text-red-500">{decodeURIComponent(productId)}</span> does not exist in your database.</p>
-      <button onClick={() => navigate("/scan")} className="bg-blue-600 text-white px-10 py-4 rounded-2xl font-bold shadow-lg">Try Again</button>
     </div>
   );
 
-  /* --- TRANSACTION ENTRY VIEW --- */
+  /* --- VIEW 2: INWARD / OUTWARD FORM --- */
   return (
-    <div className="min-h-screen bg-gray-50 pb-10">
+    <div className="min-h-screen bg-gray-50 pb-12">
       <div className="bg-white p-5 shadow-sm flex items-center sticky top-0 z-20">
-        <button onClick={() => navigate("/scan")} className="mr-4 p-2 bg-gray-100 rounded-full text-lg">←</button>
+        <button onClick={() => navigate("/scan")} className="mr-4 p-2 bg-gray-100 rounded-full">←</button>
         <div className="overflow-hidden">
-          <h1 className="font-black text-gray-800 truncate">{product.product_name}</h1>
-          <p className="text-xs text-blue-600 font-mono font-bold truncate">{product.product_id}</p>
+          <h1 className="font-black text-gray-800 truncate leading-tight">{product.product_name}</h1>
+          <p className="text-xs text-blue-600 font-mono truncate tracking-tighter">{product.product_id}</p>
         </div>
       </div>
 
-      <div className="p-5 max-w-md mx-auto space-y-6">
+      <div className="p-4 max-w-md mx-auto space-y-6 mt-4">
+        {/* Type Toggle */}
         <div className="bg-gray-200 p-1.5 rounded-2xl flex">
-          <button onClick={() => setForm({...form, transaction_type: 'inward'})} className={`flex-1 py-4 rounded-xl font-black text-xs transition-all ${form.transaction_type === 'inward' ? 'bg-green-500 text-white shadow-md' : 'text-gray-400'}`}>INWARD (+)</button>
-          <button onClick={() => setForm({...form, transaction_type: 'outward'})} className={`flex-1 py-4 rounded-xl font-black text-xs transition-all ${form.transaction_type === 'outward' ? 'bg-red-500 text-white shadow-md' : 'text-gray-400'}`}>OUTWARD (-)</button>
+          <button 
+            onClick={() => setForm({...form, transaction_type: 'inward'})} 
+            className={`flex-1 py-4 rounded-xl font-black transition-all ${form.transaction_type === 'inward' ? 'bg-green-600 text-white shadow-lg' : 'text-gray-500'}`}
+          >
+            INWARD (+)
+          </button>
+          <button 
+            onClick={() => setForm({...form, transaction_type: 'outward'})} 
+            className={`flex-1 py-4 rounded-xl font-black transition-all ${form.transaction_type === 'outward' ? 'bg-red-600 text-white shadow-lg' : 'text-gray-500'}`}
+          >
+            OUTWARD (-)
+          </button>
         </div>
 
-        <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 space-y-6">
+        {/* Form Inputs */}
+        <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 space-y-5">
           <div>
-            <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1 block ml-1">Godown / Location</label>
-            <select className="w-full bg-gray-50 p-4 rounded-2xl border-none outline-none font-bold text-gray-700" value={form.location_id} onChange={e => setForm({...form, location_id: e.target.value})}>
-              <option value="">Select Location</option>
+            <label className="text-[10px] font-bold text-gray-400 uppercase ml-1">Stock Location</label>
+            <select 
+              className="w-full bg-gray-50 p-4 rounded-xl border-none font-bold text-gray-700 mt-1" 
+              value={form.location_id} 
+              onChange={e => setForm({...form, location_id: e.target.value})}
+            >
+              <option value="">Select Godown</option>
               {locations.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
             </select>
           </div>
-          
+
           <div>
-            <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1 block ml-1">Quantity</label>
-            <input type="number" className="w-full bg-gray-50 p-4 rounded-2xl text-2xl font-black outline-none text-blue-600" placeholder="0" value={form.quantity} onChange={e => setForm({...form, quantity: e.target.value})} />
+            <label className="text-[10px] font-bold text-gray-400 uppercase ml-1">Quantity</label>
+            <input 
+              type="number" 
+              className="w-full bg-gray-50 p-4 rounded-xl text-2xl font-black text-blue-700 mt-1 outline-none" 
+              placeholder="0.00" 
+              value={form.quantity} 
+              onChange={e => setForm({...form, quantity: e.target.value})} 
+            />
           </div>
 
           <div>
-            <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1 block ml-1">Party Name</label>
-            <input className="w-full bg-gray-50 p-4 rounded-2xl outline-none font-medium" placeholder="Vendor/Customer Name" value={form.party} onChange={e => setForm({...form, party: e.target.value})} />
+            <label className="text-[10px] font-bold text-gray-400 uppercase ml-1">Party / Note</label>
+            <input 
+              className="w-full bg-gray-50 p-4 rounded-xl mt-1 outline-none" 
+              placeholder="Who took/gave it?" 
+              value={form.party} 
+              onChange={e => setForm({...form, party: e.target.value})} 
+            />
           </div>
         </div>
 
-        <button onClick={handleSubmit} className={`w-full py-5 rounded-3xl text-white font-black text-xl shadow-xl transition-all active:scale-95 ${form.transaction_type === 'inward' ? 'bg-green-600 shadow-green-100' : 'bg-red-600 shadow-red-100'}`}>
-          RECORD {form.transaction_type.toUpperCase()}
+        <button 
+          onClick={handleSubmit} 
+          className={`w-full py-5 rounded-3xl text-white font-black text-xl shadow-xl transition-all active:scale-95 ${form.transaction_type === 'inward' ? 'bg-green-600 shadow-green-100' : 'bg-red-600 shadow-red-100'}`}
+        >
+          CONFIRM {form.transaction_type.toUpperCase()}
         </button>
       </div>
     </div>
