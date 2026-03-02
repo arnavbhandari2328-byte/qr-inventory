@@ -7,12 +7,15 @@ export default function Products() {
   const [transactions, setTransactions] = useState([]);
   const [locations, setLocations] = useState([]); 
   const [search, setSearch] = useState("");
+  
+  // ✅ NEW: Admin State
+  const [isAdmin, setIsAdmin] = useState(false);
 
   const [form, setForm] = useState({
     product_id: "",
     product_name: "",
     low_stock_alert: "",
-    high_stock_alert: "", // ✅ Added High Stock State
+    high_stock_alert: "",
   });
 
   const [selectedProduct, setSelectedProduct] = useState(null);
@@ -22,8 +25,17 @@ export default function Products() {
   const fileInputRef = useRef(null);
 
   useEffect(() => {
+    checkUserRole(); // ✅ Check who is logged in first
     loadProducts();
   }, []);
+
+  // ✅ NEW: Identify if the logged-in user is the Master Admin
+  const checkUserRole = async () => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (user?.email === "niveemetals@gmail.com") {
+      setIsAdmin(true);
+    }
+  };
 
   const loadProducts = async () => {
     try {
@@ -95,7 +107,6 @@ export default function Products() {
     setLedger(calculated);
   };
 
-  /* ---------------- EXPORT EXCEL ---------------- */
   const handleExportExcel = () => {
     if (!products.length) return;
 
@@ -106,7 +117,7 @@ export default function Products() {
       Godown: stockByLocation(p.id, "Godown"),
       Warehouse: stockByLocation(p.id, "Warehouse"),
       Low_Alert: p.low_stock_alert,
-      High_Alert: p.high_stock_alert, // ✅ Added to Excel Export
+      High_Alert: p.high_stock_alert,
     }));
 
     const ws = XLSX.utils.json_to_sheet(data);
@@ -115,7 +126,6 @@ export default function Products() {
     XLSX.writeFile(wb, "Products_Report.xlsx");
   };
 
-  /* ---------------- SMART MULTI-LOCATION BULK UPLOAD ---------------- */
   const handleBulkUpload = (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -153,14 +163,14 @@ export default function Products() {
           const idKey = keys.find(k => k.toLowerCase().trim() === 'product_id');
           const nameKey = keys.find(k => k.toLowerCase().trim() === 'product_name');
           const lowAlertKey = keys.find(k => k.toLowerCase().trim() === 'low_alert' || k.toLowerCase().trim() === 'low_stock_alert');
-          const highAlertKey = keys.find(k => k.toLowerCase().trim() === 'high_alert' || k.toLowerCase().trim() === 'high_stock_alert'); // ✅ Parses High Alert
+          const highAlertKey = keys.find(k => k.toLowerCase().trim() === 'high_alert' || k.toLowerCase().trim() === 'high_stock_alert');
           
           if (idKey && row[idKey] && nameKey && row[nameKey]) {
             productsToUpsert.push({
               product_id: String(row[idKey]),
               product_name: String(row[nameKey]),
               low_stock_alert: Number(row[lowAlertKey] || 0),
-              high_stock_alert: Number(row[highAlertKey] || 0) // ✅ Adds to Upsert
+              high_stock_alert: Number(row[highAlertKey] || 0) 
             });
             validRows.push(row);
           }
@@ -223,7 +233,6 @@ export default function Products() {
     reader.readAsBinaryString(file);
   };
 
-  /* ---------------- SAVE PRODUCT (ADD OR UPDATE) ---------------- */
   const handleSaveProduct = async () => {
     if (!form.product_id || !form.product_name) {
       alert("Please fill in the Product ID and Name.");
@@ -235,7 +244,7 @@ export default function Products() {
         product_id: form.product_id,
         product_name: form.product_name,
         low_stock_alert: Number(form.low_stock_alert || 0),
-        high_stock_alert: Number(form.high_stock_alert || 0) // ✅ Included in manual save
+        high_stock_alert: Number(form.high_stock_alert || 0)
       };
 
       if (editingId) {
@@ -261,7 +270,7 @@ export default function Products() {
       product_id: product.product_id,
       product_name: product.product_name,
       low_stock_alert: product.low_stock_alert,
-      high_stock_alert: product.high_stock_alert || "", // ✅ Load into form
+      high_stock_alert: product.high_stock_alert || "",
     });
     setEditingId(product.id);
   };
@@ -273,6 +282,13 @@ export default function Products() {
 
   const handleDeleteProduct = async (e, productId) => {
     e.stopPropagation(); 
+    
+    // ✅ NEW: Double-lock the function just in case
+    if (!isAdmin) {
+      alert("Unauthorized: Only the Master Admin can delete products.");
+      return;
+    }
+
     if (!window.confirm("Are you sure you want to delete this product?")) return;
 
     try {
@@ -303,7 +319,6 @@ export default function Products() {
         <input name="product_id" placeholder="Product ID" value={form.product_id} onChange={handleChange} className="border p-2 rounded flex-1 min-w-[150px]" />
         <input name="product_name" placeholder="Product Name" value={form.product_name} onChange={handleChange} className="border p-2 rounded flex-1 min-w-[150px]" />
         
-        {/* ✅ Updated Inputs */}
         <input name="low_stock_alert" placeholder="Low Alert Qty" type="number" value={form.low_stock_alert} onChange={handleChange} className="border p-2 rounded w-32" />
         <input name="high_stock_alert" placeholder="High Alert Qty" type="number" value={form.high_stock_alert} onChange={handleChange} className="border p-2 rounded w-32" />
         
@@ -334,7 +349,6 @@ export default function Products() {
             >
               Bulk Upload
             </button>
-            {/* ✅ Updated UI Hint */}
             <span className="text-xs text-gray-500 mt-1">Headers: Product_ID, Product_Name, Low_Alert, High_Alert, Office, Godown, Warehouse</span>
           </div>
           
@@ -357,7 +371,7 @@ export default function Products() {
               <th className="p-3">Godown</th>
               <th className="p-3">Warehouse</th>
               <th className="p-3">Low Alert</th>
-              <th className="p-3">High Alert</th> {/* ✅ New Header */}
+              <th className="p-3">High Alert</th> 
               <th className="p-3">Action</th>
             </tr>
           </thead>
@@ -377,7 +391,6 @@ export default function Products() {
                       {p.low_stock_alert}
                     </span>
                   </td>
-                  {/* ✅ New Table Cell */}
                   <td className="p-3">
                     <span className="px-3 py-1 rounded-full bg-orange-100 text-orange-600 text-sm font-semibold">
                       {p.high_stock_alert || 0}
@@ -390,12 +403,16 @@ export default function Products() {
                     >
                       Edit
                     </button>
-                    <button 
-                      onClick={(e) => handleDeleteProduct(e, p.product_id)} 
-                      className="text-red-500 hover:text-red-700 font-semibold px-3 py-1 bg-red-50 rounded hover:bg-red-100 transition-colors"
-                    >
-                      Delete
-                    </button>
+                    
+                    {/* ✅ NEW: Only render the Delete button if isAdmin is TRUE */}
+                    {isAdmin && (
+                      <button 
+                        onClick={(e) => handleDeleteProduct(e, p.product_id)} 
+                        className="text-red-500 hover:text-red-700 font-semibold px-3 py-1 bg-red-50 rounded hover:bg-red-100 transition-colors"
+                      >
+                        Delete
+                      </button>
+                    )}
                   </td>
                 </tr>
               ))
