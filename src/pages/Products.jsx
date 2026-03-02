@@ -133,7 +133,6 @@ export default function Products() {
 
         if (data.length === 0) throw new Error("Spreadsheet is empty.");
 
-        // Identify Location columns dynamically from Excel headers
         const locationMap = [];
         locations.forEach(loc => {
           const match = Object.keys(data[0]).find(k => k.toLowerCase().trim() === loc.name.toLowerCase().trim());
@@ -146,7 +145,6 @@ export default function Products() {
           throw new Error(`We couldn't find any location columns. Add columns named: ${locations.map(l => l.name).join(", ")}`);
         }
 
-        // 1. Prepare products for UPSERT (Updates existing, inserts new)
         const productsToUpsert = [];
         const validRows = []; 
 
@@ -154,13 +152,15 @@ export default function Products() {
           const keys = Object.keys(row);
           const idKey = keys.find(k => k.toLowerCase().trim() === 'product_id');
           const nameKey = keys.find(k => k.toLowerCase().trim() === 'product_name');
+          
+          // ✅ Explicitly looking for the Low_Alert column
           const alertKey = keys.find(k => k.toLowerCase().trim() === 'low_alert' || k.toLowerCase().trim() === 'low_stock_alert');
           
           if (idKey && row[idKey] && nameKey && row[nameKey]) {
             productsToUpsert.push({
               product_id: String(row[idKey]),
               product_name: String(row[nameKey]),
-              low_stock_alert: Number(row[alertKey] || 0)
+              low_stock_alert: Number(row[alertKey] || 0) // Defaults to 0 if empty
             });
             validRows.push(row);
           }
@@ -171,15 +171,13 @@ export default function Products() {
           return;
         }
 
-        // 2. UPSERT Products and get them back with DB IDs
         const { data: upsertedProducts, error: prodErr } = await supabase
           .from("products")
-          .upsert(productsToUpsert, { onConflict: "product_id" }) // ✅ Prevents Duplicate Error
+          .upsert(productsToUpsert, { onConflict: "product_id" }) 
           .select("*"); 
 
         if (prodErr) throw prodErr;
 
-        // 3. Prepare Opening Stock Transactions across multiple locations
         const transactionsToInsert = [];
 
         validRows.forEach((row) => {
@@ -189,7 +187,6 @@ export default function Products() {
           const dbProduct = upsertedProducts.find(p => p.product_id === pIdStr);
 
           if (dbProduct) {
-            // Loop through every mapped location column and generate transactions
             locationMap.forEach(loc => {
               const stock = Number(row[loc.headerKey] || 0);
               if (stock > 0) {
@@ -206,7 +203,6 @@ export default function Products() {
           }
         });
 
-        // 4. Insert Transactions 
         if (transactionsToInsert.length > 0) {
           const { error: transErr } = await supabase
             .from("transactions")
@@ -216,12 +212,12 @@ export default function Products() {
         }
 
         alert(`Success! Updated ${upsertedProducts.length} products and logged ${transactionsToInsert.length} stock allocations.`);
-        loadProducts(); // Refresh table
+        loadProducts(); 
       } catch (err) {
         console.error("Bulk upload error:", err.message);
         alert(`Upload Failed: ${err.message}`);
       } finally {
-        e.target.value = null; // Reset file input
+        e.target.value = null; 
       }
     };
     reader.readAsBinaryString(file);
@@ -335,7 +331,8 @@ export default function Products() {
             >
               Bulk Upload
             </button>
-            <span className="text-xs text-gray-500 mt-1">Headers: Product_ID, Product_Name, Office, Godown, Warehouse</span>
+            {/* ✅ FIXED UI HINT */}
+            <span className="text-xs text-gray-500 mt-1">Headers: Product_ID, Product_Name, Low_Alert, Office, Godown, Warehouse</span>
           </div>
           
           <button onClick={handleExportExcel} className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded transition-colors self-start">
@@ -420,7 +417,6 @@ export default function Products() {
                   <tr><td colSpan="4" className="p-4 text-gray-500 text-center">No transactions</td></tr>
                 ) : ledger.map((l) => (
                   <tr key={l.id}>
-                    {/* ✅ FIX: Corrected IST Time formatting for Ledger */}
                     <td className="border p-2">{formatIST(l.created_at)}</td>
                     <td className={`border p-2 font-semibold ${l.transaction_type === "inward" ? "text-green-600" : "text-red-600"}`}>{l.transaction_type}</td>
                     <td className="border p-2">{l.quantity}</td>
