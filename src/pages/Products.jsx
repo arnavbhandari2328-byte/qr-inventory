@@ -12,6 +12,7 @@ export default function Products() {
     product_id: "",
     product_name: "",
     low_stock_alert: "",
+    high_stock_alert: "", // ✅ Added High Stock State
   });
 
   const [selectedProduct, setSelectedProduct] = useState(null);
@@ -47,7 +48,6 @@ export default function Products() {
     }
   };
 
-  // ✅ IST Time Formatter (for Ledger)
   const formatIST = (utcString) => {
     if (!utcString) return "Unknown Date";
     const date = new Date(utcString.endsWith("Z") ? utcString : utcString + "Z");
@@ -62,7 +62,6 @@ export default function Products() {
     });
   };
 
-  /* ---------------- STOCK CALCULATOR ---------------- */
   const stockByLocation = (productId, locationName) => {
     const related = transactions.filter(
       (t) =>
@@ -107,6 +106,7 @@ export default function Products() {
       Godown: stockByLocation(p.id, "Godown"),
       Warehouse: stockByLocation(p.id, "Warehouse"),
       Low_Alert: p.low_stock_alert,
+      High_Alert: p.high_stock_alert, // ✅ Added to Excel Export
     }));
 
     const ws = XLSX.utils.json_to_sheet(data);
@@ -152,15 +152,15 @@ export default function Products() {
           const keys = Object.keys(row);
           const idKey = keys.find(k => k.toLowerCase().trim() === 'product_id');
           const nameKey = keys.find(k => k.toLowerCase().trim() === 'product_name');
-          
-          // ✅ Explicitly looking for the Low_Alert column
-          const alertKey = keys.find(k => k.toLowerCase().trim() === 'low_alert' || k.toLowerCase().trim() === 'low_stock_alert');
+          const lowAlertKey = keys.find(k => k.toLowerCase().trim() === 'low_alert' || k.toLowerCase().trim() === 'low_stock_alert');
+          const highAlertKey = keys.find(k => k.toLowerCase().trim() === 'high_alert' || k.toLowerCase().trim() === 'high_stock_alert'); // ✅ Parses High Alert
           
           if (idKey && row[idKey] && nameKey && row[nameKey]) {
             productsToUpsert.push({
               product_id: String(row[idKey]),
               product_name: String(row[nameKey]),
-              low_stock_alert: Number(row[alertKey] || 0) // Defaults to 0 if empty
+              low_stock_alert: Number(row[lowAlertKey] || 0),
+              high_stock_alert: Number(row[highAlertKey] || 0) // ✅ Adds to Upsert
             });
             validRows.push(row);
           }
@@ -225,29 +225,28 @@ export default function Products() {
 
   /* ---------------- SAVE PRODUCT (ADD OR UPDATE) ---------------- */
   const handleSaveProduct = async () => {
-    if (!form.product_id || !form.product_name || !form.low_stock_alert) {
-      alert("Please fill in all fields.");
+    if (!form.product_id || !form.product_name) {
+      alert("Please fill in the Product ID and Name.");
       return;
     }
 
     try {
+      const payload = {
+        product_id: form.product_id,
+        product_name: form.product_name,
+        low_stock_alert: Number(form.low_stock_alert || 0),
+        high_stock_alert: Number(form.high_stock_alert || 0) // ✅ Included in manual save
+      };
+
       if (editingId) {
-        const { error } = await supabase.from("products").update({
-          product_id: form.product_id,
-          product_name: form.product_name,
-          low_stock_alert: Number(form.low_stock_alert)
-        }).eq("id", editingId);
+        const { error } = await supabase.from("products").update(payload).eq("id", editingId);
         if (error) throw error;
       } else {
-        const { error } = await supabase.from("products").insert([{
-          product_id: form.product_id,
-          product_name: form.product_name,
-          low_stock_alert: Number(form.low_stock_alert)
-        }]);
+        const { error } = await supabase.from("products").insert([payload]);
         if (error) throw error;
       }
 
-      setForm({ product_id: "", product_name: "", low_stock_alert: "" });
+      setForm({ product_id: "", product_name: "", low_stock_alert: "", high_stock_alert: "" });
       setEditingId(null);
       loadProducts(); 
     } catch (err) {
@@ -262,12 +261,13 @@ export default function Products() {
       product_id: product.product_id,
       product_name: product.product_name,
       low_stock_alert: product.low_stock_alert,
+      high_stock_alert: product.high_stock_alert || "", // ✅ Load into form
     });
     setEditingId(product.id);
   };
 
   const cancelEdit = () => {
-    setForm({ product_id: "", product_name: "", low_stock_alert: "" });
+    setForm({ product_id: "", product_name: "", low_stock_alert: "", high_stock_alert: "" });
     setEditingId(null);
   };
 
@@ -302,7 +302,10 @@ export default function Products() {
       <div className="bg-white shadow rounded p-4 mb-6 flex gap-3 items-center flex-wrap">
         <input name="product_id" placeholder="Product ID" value={form.product_id} onChange={handleChange} className="border p-2 rounded flex-1 min-w-[150px]" />
         <input name="product_name" placeholder="Product Name" value={form.product_name} onChange={handleChange} className="border p-2 rounded flex-1 min-w-[150px]" />
+        
+        {/* ✅ Updated Inputs */}
         <input name="low_stock_alert" placeholder="Low Alert Qty" type="number" value={form.low_stock_alert} onChange={handleChange} className="border p-2 rounded w-32" />
+        <input name="high_stock_alert" placeholder="High Alert Qty" type="number" value={form.high_stock_alert} onChange={handleChange} className="border p-2 rounded w-32" />
         
         <button onClick={handleSaveProduct} className={`text-white px-6 py-2 rounded ${editingId ? 'bg-orange-500 hover:bg-orange-600' : 'bg-blue-600 hover:bg-blue-700'}`}>
           {editingId ? "Update" : "Add"}
@@ -331,8 +334,8 @@ export default function Products() {
             >
               Bulk Upload
             </button>
-            {/* ✅ FIXED UI HINT */}
-            <span className="text-xs text-gray-500 mt-1">Headers: Product_ID, Product_Name, Low_Alert, Office, Godown, Warehouse</span>
+            {/* ✅ Updated UI Hint */}
+            <span className="text-xs text-gray-500 mt-1">Headers: Product_ID, Product_Name, Low_Alert, High_Alert, Office, Godown, Warehouse</span>
           </div>
           
           <button onClick={handleExportExcel} className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded transition-colors self-start">
@@ -354,12 +357,13 @@ export default function Products() {
               <th className="p-3">Godown</th>
               <th className="p-3">Warehouse</th>
               <th className="p-3">Low Alert</th>
+              <th className="p-3">High Alert</th> {/* ✅ New Header */}
               <th className="p-3">Action</th>
             </tr>
           </thead>
           <tbody>
             {filtered.length === 0 ? (
-              <tr><td colSpan="7" className="p-4 text-gray-500 text-center">No products found</td></tr>
+              <tr><td colSpan="8" className="p-4 text-gray-500 text-center">No products found</td></tr>
             ) : (
               filtered.map((p) => (
                 <tr key={p.id} className="border-b hover:bg-blue-50 cursor-pointer" onClick={() => openLedger(p)}>
@@ -371,6 +375,12 @@ export default function Products() {
                   <td className="p-3">
                     <span className="px-3 py-1 rounded-full bg-red-100 text-red-600 text-sm font-semibold">
                       {p.low_stock_alert}
+                    </span>
+                  </td>
+                  {/* ✅ New Table Cell */}
+                  <td className="p-3">
+                    <span className="px-3 py-1 rounded-full bg-orange-100 text-orange-600 text-sm font-semibold">
+                      {p.high_stock_alert || 0}
                     </span>
                   </td>
                   <td className="p-3 flex gap-2">
