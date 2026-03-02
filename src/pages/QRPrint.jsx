@@ -60,8 +60,9 @@ export default function QRPrint() {
               </p>
               
               <div className="p-2 bg-white rounded-lg border border-gray-50">
+                {/* ✅ Updated to use the full URL */}
                 <QRCodeCanvas 
-                  value={qrUrl}  {/* ✅ Updated to use the full URL */}
+                  value={qrUrl}  
                   size={120} 
                   level="H" 
                   includeMargin={true}
