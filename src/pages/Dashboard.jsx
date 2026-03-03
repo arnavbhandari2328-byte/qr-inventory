@@ -109,7 +109,7 @@ export default function Dashboard() {
         }),
       });
       const data = await res.json();
-      setAiResponse(data.answer || data.error);
+      setAiResponse(data.answer || "Error: AI could not generate a response.");
     } catch (err) {
       setAiResponse("Error: Could not reach the AI Assistant.");
     } finally {
@@ -118,127 +118,172 @@ export default function Dashboard() {
   };
 
   const formatIST = (utcString) => {
-    if (!utcString) return "-";
+    if (!utcString) return "Unknown Date";
     const date = new Date(utcString.endsWith("Z") ? utcString : utcString + "Z");
-    return date.toLocaleString("en-IN", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", hour12: true });
+    return date.toLocaleString("en-IN", {
+      timeZone: "Asia/Kolkata",
+      day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", hour12: true
+    });
   };
 
-  if (loading) return <div className="p-8 font-bold text-gray-500">Loading Nivee Dashboard...</div>;
+  if (loading) return <div className="p-8 font-bold text-gray-500">Loading Dashboard...</div>;
 
   return (
-    <div className="p-6 md:p-8 max-w-7xl mx-auto">
+    <div className="p-6 md:p-8">
       <h1 className="text-3xl font-bold mb-6 text-gray-800">Dashboard</h1>
 
-      {/* ✨ NEW: AI ASSISTANT SECTION */}
-      <div className="bg-gradient-to-br from-indigo-600 to-blue-700 p-6 rounded-3xl shadow-xl mb-8 text-white">
-        <div className="flex items-center gap-3 mb-4">
-          <div className="bg-white/20 p-2 rounded-lg">✨</div>
-          <h2 className="text-xl font-bold">Nivee AI Business Intelligence</h2>
-        </div>
-        <div className="flex gap-3">
+      {/* ✅ NEW: AI Assistant - Keeping it Clean and Professional */}
+      <div className="bg-white p-6 rounded-2xl shadow-sm border border-blue-100 mb-8">
+        <h2 className="text-lg font-bold text-blue-600 mb-3 flex items-center gap-2">
+          ✨ Nivee AI Assistant
+        </h2>
+        <div className="flex gap-2">
           <input 
             value={question}
             onChange={(e) => setQuestion(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && askGemini()}
-            placeholder="Ask anything: 'Draft a reorder report' or 'Summarize today's activity'..."
-            className="flex-1 p-4 rounded-2xl text-gray-800 focus:ring-4 focus:ring-white/30 outline-none transition-all"
+            placeholder="Ask: 'Which items are low?' or 'Summarize recent activity'..."
+            className="flex-1 p-3 border rounded-xl outline-none focus:border-blue-500 transition-all text-sm"
           />
           <button 
             onClick={askGemini}
             disabled={isAsking}
-            className="bg-white text-indigo-700 px-8 py-4 rounded-2xl font-black hover:bg-indigo-50 transition-all disabled:opacity-50 shadow-lg"
+            className="bg-blue-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-blue-700 transition-all disabled:opacity-50 text-sm"
           >
-            {isAsking ? "Analyzing..." : "Analyze"}
+            {isAsking ? "Thinking..." : "Analyze"}
           </button>
         </div>
         
         {aiResponse && (
-          <div className="mt-6 p-5 bg-white/10 backdrop-blur-md rounded-2xl border border-white/20 animate-in fade-in slide-in-from-top-4 duration-500">
-            <p className="text-sm leading-relaxed whitespace-pre-wrap">{aiResponse}</p>
+          <div className="mt-4 p-4 bg-blue-50 rounded-xl border border-blue-100 text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">
+            {aiResponse}
           </div>
         )}
       </div>
 
-      {/* STATS CARDS */}
+      {/* STATS CARDS (Original UI) */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
         <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
-          <p className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-1">Total Products</p>
+          <p className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-1">Total Products</p>
           <p className="text-3xl font-black text-blue-600">{stats.totalProducts}</p>
         </div>
         <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
-          <p className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-1">Total Stock</p>
+          <p className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-1">Total Stock Items</p>
           <p className="text-3xl font-black text-green-600">{stats.totalStock}</p>
         </div>
-        <div onClick={() => setModalType('low')} className="bg-white p-6 rounded-2xl shadow-sm border border-red-100 cursor-pointer hover:scale-105 transition-transform">
-          <p className="text-xs font-bold text-red-400 uppercase tracking-widest mb-1">Low Stock</p>
+        
+        <div 
+          onClick={() => setModalType('low')}
+          className="bg-white p-6 rounded-2xl shadow-sm border border-red-100 cursor-pointer hover:shadow-md hover:border-red-300 transition-all"
+        >
+          <div className="flex justify-between items-center mb-1">
+            <p className="text-sm font-bold text-red-400 uppercase tracking-wider">Low Stock Alerts</p>
+            <span className="text-xs text-red-300 font-bold underline">View</span>
+          </div>
           <p className="text-3xl font-black text-red-600">{stats.lowAlerts}</p>
         </div>
-        <div onClick={() => setModalType('high')} className="bg-white p-6 rounded-2xl shadow-sm border border-orange-100 cursor-pointer hover:scale-105 transition-transform">
-          <p className="text-xs font-bold text-orange-400 uppercase tracking-widest mb-1">Overstock</p>
+
+        <div 
+          onClick={() => setModalType('high')}
+          className="bg-white p-6 rounded-2xl shadow-sm border border-orange-100 cursor-pointer hover:shadow-md hover:border-orange-300 transition-all"
+        >
+          <div className="flex justify-between items-center mb-1">
+            <p className="text-sm font-bold text-orange-400 uppercase tracking-wider">High Stock Alerts</p>
+            <span className="text-xs text-orange-300 font-bold underline">View</span>
+          </div>
           <p className="text-3xl font-black text-orange-600">{stats.highAlerts}</p>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-        {/* PIE CHART */}
-        <div className="bg-white p-8 rounded-3xl shadow-sm border border-gray-50">
-          <h2 className="text-lg font-bold text-gray-800 mb-6">Stock Distribution</h2>
-          <div className="h-80 w-full">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
+        {/* PIE CHART (Original UI) */}
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 flex flex-col items-center">
+          <h2 className="text-xl font-bold text-gray-800 mb-6 self-start">Stock by Category</h2>
+          <div className="h-72 w-full">
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
-                <Pie data={stats.pieData} cx="50%" cy="50%" innerRadius={70} outerRadius={100} paddingAngle={8} dataKey="value" label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}>
-                  {stats.pieData.map((_, index) => <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} strokeWidth={0} />)}
+                <Pie
+                  data={stats.pieData}
+                  cx="50%"
+                  cy="50%"
+                  innerRadius={60}       
+                  outerRadius={95}       
+                  paddingAngle={5}
+                  dataKey="value"
+                  labelLine={true}       
+                  label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
+                >
+                  {stats.pieData.map((entry, index) => (
+                    <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                  ))}
                 </Pie>
-                <Tooltip />
-                <Legend verticalAlign="bottom" />
+                <Tooltip formatter={(value) => [value, "Items in Stock"]} />
+                <Legend verticalAlign="bottom" height={36} />
               </PieChart>
             </ResponsiveContainer>
           </div>
         </div>
 
-        {/* RECENT ACTIVITY */}
-        <div className="bg-white p-8 rounded-3xl shadow-sm border border-gray-50">
-          <h2 className="text-lg font-bold text-gray-800 mb-6">Recent Activity (IST)</h2>
-          <div className="space-y-4">
-            {stats.recentTransactions.map(t => (
-              <div key={t.id} className="flex justify-between items-center p-4 rounded-2xl bg-gray-50 border border-gray-100">
-                <div>
-                  <p className="font-bold text-gray-800">{t.products?.product_id}</p>
-                  <p className="text-xs text-gray-400 font-medium uppercase tracking-tighter">{t.locations?.name} • {formatIST(t.created_at)}</p>
-                </div>
-                <div className="text-right">
-                  <p className={`text-sm font-black ${t.transaction_type === 'inward' ? 'text-green-600' : 'text-red-600'}`}>
-                    {t.transaction_type === 'inward' ? '+' : '-'}{t.quantity}
-                  </p>
-                  <p className="text-[10px] font-bold text-gray-300 uppercase">{t.transaction_type}</p>
-                </div>
-              </div>
-            ))}
+        {/* RECENT TRANSACTIONS (Original UI) */}
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+          <h2 className="text-xl font-bold text-gray-800 mb-4">Recent Activity</h2>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left">
+              <thead>
+                <tr className="border-b border-gray-100">
+                  <th className="pb-3 text-xs font-bold text-gray-400 uppercase">Item</th>
+                  <th className="pb-3 text-xs font-bold text-gray-400 uppercase">Type</th>
+                  <th className="pb-3 text-xs font-bold text-gray-400 uppercase">Qty</th>
+                  <th className="pb-3 text-xs font-bold text-gray-400 uppercase">Time</th>
+                </tr>
+              </thead>
+              <tbody>
+                {stats.recentTransactions.map(t => (
+                  <tr key={t.id} className="border-b border-gray-50 last:border-0 hover:bg-gray-50">
+                    <td className="py-3 text-sm font-bold text-gray-700">
+                      {t.products?.product_id || "Unknown"}
+                    </td>
+                    <td className="py-3">
+                      <span className={`text-xs font-bold px-2 py-1 rounded ${t.transaction_type === 'inward' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                        {t.transaction_type.toUpperCase()}
+                      </span>
+                    </td>
+                    <td className="py-3 text-sm font-bold">{t.quantity}</td>
+                    <td className="py-3 text-xs text-gray-500">{formatIST(t.created_at)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         </div>
       </div>
 
-      {/* MODAL FOR ALERTS */}
+      {/* MODAL FOR ALERTS (Original UI) */}
       {modalType && (
-        <div className="fixed inset-0 bg-gray-900/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-white w-full max-w-2xl rounded-3xl shadow-2xl overflow-hidden">
-            <div className={`p-6 flex justify-between items-center text-white ${modalType === 'low' ? 'bg-red-600' : 'bg-orange-500'}`}>
-              <h2 className="text-xl font-bold">{modalType === 'low' ? 'Low Stock Items' : 'High Stock Items'}</h2>
-              <button onClick={() => setModalType(null)} className="bg-white/20 hover:bg-white/40 px-4 py-2 rounded-xl text-sm font-bold transition-all">Close</button>
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white w-full max-w-3xl max-h-[85vh] overflow-hidden rounded-2xl shadow-2xl flex flex-col">
+            <div className={`p-6 text-white flex justify-between items-center ${modalType === 'low' ? 'bg-red-600' : 'bg-orange-500'}`}>
+              <h2 className="text-2xl font-black">{modalType === 'low' ? 'Low Stock' : 'High Stock'}</h2>
+              <button onClick={() => setModalType(null)} className="bg-white/20 hover:bg-white/30 text-white px-4 py-2 rounded-lg font-bold">Close</button>
             </div>
-            <div className="p-6 max-h-[60vh] overflow-y-auto">
-              { (modalType === 'low' ? stats.lowAlertProducts : stats.highAlertProducts).map(p => (
-                <div key={p.id} className="flex justify-between items-center py-3 border-b last:border-0">
-                  <div>
-                    <p className="font-bold text-gray-800">{p.product_id}</p>
-                    <p className="text-xs text-gray-500">{p.product_name}</p>
-                  </div>
-                  <div className="text-right">
-                    <p className="font-black text-gray-800">{p.currentStock}</p>
-                    <p className="text-[10px] text-gray-400 uppercase font-bold">Current Stock</p>
-                  </div>
-                </div>
-              ))}
+            <div className="p-6 overflow-y-auto">
+              <table className="w-full text-left border-collapse">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="p-3 border-b text-sm font-bold text-gray-500 uppercase">Product ID</th>
+                    <th className="p-3 border-b text-sm font-bold text-gray-500 uppercase">Name</th>
+                    <th className="p-3 border-b text-sm font-bold text-gray-500 uppercase">Current Stock</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(modalType === 'low' ? stats.lowAlertProducts : stats.highAlertProducts).map(p => (
+                    <tr key={p.id} className="hover:bg-gray-50 border-b last:border-0">
+                      <td className="p-3 font-mono font-bold text-gray-700">{p.product_id}</td>
+                      <td className="p-3 text-sm text-gray-600">{p.product_name}</td>
+                      <td className="p-3"><span className={`px-3 py-1 rounded-full text-sm font-black ${modalType === 'low' ? 'bg-red-100 text-red-700' : 'bg-orange-100 text-orange-700'}`}>{p.currentStock}</span></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           </div>
         </div>
