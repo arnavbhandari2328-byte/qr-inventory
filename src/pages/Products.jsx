@@ -141,12 +141,13 @@ export default function Products() {
 
         if (data.length === 0) throw new Error("Spreadsheet is empty.");
 
-        // ✅ NEW: Bulletproof normalizer (strips spaces, underscores, makes lowercase)
+        // ✅ Grab the headers from the very first row
+        const headers = Object.keys(data[0]);
         const normalize = (str) => String(str).toLowerCase().replace(/[\s_]/g, '');
 
         const locationMap = [];
         locations.forEach(loc => {
-          const match = Object.keys(data[0]).find(k => normalize(k) === normalize(loc.name));
+          const match = headers.find(k => normalize(k) === normalize(loc.name));
           if (match) {
             locationMap.push({ id: loc.id, name: loc.name, headerKey: match });
           }
@@ -156,16 +157,28 @@ export default function Products() {
           throw new Error(`We couldn't find any location columns. Add columns named: ${locations.map(l => l.name).join(", ")}`);
         }
 
+        const idKey = headers.find(k => normalize(k).includes('productid') || normalize(k) === 'id');
+        const nameKey = headers.find(k => normalize(k).includes('productname') || normalize(k) === 'name');
+        const lowAlertKey = headers.find(k => normalize(k).includes('low'));
+        const highAlertKey = headers.find(k => normalize(k).includes('high') || normalize(k).includes('max'));
+
+        // 🚨 HEADER DETECTIVE: This will popup if the app can't find your High Alert column
+        if (!highAlertKey) {
+          const proceed = window.confirm(
+            `⚠️ WARNING: We couldn't find your "High Alert" column!\n\n` +
+            `The headers we successfully read from your file are:\n[ ${headers.join(", ")} ]\n\n` +
+            `Do you want to continue anyway and let High Alert default to 0?`
+          );
+          if (!proceed) {
+             e.target.value = null;
+             return; // Stops the upload so you can fix Excel
+          }
+        }
+
         const productsToUpsert = [];
         const validRows = []; 
 
         data.forEach((row) => {
-          const keys = Object.keys(row);
-          const idKey = keys.find(k => normalize(k) === 'productid');
-          const nameKey = keys.find(k => normalize(k) === 'productname');
-          const lowAlertKey = keys.find(k => normalize(k) === 'lowalert' || normalize(k) === 'lowstockalert');
-          const highAlertKey = keys.find(k => normalize(k) === 'highalert' || normalize(k) === 'highstockalert');
-          
           if (idKey && row[idKey] && nameKey && row[nameKey]) {
             productsToUpsert.push({
               product_id: String(row[idKey]),
@@ -192,8 +205,6 @@ export default function Products() {
         const transactionsToInsert = [];
 
         validRows.forEach((row) => {
-          const keys = Object.keys(row);
-          const idKey = keys.find(k => normalize(k) === 'productid');
           const pIdStr = String(row[idKey]);
           const dbProduct = upsertedProducts.find(p => p.product_id === pIdStr);
 
