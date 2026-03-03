@@ -9,6 +9,9 @@ export default function Transactions() {
   const [search, setSearch] = useState("");
   const [editingId, setEditingId] = useState(null);
 
+  // ✅ NEW: Admin State
+  const [isAdmin, setIsAdmin] = useState(false);
+
   // Pagination States
   const [page, setPage] = useState(0);
   const [totalCount, setTotalCount] = useState(0);
@@ -23,12 +26,21 @@ export default function Transactions() {
   });
 
   useEffect(() => {
+    checkUserRole(); // ✅ Check who is logged in first
     fetchDropdowns();
   }, []);
 
   useEffect(() => {
     fetchTransactions();
   }, [page]);
+
+  // ✅ NEW: Identify if the logged-in user is the Master Admin
+  const checkUserRole = async () => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (user?.email === "niveemetals@gmail.com") {
+      setIsAdmin(true);
+    }
+  };
 
   async function fetchDropdowns() {
     const { data: prod } = await supabase.from("products").select("*");
@@ -110,6 +122,12 @@ export default function Transactions() {
   };
 
   const handleDelete = async (id) => {
+    // ✅ NEW: Double-lock the function just in case
+    if (!isAdmin) {
+      alert("Unauthorized: Only the Master Admin can delete transactions.");
+      return;
+    }
+
     if (!window.confirm("Delete transaction?")) return;
     try {
       const { error } = await supabase.from("transactions").delete().eq("id", id);
@@ -138,7 +156,6 @@ export default function Transactions() {
         const location = locations.find((l) => l.id === t.location_id);
 
         return {
-          // ✅ FIX 1: Timezone applied to Excel Export
           Date: new Date(t.created_at).toLocaleString("en-IN", {
             timeZone: "Asia/Kolkata",
             day: "2-digit",
@@ -230,7 +247,6 @@ export default function Transactions() {
 
               return (
                 <tr key={t.id} className="border-b hover:bg-gray-50 transition-colors">
-                  {/* ✅ FIX 2: Timezone applied to Table Display */}
                   <td className="p-4 text-sm text-gray-600 whitespace-nowrap">
                     {new Date(t.created_at).toLocaleString("en-IN", {
                       timeZone: "Asia/Kolkata",
@@ -253,7 +269,11 @@ export default function Transactions() {
                   </td>
                   <td className="p-4 flex gap-2">
                     <button onClick={() => handleEditClick(t)} className="text-blue-600 font-bold hover:underline">Edit</button>
-                    <button onClick={() => handleDelete(t.id)} className="text-red-500 font-bold hover:underline">Delete</button>
+                    
+                    {/* ✅ NEW: Only render the Delete button if isAdmin is TRUE */}
+                    {isAdmin && (
+                      <button onClick={() => handleDelete(t.id)} className="text-red-500 font-bold hover:underline">Delete</button>
+                    )}
                   </td>
                 </tr>
               );
