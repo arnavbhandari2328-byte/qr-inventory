@@ -8,8 +8,6 @@ export default function Transactions() {
   const [transactions, setTransactions] = useState([]);
   const [search, setSearch] = useState("");
   const [editingId, setEditingId] = useState(null);
-
-  // ✅ Admin State
   const [isAdmin, setIsAdmin] = useState(false);
 
   // Pagination States
@@ -64,14 +62,15 @@ export default function Transactions() {
       setTransactions(trans || []);
       if (count !== null) setTotalCount(count);
     } catch (err) {
-      console.error("Failed fetching paginated transactions", err);
+      console.error("Failed fetching transactions", err);
     }
   }
 
-  // ✅ SIMPLE MODE: Displays the DB time exactly as it is (IST)
+  // ✅ SIMPLE IST MODE: Displays the DB time exactly as it is without math
   const formatTimeDisplay = (dbDateString) => {
     if (!dbDateString) return "-";
-    // This removes the 'T' and separates date/time clearly
+    // Removes the 'T' and separates date/time clearly
+    // Turns "2026-03-04T16:40:09" into "2026-03-04 16:40:09"
     return dbDateString.replace('T', ' ').split('.')[0];
   };
 
@@ -83,7 +82,6 @@ export default function Transactions() {
 
     try {
       const { data: { user } } = await supabase.auth.getUser();
-
       const payload = {
         product_id: form.product_id,
         location_id: form.location_id,
@@ -91,15 +89,13 @@ export default function Transactions() {
         quantity: Number(form.quantity),
         party: form.party,
         created_by_email: user?.email || "Manual Entry"
-        // ✅ NO TIMESTAMP: Let Supabase handle IST automatically
+        // NO created_at: We let the Database handle IST automatically!
       };
 
       if (editingId) {
-        const { error } = await supabase.from("transactions").update(payload).eq("id", editingId);
-        if (error) throw error;
+        await supabase.from("transactions").update(payload).eq("id", editingId);
       } else {
-        const { error } = await supabase.from("transactions").insert([payload]);
-        if (error) throw error;
+        await supabase.from("transactions").insert([payload]);
       }
 
       setForm({ product_id: "", location_id: "", transaction_type: "inward", quantity: "", party: "" });
@@ -128,50 +124,28 @@ export default function Transactions() {
   };
 
   const handleDelete = async (id) => {
-    if (!isAdmin) {
-      alert("Unauthorized: Only the Master Admin can delete transactions.");
-      return;
-    }
-
+    if (!isAdmin) return alert("Admin only delete access.");
     if (!window.confirm("Delete transaction?")) return;
-    try {
-      const { error } = await supabase.from("transactions").delete().eq("id", id);
-      if (error) throw error;
-      fetchTransactions();
-    } catch (err) {
-      console.error("DELETE ERROR:", err.message);
-    }
+    await supabase.from("transactions").delete().eq("id", id);
+    fetchTransactions();
   };
 
   const exportToExcel = async () => {
     try {
-      const { data: allTrans, error } = await supabase
+      const { data: allTrans } = await supabase
         .from("transactions")
         .select("*")
         .order("created_at", { ascending: false });
 
-      if (error) throw error;
-      if (!allTrans?.length) {
-        alert("No transactions to export");
-        return;
-      }
-
-      const exportData = allTrans.map((t) => {
-        const product = products.find((p) => p.id === t.product_id);
-        const location = locations.find((l) => l.id === t.location_id);
-
-        return {
-          // ✅ Export uses the same simple IST format
-          Date_IST: formatTimeDisplay(t.created_at),
-          Product: product?.product_name || "",
-          Product_Code: product?.product_id || "",
-          Type: t.transaction_type.toUpperCase(),
-          Quantity: t.quantity,
-          Location: location?.name || "",
-          Party: t.party || "-", 
-          Done_By: t.created_by_email || "System" 
-        };
-      });
+      const exportData = (allTrans || []).map((t) => ({
+        Date_IST: formatTimeDisplay(t.created_at),
+        Product: products.find((p) => p.id === t.product_id)?.product_name || "",
+        Type: t.transaction_type.toUpperCase(),
+        Quantity: t.quantity,
+        Location: locations.find((l) => l.id === t.location_id)?.name || "",
+        Party: t.party || "-", 
+        Employee: t.created_by_email || "System" 
+      }));
 
       const ws = XLSX.utils.json_to_sheet(exportData);
       const wb = XLSX.utils.book_new();
@@ -215,12 +189,12 @@ export default function Transactions() {
           <button onClick={handleSave} className={`text-white px-8 py-2 rounded font-bold transition-all ${editingId ? 'bg-orange-500 hover:bg-orange-600' : 'bg-blue-600 hover:bg-blue-700'}`}>
             {editingId ? "Update Entry" : "Save Entry"}
           </button>
-          {editingId && <button onClick={cancelEdit} className="bg-gray-400 text-white px-6 py-2 rounded hover:bg-gray-500">Cancel</button>}
+          {editingId && <button onClick={cancelEdit} className="bg-gray-400 text-white px-6 py-2 rounded">Cancel</button>}
         </div>
       </div>
 
       <div className="flex justify-between items-center mb-4">
-        <input placeholder="Search products on this page..." value={search} onChange={(e) => setSearch(e.target.value)} className="border p-3 rounded w-80 shadow-sm focus:ring-2 focus:ring-blue-500 outline-none" />
+        <input placeholder="Search products..." value={search} onChange={(e) => setSearch(e.target.value)} className="border p-3 rounded w-80 shadow-sm outline-none" />
         <button onClick={exportToExcel} className="bg-green-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-green-700 shadow-lg transition-all">Export to Excel</button>
       </div>
 
@@ -235,49 +209,36 @@ export default function Transactions() {
               <th className="p-4 text-xs font-bold text-gray-400 uppercase tracking-widest">Qty</th>
               <th className="p-4 text-xs font-bold text-gray-400 uppercase tracking-widest">Location</th>
               <th className="p-4 text-xs font-bold text-gray-400 uppercase tracking-widest">Party</th>
-              <th className="p-4 text-xs font-bold text-gray-400 uppercase tracking-widest">Employee</th>
               <th className="p-4 text-xs font-bold text-gray-400 uppercase tracking-widest">Action</th>
             </tr>
           </thead>
           <tbody>
-            {filtered.map((t) => {
-              const product = products.find((p) => p.id === t.product_id);
-              const location = locations.find((l) => l.id === t.location_id);
-
-              return (
-                <tr key={t.id} className="border-b hover:bg-gray-50 transition-colors">
-                  {/* ✅ Date now uses formatTimeDisplay for IST Simple Mode */}
-                  <td className="p-4 text-sm text-gray-600 whitespace-nowrap font-medium">
-                    {formatTimeDisplay(t.created_at)}
-                  </td>
-                  <td className="p-4 font-bold text-gray-800">{product?.product_name}</td>
-                  <td className={`p-4 font-black ${t.transaction_type === "inward" ? "text-green-600" : "text-red-600"}`}>
-                    {t.transaction_type.toUpperCase()}
-                  </td>
-                  <td className="p-4 font-mono font-bold text-lg">{t.quantity}</td>
-                  <td className="p-4 text-sm text-gray-600 font-semibold">{location?.name}</td>
-                  <td className="p-4 text-sm font-semibold text-gray-700">{t.party || "-"}</td>
-                  <td className="p-4 text-xs font-medium text-blue-500 italic">
-                    {t.created_by_email || "System"} 
-                  </td>
-                  <td className="p-4 flex gap-2">
-                    <button onClick={() => handleEditClick(t)} className="text-blue-600 font-bold hover:underline">Edit</button>
-                    {isAdmin && (
-                      <button onClick={() => handleDelete(t.id)} className="text-red-500 font-bold hover:underline">Delete</button>
-                    )}
-                  </td>
-                </tr>
-              );
-            })}
+            {filtered.map((t) => (
+              <tr key={t.id} className="border-b hover:bg-gray-50 transition-colors">
+                <td className="p-4 text-sm text-gray-600 whitespace-nowrap font-medium">
+                  {formatTimeDisplay(t.created_at)}
+                </td>
+                <td className="p-4 font-bold text-gray-800">{products.find(p => p.id === t.product_id)?.product_name}</td>
+                <td className={`p-4 font-black ${t.transaction_type === "inward" ? "text-green-600" : "text-red-600"}`}>
+                  {t.transaction_type.toUpperCase()}
+                </td>
+                <td className="p-4 font-mono font-bold">{t.quantity}</td>
+                <td className="p-4 text-sm text-gray-600 font-semibold">{locations.find(l => l.id === t.location_id)?.name}</td>
+                <td className="p-4 text-sm font-semibold text-gray-700">{t.party || "-"}</td>
+                <td className="p-4 flex gap-2">
+                  <button onClick={() => handleEditClick(t)} className="text-blue-600 font-bold hover:underline">Edit</button>
+                  {isAdmin && <button onClick={() => handleDelete(t.id)} className="text-red-500 font-bold hover:underline">Delete</button>}
+                </td>
+              </tr>
+            ))}
           </tbody>
         </table>
       </div>
 
-      {/* PAGINATION */}
       <div className="flex justify-between items-center p-4 bg-white rounded-xl shadow-sm border border-gray-100">
-        <button onClick={() => setPage(page - 1)} disabled={page === 0} className={`px-6 py-2 rounded-lg font-bold transition-all ${page === 0 ? 'bg-gray-100 text-gray-400' : 'bg-blue-600 text-white shadow-md hover:bg-blue-700'}`}>Prev</button>
+        <button onClick={() => setPage(page - 1)} disabled={page === 0} className={`px-6 py-2 rounded-lg font-bold transition-all ${page === 0 ? 'bg-gray-100 text-gray-400' : 'bg-blue-600 text-white shadow-md'}`}>Prev</button>
         <span className="text-sm font-bold text-gray-500 uppercase tracking-widest">Page {page + 1} of {totalPages || 1}</span>
-        <button onClick={() => setPage(page + 1)} disabled={page + 1 >= totalPages} className={`px-6 py-2 rounded-lg font-bold transition-all ${page + 1 >= totalPages ? 'bg-gray-100 text-gray-400' : 'bg-blue-600 text-white shadow-md hover:bg-blue-700'}`}>Next</button>
+        <button onClick={() => setPage(page + 1)} disabled={page + 1 >= totalPages} className={`px-6 py-2 rounded-lg font-bold transition-all ${page + 1 >= totalPages ? 'bg-gray-100 text-gray-400' : 'bg-blue-600 text-white shadow-md'}`}>Next</button>
       </div>
     </div>
   );
