@@ -116,12 +116,21 @@ export default function Dashboard() {
     }
   };
 
+  // ✅ FORCED IST TIME FIX
   const formatIST = (utcString) => {
     if (!utcString) return "Unknown Date";
+    
+    // Explicitly forces the UTC tag ("Z") so JavaScript parses it correctly before converting.
     const date = new Date(utcString.endsWith("Z") ? utcString : utcString + "Z");
+    
     return date.toLocaleString("en-IN", {
       timeZone: "Asia/Kolkata",
-      day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", hour12: true
+      day: "2-digit", 
+      month: "short", 
+      year: "numeric", 
+      hour: "2-digit", 
+      minute: "2-digit", 
+      hour12: true
     });
   };
 
@@ -236,7 +245,10 @@ export default function Dashboard() {
                         </span>
                       </td>
                       <td className="py-3 text-sm font-bold">{t.quantity}</td>
-                      <td className="py-3 text-xs text-gray-500 whitespace-nowrap">{formatIST(t.created_at)}</td>
+                      <td className="py-3 text-xs text-gray-500 whitespace-nowrap">
+                         {/* ✅ Applying the IST translation function explicitly here */}
+                         {formatIST(t.created_at)}
+                      </td>
                     </tr>
                   ))
                 )}
