@@ -9,7 +9,7 @@ export default function Transactions() {
   const [search, setSearch] = useState("");
   const [editingId, setEditingId] = useState(null);
 
-  // ✅ NEW: Admin State
+  // ✅ Admin State
   const [isAdmin, setIsAdmin] = useState(false);
 
   // Pagination States
@@ -26,7 +26,7 @@ export default function Transactions() {
   });
 
   useEffect(() => {
-    checkUserRole(); // ✅ Check who is logged in first
+    checkUserRole(); 
     fetchDropdowns();
   }, []);
 
@@ -34,7 +34,6 @@ export default function Transactions() {
     fetchTransactions();
   }, [page]);
 
-  // ✅ NEW: Identify if the logged-in user is the Master Admin
   const checkUserRole = async () => {
     const { data: { user } } = await supabase.auth.getUser();
     if (user?.email === "niveemetals@gmail.com") {
@@ -76,7 +75,6 @@ export default function Transactions() {
     }
 
     try {
-      // Identify current employee
       const { data: { user } } = await supabase.auth.getUser();
 
       const payload = {
@@ -85,7 +83,7 @@ export default function Transactions() {
         transaction_type: form.transaction_type,
         quantity: Number(form.quantity),
         party: form.party,
-        created_by_email: user?.email || "Manual Entry" // Logs current user
+        created_by_email: user?.email || "Manual Entry"
       };
 
       if (editingId) {
@@ -122,7 +120,6 @@ export default function Transactions() {
   };
 
   const handleDelete = async (id) => {
-    // ✅ NEW: Double-lock the function just in case
     if (!isAdmin) {
       alert("Unauthorized: Only the Master Admin can delete transactions.");
       return;
@@ -170,7 +167,7 @@ export default function Transactions() {
           Type: t.transaction_type.toUpperCase(),
           Quantity: t.quantity,
           Location: location?.name || "",
-          Party: t.party || "",
+          Party: t.party || "-", 
           Done_By: t.created_by_email || "System" 
         };
       });
@@ -236,6 +233,7 @@ export default function Transactions() {
               <th className="p-4 text-xs font-bold text-gray-400 uppercase">Type</th>
               <th className="p-4 text-xs font-bold text-gray-400 uppercase">Qty</th>
               <th className="p-4 text-xs font-bold text-gray-400 uppercase">Location</th>
+              <th className="p-4 text-xs font-bold text-gray-400 uppercase">Party</th> {/* ✅ FIXED: NEW HEADER */}
               <th className="p-4 text-xs font-bold text-gray-400 uppercase">Employee</th>
               <th className="p-4 text-xs font-bold text-gray-400 uppercase">Action</th>
             </tr>
@@ -264,13 +262,12 @@ export default function Transactions() {
                   </td>
                   <td className="p-4 font-mono font-bold">{t.quantity}</td>
                   <td className="p-4 text-sm text-gray-600">{location?.name}</td>
+                  <td className="p-4 text-sm font-semibold text-gray-700">{t.party || "-"}</td> {/* ✅ FIXED: PARTY DATA VISIBLE */}
                   <td className="p-4 text-xs font-medium text-blue-500 italic">
                     {t.created_by_email || "System"} 
                   </td>
                   <td className="p-4 flex gap-2">
                     <button onClick={() => handleEditClick(t)} className="text-blue-600 font-bold hover:underline">Edit</button>
-                    
-                    {/* ✅ NEW: Only render the Delete button if isAdmin is TRUE */}
                     {isAdmin && (
                       <button onClick={() => handleDelete(t.id)} className="text-red-500 font-bold hover:underline">Delete</button>
                     )}
