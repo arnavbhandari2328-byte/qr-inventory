@@ -68,6 +68,13 @@ export default function Transactions() {
     }
   }
 
+  // ✅ SIMPLE MODE: Displays the DB time exactly as it is (IST)
+  const formatTimeDisplay = (dbDateString) => {
+    if (!dbDateString) return "-";
+    // This removes the 'T' and separates date/time clearly
+    return dbDateString.replace('T', ' ').split('.')[0];
+  };
+
   const handleSave = async () => {
     if (!form.product_id || !form.location_id || !form.quantity) {
       alert("Please fill required fields (Product, Location, Quantity)");
@@ -84,6 +91,7 @@ export default function Transactions() {
         quantity: Number(form.quantity),
         party: form.party,
         created_by_email: user?.email || "Manual Entry"
+        // ✅ NO TIMESTAMP: Let Supabase handle IST automatically
       };
 
       if (editingId) {
@@ -153,15 +161,8 @@ export default function Transactions() {
         const location = locations.find((l) => l.id === t.location_id);
 
         return {
-          Date: new Date(t.created_at).toLocaleString("en-IN", {
-            timeZone: "Asia/Kolkata",
-            day: "2-digit",
-            month: "short",
-            year: "numeric",
-            hour: "2-digit",
-            minute: "2-digit",
-            hour12: true
-          }),
+          // ✅ Export uses the same simple IST format
+          Date_IST: formatTimeDisplay(t.created_at),
           Product: product?.product_name || "",
           Product_Code: product?.product_id || "",
           Type: t.transaction_type.toUpperCase(),
@@ -193,7 +194,7 @@ export default function Transactions() {
       <h1 className="text-3xl font-bold mb-6">Transactions</h1>
 
       {/* FORM SECTION */}
-      <div className="bg-white shadow rounded p-6 mb-6 space-y-4">
+      <div className="bg-white shadow rounded p-6 mb-6 space-y-4 border border-gray-100">
         <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
           <select value={form.product_id} onChange={(e) => setForm({ ...form, product_id: e.target.value })} className="border p-2 rounded">
             <option value="">Select Product</option>
@@ -211,15 +212,15 @@ export default function Transactions() {
           <input placeholder="Party Name" value={form.party} onChange={(e) => setForm({ ...form, party: e.target.value })} className="border p-2 rounded" />
         </div>
         <div className="flex gap-3">
-          <button onClick={handleSave} className={`text-white px-8 py-2 rounded font-bold ${editingId ? 'bg-orange-500 shadow-orange-100' : 'bg-blue-600 shadow-blue-100'}`}>
+          <button onClick={handleSave} className={`text-white px-8 py-2 rounded font-bold transition-all ${editingId ? 'bg-orange-500 hover:bg-orange-600' : 'bg-blue-600 hover:bg-blue-700'}`}>
             {editingId ? "Update Entry" : "Save Entry"}
           </button>
-          {editingId && <button onClick={cancelEdit} className="bg-gray-400 text-white px-6 py-2 rounded">Cancel</button>}
+          {editingId && <button onClick={cancelEdit} className="bg-gray-400 text-white px-6 py-2 rounded hover:bg-gray-500">Cancel</button>}
         </div>
       </div>
 
       <div className="flex justify-between items-center mb-4">
-        <input placeholder="Search products on this page..." value={search} onChange={(e) => setSearch(e.target.value)} className="border p-3 rounded w-80 shadow-sm" />
+        <input placeholder="Search products on this page..." value={search} onChange={(e) => setSearch(e.target.value)} className="border p-3 rounded w-80 shadow-sm focus:ring-2 focus:ring-blue-500 outline-none" />
         <button onClick={exportToExcel} className="bg-green-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-green-700 shadow-lg transition-all">Export to Excel</button>
       </div>
 
@@ -228,14 +229,14 @@ export default function Transactions() {
         <table className="w-full text-left">
           <thead className="bg-gray-50 border-b">
             <tr>
-              <th className="p-4 text-xs font-bold text-gray-400 uppercase">Date</th>
-              <th className="p-4 text-xs font-bold text-gray-400 uppercase">Product</th>
-              <th className="p-4 text-xs font-bold text-gray-400 uppercase">Type</th>
-              <th className="p-4 text-xs font-bold text-gray-400 uppercase">Qty</th>
-              <th className="p-4 text-xs font-bold text-gray-400 uppercase">Location</th>
-              <th className="p-4 text-xs font-bold text-gray-400 uppercase">Party</th> {/* ✅ FIXED: NEW HEADER */}
-              <th className="p-4 text-xs font-bold text-gray-400 uppercase">Employee</th>
-              <th className="p-4 text-xs font-bold text-gray-400 uppercase">Action</th>
+              <th className="p-4 text-xs font-bold text-gray-400 uppercase tracking-widest">Date (IST)</th>
+              <th className="p-4 text-xs font-bold text-gray-400 uppercase tracking-widest">Product</th>
+              <th className="p-4 text-xs font-bold text-gray-400 uppercase tracking-widest">Type</th>
+              <th className="p-4 text-xs font-bold text-gray-400 uppercase tracking-widest">Qty</th>
+              <th className="p-4 text-xs font-bold text-gray-400 uppercase tracking-widest">Location</th>
+              <th className="p-4 text-xs font-bold text-gray-400 uppercase tracking-widest">Party</th>
+              <th className="p-4 text-xs font-bold text-gray-400 uppercase tracking-widest">Employee</th>
+              <th className="p-4 text-xs font-bold text-gray-400 uppercase tracking-widest">Action</th>
             </tr>
           </thead>
           <tbody>
@@ -245,24 +246,17 @@ export default function Transactions() {
 
               return (
                 <tr key={t.id} className="border-b hover:bg-gray-50 transition-colors">
-                  <td className="p-4 text-sm text-gray-600 whitespace-nowrap">
-                    {new Date(t.created_at).toLocaleString("en-IN", {
-                      timeZone: "Asia/Kolkata",
-                      day: "2-digit",
-                      month: "short",
-                      year: "numeric",
-                      hour: "2-digit",
-                      minute: "2-digit",
-                      hour12: true
-                    })}
+                  {/* ✅ Date now uses formatTimeDisplay for IST Simple Mode */}
+                  <td className="p-4 text-sm text-gray-600 whitespace-nowrap font-medium">
+                    {formatTimeDisplay(t.created_at)}
                   </td>
                   <td className="p-4 font-bold text-gray-800">{product?.product_name}</td>
                   <td className={`p-4 font-black ${t.transaction_type === "inward" ? "text-green-600" : "text-red-600"}`}>
                     {t.transaction_type.toUpperCase()}
                   </td>
-                  <td className="p-4 font-mono font-bold">{t.quantity}</td>
-                  <td className="p-4 text-sm text-gray-600">{location?.name}</td>
-                  <td className="p-4 text-sm font-semibold text-gray-700">{t.party || "-"}</td> {/* ✅ FIXED: PARTY DATA VISIBLE */}
+                  <td className="p-4 font-mono font-bold text-lg">{t.quantity}</td>
+                  <td className="p-4 text-sm text-gray-600 font-semibold">{location?.name}</td>
+                  <td className="p-4 text-sm font-semibold text-gray-700">{t.party || "-"}</td>
                   <td className="p-4 text-xs font-medium text-blue-500 italic">
                     {t.created_by_email || "System"} 
                   </td>
@@ -280,10 +274,10 @@ export default function Transactions() {
       </div>
 
       {/* PAGINATION */}
-      <div className="flex justify-between items-center p-4 bg-white rounded-xl shadow-sm">
-        <button onClick={() => setPage(page - 1)} disabled={page === 0} className={`px-6 py-2 rounded-lg font-bold ${page === 0 ? 'bg-gray-100 text-gray-400' : 'bg-blue-600 text-white shadow-md'}`}>Prev</button>
+      <div className="flex justify-between items-center p-4 bg-white rounded-xl shadow-sm border border-gray-100">
+        <button onClick={() => setPage(page - 1)} disabled={page === 0} className={`px-6 py-2 rounded-lg font-bold transition-all ${page === 0 ? 'bg-gray-100 text-gray-400' : 'bg-blue-600 text-white shadow-md hover:bg-blue-700'}`}>Prev</button>
         <span className="text-sm font-bold text-gray-500 uppercase tracking-widest">Page {page + 1} of {totalPages || 1}</span>
-        <button onClick={() => setPage(page + 1)} disabled={page + 1 >= totalPages} className={`px-6 py-2 rounded-lg font-bold ${page + 1 >= totalPages ? 'bg-gray-100 text-gray-400' : 'bg-blue-600 text-white shadow-md'}`}>Next</button>
+        <button onClick={() => setPage(page + 1)} disabled={page + 1 >= totalPages} className={`px-6 py-2 rounded-lg font-bold transition-all ${page + 1 >= totalPages ? 'bg-gray-100 text-gray-400' : 'bg-blue-600 text-white shadow-md hover:bg-blue-700'}`}>Next</button>
       </div>
     </div>
   );
