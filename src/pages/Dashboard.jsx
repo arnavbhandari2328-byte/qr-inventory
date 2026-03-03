@@ -1,215 +1,188 @@
 import { useEffect, useState } from "react";
-import { supabase } from "../supabase.js";
-import {
-  PieChart, Pie, Cell, Tooltip, ResponsiveContainer,
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Legend
-} from "recharts";
-
-const COLORS = ["#f59e0b", "#3b82f6", "#22c55e", "#ef4444", "#8b5cf6"];
+import { supabase } from "../supabase";
+import { PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer } from "recharts";
 
 export default function Dashboard() {
+  const [stats, setStats] = useState({
+    totalProducts: 0,
+    totalStock: 0,
+    recentTransactions: [],
+    pieData: []
+  });
+  const [loading, setLoading] = useState(true);
 
-  const [products, setProducts] = useState([]);
-  const [summary, setSummary] = useState({ totalItems: 0, lowStock: 0, totalQty: 0 });
-  const [locationData, setLocationData] = useState([]);
-  const [movementData, setMovementData] = useState([]);
+  // Chart Colors: Blue for Polish, Green for Seamless, Orange for NB, Purple for Other
+  const COLORS = ["#3B82F6", "#10B981", "#F59E0B", "#8B5CF6"]; 
 
   useEffect(() => {
-    load();
+    fetchDashboardData();
   }, []);
 
-  async function load() {
-    const { data: prod } = await supabase.from("products").select("*");
-    const { data: trans } = await supabase.from("transactions").select("*");
-    const { data: locs } = await supabase.from("locations").select("*");
+  const fetchDashboardData = async () => {
+    try {
+      const { count: productCount } = await supabase
+        .from("products")
+        .select("*", { count: "exact", head: true });
 
-    const productsData = prod || [];
-    const transData = trans || [];
-    const locations = locs || [];
+      const { data: recentTrans } = await supabase
+        .from("transactions")
+        .select("*, products(product_name, product_id), locations(name)")
+        .order("created_at", { ascending: false })
+        .limit(5);
 
-    // map id -> name
-    const locationNameMap = {};
-    locations.forEach(l => {
-      locationNameMap[l.id] = l.name;
-    });
+      // Fetch all transactions to calculate the category stock
+      const { data: allTrans } = await supabase
+        .from("transactions")
+        .select("transaction_type, quantity, products(product_id)");
 
-    // ---------------- TOTAL STOCK PER PRODUCT ----------------
-    const processed = productsData.map(p => {
-      const related = transData.filter(t => t.product_id === p.id);
+      let totalStock = 0;
+      let polish = 0;
+      let seamless = 0;
+      let nb = 0;
+      let other = 0;
 
-      let total = 0;
-      related.forEach(t => {
-        const qty = Number(t.quantity) || 0;
-        if (t.transaction_type === "inward") total += qty;
-        else total -= qty;
+      (allTrans || []).forEach(t => {
+        const isAdd = t.transaction_type === "inward";
+        const qty = Number(t.quantity);
+        const adjustedQty = isAdd ? qty : -qty;
+
+        totalStock += adjustedQty;
+
+        const pId = (t.products?.product_id || "").toUpperCase();
+
+        // 🚀 SMART CATEGORY ROUTING
+        if (pId.startsWith("NM-PP")) {
+          polish += adjustedQty;
+        } else if (pId.startsWith("NM-NBSMLS")) {
+          // Check Seamless FIRST so it doesn't get trapped in the regular NB category
+          seamless += adjustedQty;
+        } else if (pId.startsWith("NM-NB")) {
+          nb += adjustedQty;
+        } else {
+          other += adjustedQty;
+        }
       });
 
-      return {
-        ...p,
-        total,
-        low: Number(p.low_stock_alert || 0)
-      };
+      // Build the Pie Chart Data
+      const pieDataRaw = [
+        { name: "Polish Pipe", value: polish },
+        { name: "Seamless Pipe", value: seamless },
+        { name: "NB Pipe", value: nb },
+        { name: "Other Products", value: other }
+      ];
+      
+      // Filter out categories that have 0 stock to keep the chart clean
+      const pieData = pieDataRaw.filter(item => item.value > 0);
+
+      setStats({
+        totalProducts: productCount || 0,
+        totalStock,
+        recentTransactions: recentTrans || [],
+        pieData
+      });
+    } catch (err) {
+      console.error("Dashboard error:", err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const formatIST = (utcString) => {
+    if (!utcString) return "Unknown Date";
+    const date = new Date(utcString.endsWith("Z") ? utcString : utcString + "Z");
+    return date.toLocaleString("en-IN", {
+      timeZone: "Asia/Kolkata",
+      day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", hour12: true
     });
+  };
 
-    const totalItems = processed.length;
-    const lowStock = processed.filter(p => p.total <= p.low).length;
-    const totalQty = processed.reduce((a, b) => a + b.total, 0);
-
-    setSummary({ totalItems, lowStock, totalQty });
-    setProducts(processed);
-
-    // ---------------- LOCATION DISTRIBUTION PIE ----------------
-    const locationMap = {};
-
-    transData.forEach(t => {
-      const locName = locationNameMap[t.location_id];
-      if (!locName) return;
-
-      const qty = t.transaction_type === "inward"
-        ? Number(t.quantity)
-        : -Number(t.quantity);
-
-      if (!locationMap[locName]) locationMap[locName] = 0;
-      locationMap[locName] += qty;
-    });
-
-    const locationChart = Object.keys(locationMap)
-      .filter(key => locationMap[key] > 0)
-      .map(key => ({ name: key, value: locationMap[key] }));
-
-    setLocationData(locationChart);
-
-    // ---------------- MOVEMENT BAR CHART ----------------
-    let inward = 0;
-    let outward = 0;
-
-    transData.forEach(t => {
-      const qty = Number(t.quantity) || 0;
-      if (t.transaction_type === "inward") inward += qty;
-      else outward += qty;
-    });
-
-    setMovementData([
-      { type: "Inward", quantity: inward },
-      { type: "Outward", quantity: outward }
-    ]);
-  }
+  if (loading) return <div className="p-8 font-bold text-gray-500">Loading Dashboard...</div>;
 
   return (
-    <div style={{ padding: 30, fontFamily: "system-ui" }}>
+    <div className="p-6 md:p-8">
+      <h1 className="text-3xl font-bold mb-6 text-gray-800">Dashboard</h1>
 
-      <h1 style={{ fontSize: 28, fontWeight: 700, marginBottom: 25 }}>
-        Inventory Dashboard
-      </h1>
-
-      {/* SUMMARY CARDS */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 20, marginBottom: 30 }}>
-        <div style={card}>
-          <p>Total Products</p>
-          <h2>{summary.totalItems}</h2>
+      {/* STATS CARDS */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+          <p className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-1">Total Products</p>
+          <p className="text-3xl font-black text-blue-600">{stats.totalProducts}</p>
         </div>
-
-        <div style={{ ...card, background: "#fff3f3" }}>
-          <p>Low Stock</p>
-          <h2 style={{ color: "red" }}>{summary.lowStock}</h2>
-        </div>
-
-        <div style={{ ...card, background: "#f0fff4" }}>
-          <p>Total Quantity</p>
-          <h2 style={{ color: "green" }}>{summary.totalQty}</h2>
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+          <p className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-1">Total Stock Items</p>
+          <p className="text-3xl font-black text-green-600">{stats.totalStock}</p>
         </div>
       </div>
 
-      {/* CHART ROW */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 25, marginBottom: 35 }}>
-
-        {/* PIE */}
-        <div style={chartCard}>
-          <h3>Stock Distribution by Location</h3>
-          <ResponsiveContainer width="100%" height={320}>
-            <PieChart>
-              <Pie
-                data={locationData}
-                dataKey="value"
-                nameKey="name"
-                outerRadius={110}
-                label
-              >
-                {locationData.map((entry, index) => (
-                  <Cell key={index} fill={COLORS[index % COLORS.length]} />
-                ))}
-              </Pie>
-              <Tooltip />
-              <Legend />
-            </PieChart>
-          </ResponsiveContainer>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
+        {/* PIE CHART */}
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 flex flex-col items-center">
+          <h2 className="text-xl font-bold text-gray-800 mb-6 self-start">Stock by Category</h2>
+          {stats.pieData.length === 0 ? (
+            <div className="h-64 flex items-center justify-center text-gray-400 font-medium">No stock data available</div>
+          ) : (
+            <div className="h-72 w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie
+                    data={stats.pieData}
+                    cx="50%"
+                    cy="50%"
+                    innerRadius={70}
+                    outerRadius={110}
+                    paddingAngle={5}
+                    dataKey="value"
+                    label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
+                  >
+                    {stats.pieData.map((entry, index) => (
+                      <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                    ))}
+                  </Pie>
+                  <Tooltip formatter={(value) => [value, "Items in Stock"]} />
+                  <Legend verticalAlign="bottom" height={36} />
+                </PieChart>
+              </ResponsiveContainer>
+            </div>
+          )}
         </div>
 
-        {/* MOVEMENT */}
-        <div style={chartCard}>
-          <h3>Stock Movement</h3>
-          <ResponsiveContainer width="100%" height={320}>
-            <BarChart data={movementData}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="type" />
-              <YAxis />
-              <Tooltip />
-              <Bar dataKey="quantity" fill="#6366f1" />
-            </BarChart>
-          </ResponsiveContainer>
+        {/* RECENT TRANSACTIONS */}
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+          <h2 className="text-xl font-bold text-gray-800 mb-4">Recent Activity</h2>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left">
+              <thead>
+                <tr className="border-b border-gray-100">
+                  <th className="pb-3 text-xs font-bold text-gray-400 uppercase">Item</th>
+                  <th className="pb-3 text-xs font-bold text-gray-400 uppercase">Type</th>
+                  <th className="pb-3 text-xs font-bold text-gray-400 uppercase">Qty</th>
+                  <th className="pb-3 text-xs font-bold text-gray-400 uppercase">Time</th>
+                </tr>
+              </thead>
+              <tbody>
+                {stats.recentTransactions.length === 0 ? (
+                  <tr><td colSpan="4" className="py-4 text-center text-gray-400">No recent activity</td></tr>
+                ) : (
+                  stats.recentTransactions.map(t => (
+                    <tr key={t.id} className="border-b border-gray-50 last:border-0 hover:bg-gray-50">
+                      <td className="py-3 text-sm font-bold text-gray-700">
+                        {t.products?.product_id || "Unknown"}
+                      </td>
+                      <td className="py-3">
+                        <span className={`text-xs font-bold px-2 py-1 rounded ${t.transaction_type === 'inward' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                          {t.transaction_type.toUpperCase()}
+                        </span>
+                      </td>
+                      <td className="py-3 text-sm font-bold">{t.quantity}</td>
+                      <td className="py-3 text-xs text-gray-500">{formatIST(t.created_at)}</td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
-
       </div>
-
-      {/* PRODUCT TABLE */}
-      <table style={{ width: "100%", background: "white", borderRadius: 12 }}>
-        <thead>
-          <tr style={{ textAlign: "left", borderBottom: "1px solid #ddd" }}>
-            <th>ID</th>
-            <th>Name</th>
-            <th>Total</th>
-            <th>Status</th>
-          </tr>
-        </thead>
-
-        <tbody>
-          {products.map(p => (
-            <tr key={p.id} style={{ borderBottom: "1px solid #eee" }}>
-              <td>{p.product_id}</td>
-              <td>{p.product_name}</td>
-
-              <td style={{
-                fontWeight: 700,
-                color: p.total <= 0 ? "red" : "green"
-              }}>
-                {p.total}
-              </td>
-
-              <td style={{
-                color: p.total <= p.low ? "red" : "green",
-                fontWeight: 600
-              }}>
-                {p.total <= p.low ? "Low" : "OK"}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-
     </div>
   );
 }
-
-const card = {
-  background: "white",
-  padding: 20,
-  borderRadius: 12,
-  boxShadow: "0 4px 10px rgba(0,0,0,0.05)"
-};
-
-const chartCard = {
-  background: "white",
-  padding: 20,
-  borderRadius: 12,
-  boxShadow: "0 4px 10px rgba(0,0,0,0.05)"
-};
