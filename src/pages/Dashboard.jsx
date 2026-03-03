@@ -10,16 +10,13 @@ export default function Dashboard() {
     highAlerts: 0, 
     recentTransactions: [],
     pieData: [],
-    lowAlertProducts: [],  // ✅ Holds the actual products
-    highAlertProducts: []  // ✅ Holds the actual products
+    lowAlertProducts: [], 
+    highAlertProducts: [] 
   });
   
   const [loading, setLoading] = useState(true);
-  
-  // ✅ Controls which modal is open ('low', 'high', or null)
   const [modalType, setModalType] = useState(null); 
 
-  // Chart Colors
   const COLORS = ["#3B82F6", "#10B981", "#F59E0B", "#8B5CF6"]; 
 
   useEffect(() => {
@@ -28,7 +25,6 @@ export default function Dashboard() {
 
   const fetchDashboardData = async () => {
     try {
-      // ✅ Added product_name so the modal knows what to call it
       const { data: productsData } = await supabase
         .from("products")
         .select("id, product_id, product_name, low_stock_alert, high_stock_alert");
@@ -86,11 +82,11 @@ export default function Dashboard() {
         
         if (p.low_stock_alert > 0 && currentStock <= p.low_stock_alert) {
           lowAlertsCount++;
-          lowList.push({ ...p, currentStock }); // ✅ Save product details
+          lowList.push({ ...p, currentStock });
         }
         if (p.high_stock_alert > 0 && currentStock >= p.high_stock_alert) {
           highAlertsCount++;
-          highList.push({ ...p, currentStock }); // ✅ Save product details
+          highList.push({ ...p, currentStock });
         }
       });
 
@@ -129,6 +125,15 @@ export default function Dashboard() {
     });
   };
 
+  const getAlertBadge = (productId) => {
+    const isLow = stats.lowAlertProducts.some(p => p.id === productId);
+    const isHigh = stats.highAlertProducts.some(p => p.id === productId);
+
+    if (isLow) return <span className="text-[10px] bg-red-100 text-red-700 px-2 py-0.5 rounded ml-2 font-bold uppercase tracking-wider">Low Alert</span>;
+    if (isHigh) return <span className="text-[10px] bg-orange-100 text-orange-700 px-2 py-0.5 rounded ml-2 font-bold uppercase tracking-wider">Overstocked</span>;
+    return null;
+  };
+
   if (loading) return <div className="p-8 font-bold text-gray-500">Loading Dashboard...</div>;
 
   return (
@@ -145,7 +150,6 @@ export default function Dashboard() {
           <p className="text-3xl font-black text-green-600">{stats.totalStock}</p>
         </div>
         
-        {/* ✅ CLICKABLE LOW ALERT CARD */}
         <div 
           onClick={() => setModalType('low')}
           className="bg-white p-6 rounded-2xl shadow-sm border border-red-100 cursor-pointer hover:shadow-md hover:border-red-300 transition-all"
@@ -157,7 +161,6 @@ export default function Dashboard() {
           <p className="text-3xl font-black text-red-600">{stats.lowAlerts}</p>
         </div>
 
-        {/* ✅ CLICKABLE HIGH ALERT CARD */}
         <div 
           onClick={() => setModalType('high')}
           className="bg-white p-6 rounded-2xl shadow-sm border border-orange-100 cursor-pointer hover:shadow-md hover:border-orange-300 transition-all"
@@ -171,7 +174,6 @@ export default function Dashboard() {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
-        {/* PIE CHART */}
         <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 flex flex-col items-center">
           <h2 className="text-xl font-bold text-gray-800 mb-6 self-start">Stock by Category</h2>
           {stats.pieData.length === 0 ? (
@@ -203,7 +205,6 @@ export default function Dashboard() {
           )}
         </div>
 
-        {/* RECENT TRANSACTIONS */}
         <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
           <h2 className="text-xl font-bold text-gray-800 mb-4">Recent Activity</h2>
           <div className="overflow-x-auto">
@@ -211,6 +212,7 @@ export default function Dashboard() {
               <thead>
                 <tr className="border-b border-gray-100">
                   <th className="pb-3 text-xs font-bold text-gray-400 uppercase">Item</th>
+                  <th className="pb-3 text-xs font-bold text-gray-400 uppercase">Alert</th>
                   <th className="pb-3 text-xs font-bold text-gray-400 uppercase">Type</th>
                   <th className="pb-3 text-xs font-bold text-gray-400 uppercase">Qty</th>
                   <th className="pb-3 text-xs font-bold text-gray-400 uppercase">Time</th>
@@ -218,20 +220,23 @@ export default function Dashboard() {
               </thead>
               <tbody>
                 {stats.recentTransactions.length === 0 ? (
-                  <tr><td colSpan="4" className="py-4 text-center text-gray-400">No recent activity</td></tr>
+                  <tr><td colSpan="5" className="py-4 text-center text-gray-400">No recent activity</td></tr>
                 ) : (
                   stats.recentTransactions.map(t => (
                     <tr key={t.id} className="border-b border-gray-50 last:border-0 hover:bg-gray-50">
-                      <td className="py-3 text-sm font-bold text-gray-700">
+                      <td className="py-3 text-sm font-bold text-gray-700 whitespace-nowrap">
                         {t.products?.product_id || "Unknown"}
                       </td>
                       <td className="py-3">
-                        <span className={`text-xs font-bold px-2 py-1 rounded ${t.transaction_type === 'inward' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-                          {t.transaction_type.toUpperCase()}
+                         {t.product_id ? getAlertBadge(t.product_id) : null}
+                      </td>
+                      <td className="py-3">
+                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded uppercase ${t.transaction_type === 'inward' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                          {t.transaction_type}
                         </span>
                       </td>
                       <td className="py-3 text-sm font-bold">{t.quantity}</td>
-                      <td className="py-3 text-xs text-gray-500">{formatIST(t.created_at)}</td>
+                      <td className="py-3 text-xs text-gray-500 whitespace-nowrap">{formatIST(t.created_at)}</td>
                     </tr>
                   ))
                 )}
@@ -241,12 +246,10 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* ✅ ALERT MODAL OVERLAY */}
       {modalType && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white w-full max-w-3xl max-h-[85vh] overflow-hidden rounded-2xl shadow-2xl flex flex-col">
             
-            {/* Modal Header */}
             <div className={`p-6 text-white flex justify-between items-center ${modalType === 'low' ? 'bg-red-600' : 'bg-orange-500'}`}>
               <h2 className="text-2xl font-black">
                 {modalType === 'low' ? 'Low Stock Warnings' : 'High Stock Warnings'}
@@ -259,7 +262,6 @@ export default function Dashboard() {
               </button>
             </div>
 
-            {/* Modal Body (Scrollable Table) */}
             <div className="p-6 overflow-y-auto">
               <table className="w-full text-left border-collapse">
                 <thead className="bg-gray-50">
