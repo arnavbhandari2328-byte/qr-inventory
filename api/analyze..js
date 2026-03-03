@@ -2,7 +2,8 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 
 export default async function handler(req, res) {
   // ✅ This checks for BOTH names just in case
-  const apiKey = process.env.GEMINI_API_KEY || process.env.API_KEY;
+  // Inside api/analyze.js
+const apiKey = process.env.API_KEY; // ✅ Matches your Vercel setting
 
   if (!apiKey) {
     return res.status(500).json({ error: "API Key missing in Vercel. Please check settings." });
