@@ -117,13 +117,11 @@ export default function Dashboard() {
     }
   };
 
-  const formatIST = (utcString) => {
-    if (!utcString) return "Unknown Date";
-    const date = new Date(utcString.endsWith("Z") ? utcString : utcString + "Z");
-    return date.toLocaleString("en-IN", {
-      timeZone: "Asia/Kolkata",
-      day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", hour12: true
-    });
+  // ✅ SIMPLEST TIME FORMATTER (Matches your working Transaction page logic)
+  const formatTimeDisplay = (dbDateString) => {
+    if (!dbDateString) return "-";
+    // This removes the 'T' and separates date/time clearly
+    return dbDateString.replace('T', ' ').split('.')[0];
   };
 
   if (loading) return <div className="p-8 font-bold text-gray-500">Loading Dashboard...</div>;
@@ -132,7 +130,7 @@ export default function Dashboard() {
     <div className="p-6 md:p-8">
       <h1 className="text-3xl font-bold mb-6 text-gray-800">Dashboard</h1>
 
-      {/* ✅ NEW: AI Assistant - Keeping it Clean and Professional */}
+      {/* ✅ AI Assistant Section */}
       <div className="bg-white p-6 rounded-2xl shadow-sm border border-blue-100 mb-8">
         <h2 className="text-lg font-bold text-blue-600 mb-3 flex items-center gap-2">
           ✨ Nivee AI Assistant
@@ -141,7 +139,7 @@ export default function Dashboard() {
           <input 
             value={question}
             onChange={(e) => setQuestion(e.target.value)}
-            placeholder="Ask: 'Which items are low?' or 'Summarize recent activity'..."
+            placeholder="Ask: 'Draft a reorder report' or 'Analyze today's activity'..."
             className="flex-1 p-3 border rounded-xl outline-none focus:border-blue-500 transition-all text-sm"
           />
           <button 
@@ -160,7 +158,7 @@ export default function Dashboard() {
         )}
       </div>
 
-      {/* STATS CARDS (Original UI) */}
+      {/* STATS CARDS */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
         <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
           <p className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-1">Total Products</p>
@@ -171,10 +169,7 @@ export default function Dashboard() {
           <p className="text-3xl font-black text-green-600">{stats.totalStock}</p>
         </div>
         
-        <div 
-          onClick={() => setModalType('low')}
-          className="bg-white p-6 rounded-2xl shadow-sm border border-red-100 cursor-pointer hover:shadow-md hover:border-red-300 transition-all"
-        >
+        <div onClick={() => setModalType('low')} className="bg-white p-6 rounded-2xl shadow-sm border border-red-100 cursor-pointer hover:shadow-md hover:border-red-300 transition-all">
           <div className="flex justify-between items-center mb-1">
             <p className="text-sm font-bold text-red-400 uppercase tracking-wider">Low Stock Alerts</p>
             <span className="text-xs text-red-300 font-bold underline">View</span>
@@ -182,10 +177,7 @@ export default function Dashboard() {
           <p className="text-3xl font-black text-red-600">{stats.lowAlerts}</p>
         </div>
 
-        <div 
-          onClick={() => setModalType('high')}
-          className="bg-white p-6 rounded-2xl shadow-sm border border-orange-100 cursor-pointer hover:shadow-md hover:border-orange-300 transition-all"
-        >
+        <div onClick={() => setModalType('high')} className="bg-white p-6 rounded-2xl shadow-sm border border-orange-100 cursor-pointer hover:shadow-md hover:border-orange-300 transition-all">
           <div className="flex justify-between items-center mb-1">
             <p className="text-sm font-bold text-orange-400 uppercase tracking-wider">High Stock Alerts</p>
             <span className="text-xs text-orange-300 font-bold underline">View</span>
@@ -195,7 +187,7 @@ export default function Dashboard() {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
-        {/* PIE CHART (Original UI) */}
+        {/* PIE CHART */}
         <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 flex flex-col items-center">
           <h2 className="text-xl font-bold text-gray-800 mb-6 self-start">Stock by Category</h2>
           <div className="h-72 w-full">
@@ -216,16 +208,16 @@ export default function Dashboard() {
                     <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                   ))}
                 </Pie>
-                <Tooltip formatter={(value) => [value, "Items in Stock"]} />
+                <Tooltip formatter={(value) => [value, "Items"]} />
                 <Legend verticalAlign="bottom" height={36} />
               </PieChart>
             </ResponsiveContainer>
           </div>
         </div>
 
-        {/* RECENT TRANSACTIONS (Original UI) */}
+        {/* RECENT TRANSACTIONS */}
         <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
-          <h2 className="text-xl font-bold text-gray-800 mb-4">Recent Activity</h2>
+          <h2 className="text-xl font-bold text-gray-800 mb-4">Recent Activity (IST)</h2>
           <div className="overflow-x-auto">
             <table className="w-full text-left">
               <thead>
@@ -239,16 +231,18 @@ export default function Dashboard() {
               <tbody>
                 {stats.recentTransactions.map(t => (
                   <tr key={t.id} className="border-b border-gray-50 last:border-0 hover:bg-gray-50">
-                    <td className="py-3 text-sm font-bold text-gray-700">
+                    <td className="py-3 text-sm font-bold text-gray-700 whitespace-nowrap">
                       {t.products?.product_id || "Unknown"}
                     </td>
                     <td className="py-3">
-                      <span className={`text-xs font-bold px-2 py-1 rounded ${t.transaction_type === 'inward' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-                        {t.transaction_type.toUpperCase()}
+                      <span className={`text-xs font-bold px-2 py-1 rounded uppercase ${t.transaction_type === 'inward' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                        {t.transaction_type}
                       </span>
                     </td>
                     <td className="py-3 text-sm font-bold">{t.quantity}</td>
-                    <td className="py-3 text-xs text-gray-500">{formatIST(t.created_at)}</td>
+                    <td className="py-3 text-xs text-gray-500 whitespace-nowrap">
+                      {formatTimeDisplay(t.created_at)}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -257,7 +251,7 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* MODAL FOR ALERTS (Original UI) */}
+      {/* ALERT MODAL */}
       {modalType && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white w-full max-w-3xl max-h-[85vh] overflow-hidden rounded-2xl shadow-2xl flex flex-col">
