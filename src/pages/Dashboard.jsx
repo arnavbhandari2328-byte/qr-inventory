@@ -6,12 +6,14 @@ export default function Dashboard() {
   const [stats, setStats] = useState({
     totalProducts: 0,
     totalStock: 0,
+    lowAlerts: 0, // ✅ New State for Low Alerts
+    highAlerts: 0, // ✅ New State for High Alerts
     recentTransactions: [],
     pieData: []
   });
   const [loading, setLoading] = useState(true);
 
-  // Chart Colors: Blue for Polish, Green for Seamless, Orange for NB, Purple for Other
+  // Chart Colors
   const COLORS = ["#3B82F6", "#10B981", "#F59E0B", "#8B5CF6"]; 
 
   useEffect(() => {
@@ -20,26 +22,31 @@ export default function Dashboard() {
 
   const fetchDashboardData = async () => {
     try {
-      const { count: productCount } = await supabase
+      // 1. Fetch products to get the alert thresholds
+      const { data: productsData } = await supabase
         .from("products")
-        .select("*", { count: "exact", head: true });
+        .select("id, product_id, low_stock_alert, high_stock_alert");
 
+      // 2. Fetch recent transactions for the activity feed
       const { data: recentTrans } = await supabase
         .from("transactions")
         .select("*, products(product_name, product_id), locations(name)")
         .order("created_at", { ascending: false })
         .limit(5);
 
-      // Fetch all transactions to calculate the category stock
+      // 3. Fetch ALL transactions to calculate stock and pie chart categories
       const { data: allTrans } = await supabase
         .from("transactions")
-        .select("transaction_type, quantity, products(product_id)");
+        .select("product_id, transaction_type, quantity, products(product_id)");
 
       let totalStock = 0;
       let polish = 0;
       let seamless = 0;
       let nb = 0;
       let other = 0;
+
+      // Temporary map to calculate exactly how much stock each product currently has
+      const stockMap = {};
 
       (allTrans || []).forEach(t => {
         const isAdd = t.transaction_type === "inward";
@@ -48,13 +55,17 @@ export default function Dashboard() {
 
         totalStock += adjustedQty;
 
+        // Track internal stock per item
+        if (t.product_id) {
+          stockMap[t.product_id] = (stockMap[t.product_id] || 0) + adjustedQty;
+        }
+
         const pId = (t.products?.product_id || "").toUpperCase();
 
-        // 🚀 SMART CATEGORY ROUTING
+        // SMART CATEGORY ROUTING
         if (pId.startsWith("NM-PP")) {
           polish += adjustedQty;
         } else if (pId.startsWith("NM-NBSMLS")) {
-          // Check Seamless FIRST so it doesn't get trapped in the regular NB category
           seamless += adjustedQty;
         } else if (pId.startsWith("NM-NB")) {
           nb += adjustedQty;
@@ -63,20 +74,36 @@ export default function Dashboard() {
         }
       });
 
+      // ✅ 4. Calculate exactly how many products are triggering alerts
+      let lowAlertsCount = 0;
+      let highAlertsCount = 0;
+
+      (productsData || []).forEach(p => {
+        const currentStock = stockMap[p.id] || 0;
+        
+        if (p.low_stock_alert > 0 && currentStock <= p.low_stock_alert) {
+          lowAlertsCount++;
+        }
+        if (p.high_stock_alert > 0 && currentStock >= p.high_stock_alert) {
+          highAlertsCount++;
+        }
+      });
+
       // Build the Pie Chart Data
       const pieDataRaw = [
         { name: "Polish Pipe", value: polish },
         { name: "Seamless Pipe", value: seamless },
         { name: "NB Pipe", value: nb },
-        { name: "Other Products", value: other }
+        { name: "Other", value: other }
       ];
       
-      // Filter out categories that have 0 stock to keep the chart clean
       const pieData = pieDataRaw.filter(item => item.value > 0);
 
       setStats({
-        totalProducts: productCount || 0,
+        totalProducts: productsData?.length || 0,
         totalStock,
+        lowAlerts: lowAlertsCount,
+        highAlerts: highAlertsCount,
         recentTransactions: recentTrans || [],
         pieData
       });
@@ -102,7 +129,7 @@ export default function Dashboard() {
     <div className="p-6 md:p-8">
       <h1 className="text-3xl font-bold mb-6 text-gray-800">Dashboard</h1>
 
-      {/* STATS CARDS */}
+      {/* STATS CARDS - Now a perfect 4-column grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
         <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
           <p className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-1">Total Products</p>
@@ -111,6 +138,18 @@ export default function Dashboard() {
         <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
           <p className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-1">Total Stock Items</p>
           <p className="text-3xl font-black text-green-600">{stats.totalStock}</p>
+        </div>
+        
+        {/* ✅ NEW: Low Stock Alert Card */}
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-red-100">
+          <p className="text-sm font-bold text-red-400 uppercase tracking-wider mb-1">Low Stock Alerts</p>
+          <p className="text-3xl font-black text-red-600">{stats.lowAlerts}</p>
+        </div>
+
+        {/* ✅ NEW: High Stock Alert Card */}
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-orange-100">
+          <p className="text-sm font-bold text-orange-400 uppercase tracking-wider mb-1">High Stock Alerts</p>
+          <p className="text-3xl font-black text-orange-600">{stats.highAlerts}</p>
         </div>
       </div>
 
@@ -128,10 +167,11 @@ export default function Dashboard() {
                     data={stats.pieData}
                     cx="50%"
                     cy="50%"
-                    innerRadius={70}
-                    outerRadius={110}
+                    innerRadius={60}       // ✅ Reduced inner radius
+                    outerRadius={95}       // ✅ Reduced outer radius to stop text clashing
                     paddingAngle={5}
                     dataKey="value"
+                    labelLine={true}       // ✅ Ensures Recharts draws a line to the text
                     label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
                   >
                     {stats.pieData.map((entry, index) => (
