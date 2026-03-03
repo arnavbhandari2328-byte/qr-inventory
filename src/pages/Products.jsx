@@ -141,7 +141,6 @@ export default function Products() {
 
         if (data.length === 0) throw new Error("Spreadsheet is empty.");
 
-        // ✅ Grab the headers from the very first row
         const headers = Object.keys(data[0]);
         const normalize = (str) => String(str).toLowerCase().replace(/[\s_]/g, '');
 
@@ -162,7 +161,6 @@ export default function Products() {
         const lowAlertKey = headers.find(k => normalize(k).includes('low'));
         const highAlertKey = headers.find(k => normalize(k).includes('high') || normalize(k).includes('max'));
 
-        // 🚨 HEADER DETECTIVE: This will popup if the app can't find your High Alert column
         if (!highAlertKey) {
           const proceed = window.confirm(
             `⚠️ WARNING: We couldn't find your "High Alert" column!\n\n` +
@@ -171,7 +169,7 @@ export default function Products() {
           );
           if (!proceed) {
              e.target.value = null;
-             return; // Stops the upload so you can fix Excel
+             return; 
           }
         }
 
@@ -343,7 +341,6 @@ export default function Products() {
           </button>
         )}
 
-        {/* 🚀 BULK UPLOAD & EXPORT */}
         <div className="ml-auto flex gap-2 items-center">
           <input 
             type="file" 
@@ -445,18 +442,20 @@ export default function Products() {
                 <tr>
                   <th className="p-2 border">Date</th>
                   <th className="p-2 border">Type</th>
+                  <th className="p-2 border">Party</th> {/* ✅ FIXED: PARTY COLUMN ADDED */}
                   <th className="p-2 border">Qty</th>
                   <th className="p-2 border">Balance</th>
                 </tr>
               </thead>
               <tbody>
                 {ledger.length === 0 ? (
-                  <tr><td colSpan="4" className="p-4 text-gray-500 text-center">No transactions</td></tr>
+                  <tr><td colSpan="5" className="p-4 text-gray-500 text-center">No transactions</td></tr>
                 ) : ledger.map((l) => (
                   <tr key={l.id}>
                     <td className="border p-2">{formatIST(l.created_at)}</td>
                     <td className={`border p-2 font-semibold ${l.transaction_type === "inward" ? "text-green-600" : "text-red-600"}`}>{l.transaction_type}</td>
-                    <td className="border p-2">{l.quantity}</td>
+                    <td className="border p-2 text-sm text-gray-700 font-semibold">{l.party || "-"}</td> {/* ✅ FIXED: PARTY NAME VISIBLE */}
+                    <td className="border p-2 font-bold">{l.quantity}</td>
                     <td className="border p-2 font-bold">{l.balance}</td>
                   </tr>
                 ))}
