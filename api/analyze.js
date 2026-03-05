@@ -16,42 +16,47 @@ export default async function handler(req, res) {
     const ai = new GoogleGenAI({ apiKey: apiKey });
     const { question } = req.body;
 
-    // 1. Fetch ALL Products and ALL Transactions directly from the database
+    // 1. Fetch deep context from Supabase
     const { data: products } = await supabase.from('products').select('*');
-    
-    // Fetching the last 1000 transactions to give the AI deep context without timing out the server
     const { data: transactions } = await supabase
       .from('transactions')
-      .select('*, products(product_name)')
+      .select('*, products(product_name, product_id), locations(name)')
       .order('created_at', { ascending: false })
       .limit(1000); 
 
-    // 2. Build a massive data context for Gemini
+    // 2. Build the Advanced Reporting Prompt
     const systemPrompt = `
-      You are the Nivee Metal Products Inventory AI. You have access to the full database.
+      You are the Nivee Metal Products AI Inventory Manager.
       
-      Products Data: ${JSON.stringify(products)}
-      Last 1000 Transactions: ${JSON.stringify(transactions)}
+      DATABASE CONTEXT:
+      - Products: ${JSON.stringify(products)}
+      - Transactions (Last 1000): ${JSON.stringify(transactions)}
       
-      User Request: ${question}
+      USER REQUEST: ${question}
       
-      Instructions:
-      1. Analyze the raw data deeply to answer the prompt.
-      2. If the user asks for a report, summarize the data clearly.
-      3. Use Markdown tables if you are listing multiple items, stock levels, or transaction histories.
-      4. Be professional, concise, and highly accurate.
+      REPORTING RULES:
+      1. Use professional business language.
+      2. If asked for a report, list, or analysis, ALWAYS provide a Markdown Table.
+      3. Use the format: | Date | Product | Type | Qty | Party | Location |
+      4. Ensure dates are readable (e.g., 05 Mar 2026).
+      5. If the user asks for "Excel" or "PDF", ensure the table is the main part of your response so the exporter can capture it.
+      6. For summaries, provide a clear breakdown of stock movements.
     `;
 
-    // 3. Ask Gemini 2.5 Flash to process the massive dataset
-    const response = await ai.models.generateContent({
+    // 3. Generate Content using the latest model
+    const result = await ai.models.generateContent({
       model: 'gemini-2.5-flash',
       contents: systemPrompt
     });
 
-    return res.status(200).json({ answer: response.text });
+    // Handle the new SDK response structure
+    return res.status(200).json({ answer: result.text });
 
   } catch (err) {
     console.error("AI ERROR:", err.message);
-    return res.status(500).json({ error: "Google API Error", details: err.message });
+    return res.status(500).json({ 
+      error: "Google API Error", 
+      details: err.message 
+    });
   }
 }

@@ -1,6 +1,9 @@
 import { useEffect, useState } from "react";
 import { supabase } from "../supabase";
 import { PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer } from "recharts";
+import * as XLSX from "xlsx";
+import jsPDF from "jspdf";
+import "jspdf-autotable";
 
 export default function Dashboard() {
   const [stats, setStats] = useState({
@@ -89,7 +92,7 @@ export default function Dashboard() {
     }
   };
 
-  // ✅ UPDATED: AI Interaction Function (Now only sends the question)
+  // ✅ AI Interaction Function
   const askGemini = async () => {
     if (!question) return;
     setIsAsking(true);
@@ -98,7 +101,7 @@ export default function Dashboard() {
       const res = await fetch("/api/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question: question }), // The backend API will fetch the data now!
+        body: JSON.stringify({ question: question }), 
       });
       const data = await res.json();
       setAiResponse(data.answer || "Error: AI could not generate a response.");
@@ -109,13 +112,41 @@ export default function Dashboard() {
     }
   };
 
-  // ✅ FIXED IST FORMATTER
+  // ✅ MASTER EXPORTER: Converts AI text into Excel or PDF
+  const exportAiData = (format) => {
+    if (!aiResponse) return alert("No data to export!");
+
+    // Basic parsing: split AI response into lines and columns (works for markdown tables or lists)
+    const lines = aiResponse.split('\n')
+      .filter(l => l.includes('|') || l.includes(',') || l.includes('\t'))
+      .map(line => line.split(/[|,\t]/).map(cell => cell.trim()).filter(cell => cell !== ""));
+
+    if (lines.length === 0) {
+      return alert("The AI response doesn't contain a clear table to export. Try asking for a 'Table report'.");
+    }
+
+    if (format === 'excel') {
+      const ws = XLSX.utils.aoa_to_sheet(lines);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "AI_Report");
+      XLSX.writeFile(wb, `Nivee_AI_Report_${new Date().getTime()}.xlsx`);
+    } 
+    else if (format === 'pdf') {
+      const doc = new jsPDF();
+      doc.text("Nivee Metal Products - AI Analysis Report", 14, 15);
+      doc.autoTable({
+        head: [lines[0]],
+        body: lines.slice(1),
+        startY: 20,
+        theme: 'grid'
+      });
+      doc.save(`Nivee_AI_Report_${new Date().getTime()}.pdf`);
+    }
+  };
+
   const formatIST = (dbDateString) => {
     if (!dbDateString) return "-";
-    
-    // new Date() naturally understands Supabase's UTC format (+00:00)
     const date = new Date(dbDateString);
-    
     return date.toLocaleString("en-IN", {
       timeZone: "Asia/Kolkata",
       day: "2-digit",
@@ -142,7 +173,7 @@ export default function Dashboard() {
           <input 
             value={question}
             onChange={(e) => setQuestion(e.target.value)}
-            placeholder="Ask: 'Draft a reorder report' or 'Analyze today's activity'..."
+            placeholder="Ask: 'Create a table of today's sales' or 'Summarize low stock pipes'..."
             className="flex-1 p-3 border rounded-xl outline-none focus:border-blue-500 transition-all text-sm"
           />
           <button 
@@ -155,8 +186,21 @@ export default function Dashboard() {
         </div>
         
         {aiResponse && (
-          <div className="mt-4 p-4 bg-blue-50 rounded-xl border border-blue-100 text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">
-            {aiResponse}
+          <div className="mt-4 space-y-3">
+            <div className="flex justify-between items-center bg-gray-50 p-3 rounded-t-xl border-x border-t border-blue-100">
+                <span className="text-xs font-bold text-blue-600 uppercase">Analysis Results</span>
+                <div className="flex gap-2">
+                    <button onClick={() => exportAiData('excel')} className="bg-green-600 text-white px-3 py-1 rounded-lg text-xs font-bold hover:bg-green-700 shadow-sm">
+                      📥 Excel
+                    </button>
+                    <button onClick={() => exportAiData('pdf')} className="bg-red-600 text-white px-3 py-1 rounded-lg text-xs font-bold hover:bg-red-700 shadow-sm">
+                      📄 PDF
+                    </button>
+                </div>
+            </div>
+            <div className="p-4 bg-white rounded-b-xl border border-blue-100 text-sm text-gray-700 whitespace-pre-wrap leading-relaxed overflow-x-auto shadow-inner">
+              {aiResponse}
+            </div>
           </div>
         )}
       </div>
