@@ -66,23 +66,11 @@ export default function Transactions() {
     }
   }
 
-  const formatIST = (dbDateString) => {
-    if (!dbDateString) return "-";
-    
-    // Step 1: Clean the string so the browser doesn't try to auto-convert it
-    // This turns "2026-03-05T11:21:43.123+00:00" into exactly "2026/03/05 11:21:43"
-    const cleanString = dbDateString
-      .replace('T', ' ')
-      .split('+')[0]
-      .split('.')[0]
-      .replace(/-/g, '/')
-      .trim();
-    
-    // Step 2: Read it exactly as local time without adding any hours
-    const date = new Date(cleanString);
-    
-    // Step 3: Format it to look nice (e.g., "05 Mar 2026, 11:21 AM")
+  const formatIST = (utcString) => {
+    if (!utcString) return "-";
+    const date = new Date(utcString.endsWith("Z") ? utcString : utcString + "Z");
     return date.toLocaleString("en-IN", {
+      timeZone: "Asia/Kolkata",
       day: "2-digit",
       month: "short",
       year: "numeric",
@@ -227,6 +215,7 @@ export default function Transactions() {
               <th className="p-4 text-xs font-bold text-gray-400 uppercase tracking-widest">Qty</th>
               <th className="p-4 text-xs font-bold text-gray-400 uppercase tracking-widest">Location</th>
               <th className="p-4 text-xs font-bold text-gray-400 uppercase tracking-widest">Party</th>
+              <th className="p-4 text-xs font-bold text-gray-400 uppercase tracking-widest">Employee</th>
               <th className="p-4 text-xs font-bold text-gray-400 uppercase tracking-widest">Action</th>
             </tr>
           </thead>
@@ -235,7 +224,7 @@ export default function Transactions() {
               <tr key={t.id} className="border-b hover:bg-gray-50 transition-colors">
                 <td className="p-4 text-sm text-gray-600 whitespace-nowrap font-medium">
                   {formatIST(t.created_at)}
-                </td>
+                 </td>
                 <td className="p-4 font-bold text-gray-800">{products.find(p => p.id === t.product_id)?.product_name}</td>
                 <td className={`p-4 font-black ${t.transaction_type === "inward" ? "text-green-600" : "text-red-600"}`}>
                   {t.transaction_type.toUpperCase()}
@@ -243,6 +232,7 @@ export default function Transactions() {
                 <td className="p-4 font-mono font-bold">{t.quantity}</td>
                 <td className="p-4 text-sm text-gray-600 font-semibold">{locations.find(l => l.id === t.location_id)?.name}</td>
                 <td className="p-4 text-sm font-semibold text-gray-700">{t.party || "-"}</td>
+                <td className="p-4 text-sm font-semibold text-blue-700">{t.created_by_email || "System"}</td>
                 <td className="p-4 flex gap-2">
                   <button onClick={() => handleEditClick(t)} className="text-blue-600 font-bold hover:underline">Edit</button>
                   {isAdmin && <button onClick={() => handleDelete(t.id)} className="text-red-500 font-bold hover:underline">Delete</button>}
