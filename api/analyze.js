@@ -1,4 +1,4 @@
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import { GoogleGenAI } from '@google/genai';
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -11,37 +11,31 @@ export default async function handler(req, res) {
       return res.status(500).json({ error: "API Key is missing." });
     }
 
-    const genAI = new GoogleGenerativeAI(apiKey);
-    
-    // ✅ FIX: Change model name to 'gemini-1.5-flash' 
-    // If that still gives a 404, try 'gemini-pro'
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    // 1. Initialize the NEW SDK
+    const ai = new GoogleGenAI({ apiKey: apiKey });
 
     const { inventoryData, question } = req.body;
 
     const prompt = `
-      You are the Nivee Metal AI Manager.
-      Inventory Summary: Total Stock is ${inventoryData.totalStock}. 
-      There are ${inventoryData.lowStockItems?.length || 0} items low on stock.
-      Recent Activity: ${JSON.stringify(inventoryData.recentActivity)}
-      
-      User Question: ${question}
-      
-      Provide a helpful, professional response in 2-3 sentences.
+      Context: Nivee Metal Inventory.
+      Data: ${JSON.stringify(inventoryData)}
+      Question: ${question}
+      Answer in 2 sentences.
     `;
 
-    const result = await model.generateContent(prompt);
-    const response = await result.response;
-    const text = response.text();
+    // 2. Call the NEW 2.5 Flash model
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash',
+      contents: prompt
+    });
 
-    return res.status(200).json({ answer: text });
+    // 3. Send the response back to your dashboard
+    return res.status(200).json({ answer: response.text });
 
   } catch (err) {
     console.error("AI ERROR:", err.message);
-    
-    // If gemini-1.5-flash fails, this tells you why in the browser
     return res.status(500).json({ 
-      error: "AI Model Error", 
+      error: "Google API Error", 
       details: err.message 
     });
   }
