@@ -117,12 +117,23 @@ export default function Dashboard() {
     }
   };
 
-  const formatIST = (utcString) => {
-    if (!utcString) return "-";
-    // Append 'Z' to ensure JS parses it as a UTC timestamp
-    const date = new Date(utcString.endsWith("Z") ? utcString : utcString + "Z");
+  const formatIST = (dbDateString) => {
+    if (!dbDateString) return "-";
+    
+    // Step 1: Clean the string so the browser doesn't try to auto-convert it
+    // This turns "2026-03-05T11:21:43.123+00:00" into exactly "2026/03/05 11:21:43"
+    const cleanString = dbDateString
+      .replace('T', ' ')
+      .split('+')[0]
+      .split('.')[0]
+      .replace(/-/g, '/')
+      .trim();
+    
+    // Step 2: Read it exactly as local time without adding any hours
+    const date = new Date(cleanString);
+    
+    // Step 3: Format it to look nice (e.g., "05 Mar 2026, 11:21 AM")
     return date.toLocaleString("en-IN", {
-      timeZone: "Asia/Kolkata",
       day: "2-digit",
       month: "short",
       year: "numeric",
