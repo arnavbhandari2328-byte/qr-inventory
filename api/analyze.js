@@ -1,49 +1,48 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
 
 export default async function handler(req, res) {
-  // 1. Only allow POST requests from your frontend
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method Not Allowed' });
   }
 
   try {
-    console.log("Step 1: API Route Hit. Data received:", req.body);
-
-    // 2. Check for the API key
     const apiKey = process.env.GEMINI_API_KEY || process.env.API_KEY;
     if (!apiKey) {
-      console.error("CRITICAL ERROR: API Key is missing.");
-      return res.status(500).json({ error: "API Key is missing in Vercel environment variables." });
+      return res.status(500).json({ error: "API Key is missing." });
     }
 
-    console.log("Step 2: API Key found. Initializing Gemini...");
     const genAI = new GoogleGenerativeAI(apiKey);
+    
+    // ✅ FIX: Change model name to 'gemini-1.5-flash' 
+    // If that still gives a 404, try 'gemini-pro'
     const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
-    // 3. Extract the data
     const { inventoryData, question } = req.body;
-    console.log("Step 3: User asked:", question);
 
     const prompt = `
       You are the Nivee Metal AI Manager.
-      Inventory Data: ${JSON.stringify(inventoryData)}
+      Inventory Summary: Total Stock is ${inventoryData.totalStock}. 
+      There are ${inventoryData.lowStockItems?.length || 0} items low on stock.
+      Recent Activity: ${JSON.stringify(inventoryData.recentActivity)}
+      
       User Question: ${question}
-      Provide a professional response based on this data.
+      
+      Provide a helpful, professional response in 2-3 sentences.
     `;
 
-    console.log("Step 4: Sending prompt to Google Gemini...");
     const result = await model.generateContent(prompt);
     const response = await result.response;
-    
-    console.log("Step 5: Success! Returning response to Dashboard.");
-    return res.status(200).json({ answer: response.text() });
+    const text = response.text();
+
+    return res.status(200).json({ answer: text });
 
   } catch (err) {
-    // 6. If ANYTHING fails, it gets caught here and printed to Vercel Logs
-    console.error("🔥 CRITICAL AI ERROR 🔥");
-    console.error("Message:", err.message);
-    console.error("Stack Trace:", err.stack);
+    console.error("AI ERROR:", err.message);
     
-    return res.status(500).json({ error: "AI Error: " + err.message });
+    // If gemini-1.5-flash fails, this tells you why in the browser
+    return res.status(500).json({ 
+      error: "AI Model Error", 
+      details: err.message 
+    });
   }
 }
