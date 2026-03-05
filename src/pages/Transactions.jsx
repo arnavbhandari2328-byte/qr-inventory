@@ -66,9 +66,13 @@ export default function Transactions() {
     }
   }
 
-  const formatIST = (utcString) => {
-    if (!utcString) return "-";
-    const date = new Date(utcString.endsWith("Z") ? utcString : utcString + "Z");
+  // ✅ FIXED IST FORMATTER: Safely parses Supabase DB timestamps into Indian Standard Time
+  const formatIST = (dbDateString) => {
+    if (!dbDateString) return "-";
+    
+    // new Date() naturally understands Supabase's UTC format (+00:00)
+    const date = new Date(dbDateString);
+    
     return date.toLocaleString("en-IN", {
       timeZone: "Asia/Kolkata",
       day: "2-digit",
@@ -95,7 +99,6 @@ export default function Transactions() {
         quantity: Number(form.quantity),
         party: form.party,
         created_by_email: user?.email || "Manual Entry"
-        // NO created_at: We let the Database handle IST automatically!
       };
 
       if (editingId) {
