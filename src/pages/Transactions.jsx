@@ -66,12 +66,18 @@ export default function Transactions() {
     }
   }
 
-  // ✅ SIMPLE IST MODE: Displays the DB time exactly as it is without math
-  const formatTimeDisplay = (dbDateString) => {
-    if (!dbDateString) return "-";
-    // Removes the 'T' and separates date/time clearly
-    // Turns "2026-03-04T16:40:09" into "2026-03-04 16:40:09"
-    return dbDateString.replace('T', ' ').split('.')[0];
+  const formatIST = (utcString) => {
+    if (!utcString) return "-";
+    const date = new Date(utcString.endsWith("Z") ? utcString : utcString + "Z");
+    return date.toLocaleString("en-IN", {
+      timeZone: "Asia/Kolkata",
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: true
+    });
   };
 
   const handleSave = async () => {
@@ -138,7 +144,7 @@ export default function Transactions() {
         .order("created_at", { ascending: false });
 
       const exportData = (allTrans || []).map((t) => ({
-        Date_IST: formatTimeDisplay(t.created_at),
+        Date_IST: formatIST(t.created_at),
         Product: products.find((p) => p.id === t.product_id)?.product_name || "",
         Type: t.transaction_type.toUpperCase(),
         Quantity: t.quantity,
@@ -216,7 +222,7 @@ export default function Transactions() {
             {filtered.map((t) => (
               <tr key={t.id} className="border-b hover:bg-gray-50 transition-colors">
                 <td className="p-4 text-sm text-gray-600 whitespace-nowrap font-medium">
-                  {formatTimeDisplay(t.created_at)}
+                  {formatIST(t.created_at)}
                 </td>
                 <td className="p-4 font-bold text-gray-800">{products.find(p => p.id === t.product_id)?.product_name}</td>
                 <td className={`p-4 font-black ${t.transaction_type === "inward" ? "text-green-600" : "text-red-600"}`}>

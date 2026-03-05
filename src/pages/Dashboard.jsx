@@ -117,11 +117,19 @@ export default function Dashboard() {
     }
   };
 
-  // ✅ SIMPLEST TIME FORMATTER (Matches your working Transaction page logic)
-  const formatTimeDisplay = (dbDateString) => {
-    if (!dbDateString) return "-";
-    // This removes the 'T' and separates date/time clearly
-    return dbDateString.replace('T', ' ').split('.')[0];
+  const formatIST = (utcString) => {
+    if (!utcString) return "-";
+    // Append 'Z' to ensure JS parses it as a UTC timestamp
+    const date = new Date(utcString.endsWith("Z") ? utcString : utcString + "Z");
+    return date.toLocaleString("en-IN", {
+      timeZone: "Asia/Kolkata",
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: true
+    });
   };
 
   if (loading) return <div className="p-8 font-bold text-gray-500">Loading Dashboard...</div>;
@@ -241,7 +249,7 @@ export default function Dashboard() {
                     </td>
                     <td className="py-3 text-sm font-bold">{t.quantity}</td>
                     <td className="py-3 text-xs text-gray-500 whitespace-nowrap">
-                      {formatTimeDisplay(t.created_at)}
+                    {formatIST(t.created_at)}
                     </td>
                   </tr>
                 ))}
