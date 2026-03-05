@@ -58,18 +58,11 @@ export default function Products() {
     }
   };
 
-  const formatIST = (utcString) => {
-    if (!utcString) return "Unknown Date";
-    const date = new Date(utcString.endsWith("Z") ? utcString : utcString + "Z");
-    return date.toLocaleString("en-IN", {
-      timeZone: "Asia/Kolkata",
-      day: "2-digit",
-      month: "short",
-      year: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-      hour12: true
-    });
+  // ✅ SIMPLE MODE: Displays the DB time exactly as it is (IST)
+  const formatTimeDisplay = (dbDateString) => {
+    if (!dbDateString) return "-";
+    // This removes the 'T' and separates date/time clearly
+    return dbDateString.replace('T', ' ').split('.')[0];
   };
 
   const stockByLocation = (productId, locationName) => {
@@ -217,6 +210,7 @@ export default function Products() {
                   quantity: stock,
                   party: "Bulk Opening Stock",
                   created_by_email: employeeEmail
+                  // ✅ NO TIMESTAMP: Let Supabase handle IST automatically
                 });
               }
             });
@@ -442,7 +436,7 @@ export default function Products() {
                 <tr>
                   <th className="p-2 border">Date</th>
                   <th className="p-2 border">Type</th>
-                  <th className="p-2 border">Party</th> {/* ✅ FIXED: PARTY COLUMN ADDED */}
+                  <th className="p-2 border">Party</th>
                   <th className="p-2 border">Qty</th>
                   <th className="p-2 border">Balance</th>
                 </tr>
@@ -452,9 +446,10 @@ export default function Products() {
                   <tr><td colSpan="5" className="p-4 text-gray-500 text-center">No transactions</td></tr>
                 ) : ledger.map((l) => (
                   <tr key={l.id}>
-                    <td className="border p-2">{formatIST(l.created_at)}</td>
+                    {/* ✅ Uses formatTimeDisplay for consistent IST readout */}
+                    <td className="border p-2">{formatTimeDisplay(l.created_at)}</td>
                     <td className={`border p-2 font-semibold ${l.transaction_type === "inward" ? "text-green-600" : "text-red-600"}`}>{l.transaction_type}</td>
-                    <td className="border p-2 text-sm text-gray-700 font-semibold">{l.party || "-"}</td> {/* ✅ FIXED: PARTY NAME VISIBLE */}
+                    <td className="border p-2 text-sm text-gray-700 font-semibold">{l.party || "-"}</td>
                     <td className="border p-2 font-bold">{l.quantity}</td>
                     <td className="border p-2 font-bold">{l.balance}</td>
                   </tr>
