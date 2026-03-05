@@ -89,7 +89,7 @@ export default function Dashboard() {
     }
   };
 
-  // ✅ AI Interaction Function
+  // ✅ UPDATED: AI Interaction Function (Now only sends the question)
   const askGemini = async () => {
     if (!question) return;
     setIsAsking(true);
@@ -98,15 +98,7 @@ export default function Dashboard() {
       const res = await fetch("/api/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          question: question,
-          inventoryData: {
-            totalStock: stats.totalStock,
-            lowStockItems: stats.lowAlertProducts,
-            overstockItems: stats.highAlertProducts,
-            recentActivity: stats.recentTransactions
-          }
-        }),
+        body: JSON.stringify({ question: question }), // The backend API will fetch the data now!
       });
       const data = await res.json();
       setAiResponse(data.answer || "Error: AI could not generate a response.");
@@ -117,7 +109,7 @@ export default function Dashboard() {
     }
   };
 
-  // ✅ FIXED IST FORMATTER (Matches the working one from Transactions.jsx)
+  // ✅ FIXED IST FORMATTER
   const formatIST = (dbDateString) => {
     if (!dbDateString) return "-";
     
