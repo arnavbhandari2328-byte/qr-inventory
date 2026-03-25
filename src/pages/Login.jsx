@@ -26,10 +26,10 @@ export default function Login() {
     try {
       const user = data.user;
 
-      // 2. Identify the device currently in your hand
+      // 2. Identify the device fingerprint
       const currentID = await getDeviceFingerprint();
 
-      // 3. Fetch profile (Make sure to select email and the ID array)
+      // 3. Fetch profile data
       const { data: profile, error: profileError } = await supabase
         .from('profiles')
         .select('allowed_device_id, email')
@@ -39,16 +39,18 @@ export default function Login() {
       if (profileError) throw profileError;
 
       // 4. THE MULTI-DEVICE SECURITY CHECK
-      // Ensure we treat the data as an array even if it's empty
-      const allowedIDs = profile.allowed_device_id || [];
+      // Filter out any 'null' values to prevent slot wastage
+      const rawIDs = profile.allowed_device_id || [];
+      const allowedIDs = rawIDs.filter(id => id !== null && id !== "null");
+      
       const isAdmin = profile.email === 'niveemetals@gmail.com';
-      const deviceLimit = isAdmin ? 2 : 1;
+      const deviceLimit = isAdmin ? 4 : 1; // 4 slots for you, 1 for everyone else
 
-      // Check if this device is already registered
+      // Check if this device is already in your allowed list
       if (allowedIDs.includes(currentID)) {
         console.log("Device verified. Access granted.");
       } 
-      // If it's a new device, check if there's room to add it
+      // If new device, check if there is an empty slot
       else if (allowedIDs.length < deviceLimit) {
         const newIDList = [...allowedIDs, currentID];
 
@@ -59,12 +61,12 @@ export default function Login() {
 
         if (updateError) throw updateError;
         
-        alert(`New device registered! Slot ${newIDList.length}/${deviceLimit} used.`);
+        alert(`New device registered! Slot ${newIDList.length}/${deviceLimit} occupied.`);
       } 
-      // If no slots are left, block them
+      // If limit reached, block access
       else {
         await supabase.auth.signOut();
-        alert(`ACCESS DENIED: You have reached your limit of ${deviceLimit} device(s).`);
+        alert(`ACCESS DENIED: All ${deviceLimit} device slots are full for this account.`);
         setLoading(false);
         return;
       }
@@ -73,59 +75,74 @@ export default function Login() {
       window.location.href = "/dashboard";
 
     } catch (err) {
-      console.error("Security check failed:", err);
-      alert("Device verification failed. Please try again.");
+      console.error("Security verification failed:", err);
+      alert("Device security check failed. Please try again or contact Admin.");
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-100">
-      <form onSubmit={handleLogin} className="bg-white p-8 shadow-2xl rounded-2xl w-96 space-y-6 border border-gray-100">
-        <div className="text-center">
-          <h2 className="text-3xl font-black text-[#0a2a5e] tracking-tight">System Login</h2>
-          <p className="text-xs text-gray-400 mt-1 uppercase tracking-widest font-bold">Nivee Metal Products</p>
+    <div className="min-h-screen flex items-center justify-center bg-white selection:bg-blue-600 selection:text-white">
+      {/* Background Aesthetic */}
+      <div className="absolute inset-0 opacity-[0.03] pointer-events-none" style={{ backgroundImage: 'radial-gradient(#0a2a5e 1px, transparent 1px)', backgroundSize: '30px 30px' }}></div>
+      
+      <form onSubmit={handleLogin} className="relative bg-white p-10 shadow-[0_20px_50px_rgba(0,0,0,0.05)] rounded-[2.5rem] w-full max-w-md space-y-8 border border-slate-100 transition-all hover:shadow-[0_30px_60px_rgba(0,0,0,0.08)]">
+        
+        <div className="text-center space-y-2">
+          <h2 className="text-4xl font-black text-[#0a2a5e] tracking-tighter uppercase italic">System Login</h2>
+          <p className="text-[10px] text-blue-600 font-bold uppercase tracking-[0.4em]">Nivee Metal Products</p>
         </div>
         
-        <div className="space-y-4">
+        <div className="space-y-5">
           <div>
-            <label className="block text-gray-500 text-xs font-bold uppercase mb-1">Email Address</label>
+            <label className="block text-slate-400 text-[10px] font-bold uppercase tracking-widest mb-2 ml-1">Work Email</label>
             <input
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              className="w-full border-gray-200 border p-3 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all"
+              className="w-full bg-slate-50 border-none p-4 rounded-2xl focus:ring-2 focus:ring-blue-500 outline-none transition-all text-sm font-medium"
               placeholder="admin@niveemetal.com"
               required
             />
           </div>
 
           <div>
-            <label className="block text-gray-500 text-xs font-bold uppercase mb-1">Password</label>
+            <label className="block text-slate-400 text-[10px] font-bold uppercase tracking-widest mb-2 ml-1">Password</label>
             <input
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              className="w-full border-gray-200 border p-3 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all"
+              className="w-full bg-slate-50 border-none p-4 rounded-2xl focus:ring-2 focus:ring-blue-500 outline-none transition-all text-sm font-medium"
               placeholder="••••••••"
               required
             />
           </div>
         </div>
 
-        <button 
-          type="submit" 
-          disabled={loading}
-          className="w-full bg-[#0a2a5e] text-white font-bold py-3 rounded-xl hover:bg-blue-800 transition-all shadow-lg active:scale-95 disabled:opacity-50"
-        >
-          {loading ? "Verifying..." : "Secure Sign In"}
-        </button>
+        <div className="pt-2">
+          <button 
+            type="submit" 
+            disabled={loading}
+            className="w-full bg-[#0a2a5e] text-white font-bold py-4 rounded-2xl hover:bg-blue-700 transition-all shadow-lg active:scale-[0.98] disabled:opacity-50 flex items-center justify-center gap-3"
+          >
+            {loading ? (
+              <>
+                <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+                <span>Securing Session...</span>
+              </>
+            ) : (
+              "Authorize & Sign In"
+            )}
+          </button>
+        </div>
         
-        <div className="flex items-center justify-center gap-2">
-           <div className="h-px w-8 bg-gray-200"></div>
-           <span className="text-[10px] text-gray-400 uppercase font-bold tracking-tighter">Device Protected</span>
-           <div className="h-px w-8 bg-gray-200"></div>
+        <div className="flex flex-col items-center gap-4 pt-2">
+           <div className="h-px w-12 bg-slate-100"></div>
+           <p className="text-[9px] text-slate-400 uppercase font-bold tracking-widest text-center leading-relaxed">
+             Multi-Device Protection Active<br/>
+             <span className="text-blue-500/50">Encrypted Fingerprint ID Verification</span>
+           </p>
         </div>
       </form>
     </div>
