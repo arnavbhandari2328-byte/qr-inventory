@@ -16,13 +16,15 @@ export default function Dashboard() {
     highAlerts: 0, 
     recentTransactions: [],
     pieData: [],
-    activityData: [],
+    activityData: [], // ✅ New state for the Bar Chart
     lowAlertProducts: [], 
     highAlertProducts: [] 
   });
   
   const [loading, setLoading] = useState(true);
   const [modalType, setModalType] = useState(null); 
+
+  // ✅ AI States
   const [question, setQuestion] = useState("");
   const [aiResponse, setAiResponse] = useState("");
   const [isAsking, setIsAsking] = useState(false);
@@ -45,6 +47,7 @@ export default function Dashboard() {
         .order("created_at", { ascending: false })
         .limit(5);
 
+      // ✅ Added 'created_at' to the query for the Bar Chart
       const { data: allTrans } = await supabase
         .from("transactions")
         .select("product_id, transaction_type, quantity, created_at, products(product_id)");
@@ -52,7 +55,7 @@ export default function Dashboard() {
       let totalStock = 0;
       let polish = 0, seamless = 0, nb = 0, other = 0;
       const stockMap = {};
-      const dailyMap = {};
+      const dailyMap = {}; // ✅ Map to store inward/outward totals per day
 
       (allTrans || []).forEach(t => {
         const adjustedQty = t.transaction_type === "inward" ? Number(t.quantity) : -Number(t.quantity);
@@ -65,14 +68,22 @@ export default function Dashboard() {
         else if (pId.startsWith("NM-NB")) nb += adjustedQty;
         else other += adjustedQty;
 
-        const dateKey = new Date(t.created_at).toLocaleDateString("en-IN", { day: "2-digit", month: "short" });
-        if (!dailyMap[dateKey]) dailyMap[dateKey] = { name: dateKey, inward: 0, outward: 0 };
-        
-        if (t.transaction_type === "inward") dailyMap[dateKey].inward += Number(t.quantity);
-        else dailyMap[dateKey].outward += Number(t.quantity);
+        // ✅ TREND LOGIC: Group transactions by date for the Bar Chart
+        if (t.created_at) {
+            const date = new Date(t.created_at).toLocaleDateString("en-IN", { day: "2-digit", month: "short" });
+            if (!dailyMap[date]) dailyMap[date] = { name: date, inward: 0, outward: 0 };
+            
+            if (t.transaction_type === "inward") {
+                dailyMap[date].inward += Number(t.quantity);
+            } else {
+                dailyMap[date].outward += Number(t.quantity);
+            }
+        }
       });
 
+      // ✅ Convert map to array and take last 7 active days
       const activityData = Object.values(dailyMap).slice(-7);
+
       const lowList = [], highList = [];
       (productsData || []).forEach(p => {
         const currentStock = stockMap[p.id] || 0;
@@ -86,7 +97,7 @@ export default function Dashboard() {
         lowAlerts: lowList.length,
         highAlerts: highList.length,
         recentTransactions: recentTrans || [],
-        activityData,
+        activityData, // ✅ Save Bar Chart Data
         pieData: [
           { name: "Polish Pipe", value: polish },
           { name: "Seamless Pipe", value: seamless },
@@ -114,7 +125,7 @@ export default function Dashboard() {
         body: JSON.stringify({ question: question }), 
       });
       const data = await res.json();
-      setAiResponse(data.answer || "AI could not generate a response.");
+      setAiResponse(data.answer || "Error: AI could not generate a response.");
     } catch (err) {
       setAiResponse("Error: Could not reach the AI Assistant.");
     } finally {
@@ -128,116 +139,205 @@ export default function Dashboard() {
       .filter(l => l.includes('|') || l.includes(',') || l.includes('\t'))
       .map(line => line.split(/[|,\t]/).map(cell => cell.trim()).filter(cell => cell !== ""));
 
-    if (lines.length === 0) return alert("Ask for a 'Table report' to export.");
+    if (lines.length === 0) return alert("Try asking for a 'Table report'.");
 
     if (format === 'excel') {
       const ws = XLSX.utils.aoa_to_sheet(lines);
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, "AI_Report");
-      XLSX.writeFile(wb, `Nivee_AI_Report_${Date.now()}.xlsx`);
+      XLSX.writeFile(wb, `Nivee_AI_Report_${new Date().getTime()}.xlsx`);
     } else if (format === 'pdf') {
       const doc = new jsPDF();
-      doc.text("Nivee Metal AI Report", 14, 15);
+      doc.text("AI Analysis Report", 14, 15);
       doc.autoTable({ head: [lines[0]], body: lines.slice(1), startY: 20, theme: 'grid' });
-      doc.save(`Nivee_AI_Report_${Date.now()}.pdf`);
+      doc.save(`Nivee_AI_Report_${new Date().getTime()}.pdf`);
     }
   };
 
   const formatIST = (dbDateString) => {
     if (!dbDateString) return "-";
     const date = new Date(dbDateString);
-    return date.toLocaleString("en-IN", { timeZone: "Asia/Kolkata", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", hour12: true });
+    return date.toLocaleString("en-IN", {
+      timeZone: "Asia/Kolkata",
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: true
+    });
   };
 
-  if (loading) return <div className="p-8 font-bold text-gray-500">Loading Warehouse Intelligence...</div>;
+  if (loading) return <div className="p-8 font-bold text-gray-500">Loading Dashboard...</div>;
 
   return (
-    <div className="p-6 md:p-8 bg-slate-50 min-h-screen">
-      <h1 className="text-3xl font-black mb-6 text-[#0a2a5e] tracking-tight uppercase">Dashboard</h1>
+    <div className="p-6 md:p-8">
+      <h1 className="text-3xl font-bold mb-6 text-gray-800 tracking-tight">Warehouse Intelligence</h1>
 
-      {/* AI Assistant Section */}
-      <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 mb-8">
-        <h2 className="text-sm font-black text-blue-600 mb-4 uppercase tracking-widest">✨ Nivee AI Intelligence</h2>
-        <div className="flex gap-3">
+      {/* ✅ AI Assistant Section */}
+      <div className="bg-white p-6 rounded-2xl shadow-sm border border-blue-100 mb-8">
+        <h2 className="text-lg font-bold text-blue-600 mb-3 flex items-center gap-2">✨ Nivee AI Assistant</h2>
+        <div className="flex gap-2">
           <input 
             value={question}
             onChange={(e) => setQuestion(e.target.value)}
-            placeholder="Ask anything about your inventory..."
-            className="flex-1 p-4 bg-slate-50 border-none rounded-2xl outline-none focus:ring-2 focus:ring-blue-500 transition-all text-sm font-medium"
+            placeholder="Ask anything about your stock..."
+            className="flex-1 p-3 border rounded-xl outline-none focus:border-blue-500 transition-all text-sm"
           />
-          <button onClick={askGemini} disabled={isAsking} className="bg-[#0a2a5e] text-white px-8 py-4 rounded-2xl font-bold hover:bg-blue-800 transition-all disabled:opacity-50 text-sm">
+          <button onClick={askGemini} disabled={isAsking} className="bg-blue-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-blue-700 transition-all disabled:opacity-50 text-sm">
             {isAsking ? "Thinking..." : "Analyze"}
           </button>
         </div>
         {aiResponse && (
-          <div className="mt-4 p-4 bg-white rounded-2xl border border-blue-50 text-sm whitespace-pre-wrap">
-            <div className="flex gap-2 mb-2 justify-end">
-                <button onClick={() => exportAiData('excel')} className="text-[10px] bg-emerald-600 text-white px-3 py-1 rounded-lg">Excel</button>
-                <button onClick={() => exportAiData('pdf')} className="text-[10px] bg-red-600 text-white px-3 py-1 rounded-lg">PDF</button>
+          <div className="mt-4 space-y-3">
+            <div className="flex justify-between items-center bg-gray-50 p-3 rounded-t-xl border-x border-t border-blue-100">
+                <span className="text-xs font-bold text-blue-600 uppercase">Analysis Results</span>
+                <div className="flex gap-2">
+                    <button onClick={() => exportAiData('excel')} className="bg-green-600 text-white px-3 py-1 rounded-lg text-xs font-bold">📥 Excel</button>
+                    <button onClick={() => exportAiData('pdf')} className="bg-red-600 text-white px-3 py-1 rounded-lg text-xs font-bold">📄 PDF</button>
+                </div>
             </div>
-            {aiResponse}
+            <div className="p-4 bg-white rounded-b-xl border border-blue-100 text-sm text-gray-700 whitespace-pre-wrap shadow-inner overflow-x-auto">
+              {aiResponse}
+            </div>
           </div>
         )}
       </div>
 
       {/* STATS CARDS */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-        <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
-          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Total Products</p>
-          <p className="text-3xl font-black text-[#0a2a5e]">{stats.totalProducts}</p>
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+          <p className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-1">Total Products</p>
+          <p className="text-3xl font-black text-blue-600">{stats.totalProducts}</p>
         </div>
-        <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
-          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Total Stock</p>
-          <p className="text-3xl font-black text-emerald-600">{stats.totalStock}</p>
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+          <p className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-1">Total Stock Items</p>
+          <p className="text-3xl font-black text-green-600">{stats.totalStock}</p>
         </div>
-        <div onClick={() => setModalType('low')} className="bg-white p-6 rounded-3xl shadow-sm border border-red-50 cursor-pointer">
-          <p className="text-[10px] font-black text-red-400 uppercase tracking-widest mb-1">Low Stock Alerts</p>
+        <div onClick={() => setModalType('low')} className="bg-white p-6 rounded-2xl shadow-sm border border-red-100 cursor-pointer">
+          <p className="text-sm font-bold text-red-400 uppercase tracking-wider mb-1">Low Stock Alerts</p>
           <p className="text-3xl font-black text-red-600">{stats.lowAlerts}</p>
         </div>
-        <div onClick={() => setModalType('high')} className="bg-white p-6 rounded-3xl shadow-sm border border-orange-50 cursor-pointer">
-          <p className="text-[10px] font-black text-orange-400 uppercase tracking-widest mb-1">High Stock Alerts</p>
+        <div onClick={() => setModalType('high')} className="bg-white p-6 rounded-2xl shadow-sm border border-orange-100 cursor-pointer">
+          <p className="text-sm font-bold text-orange-400 uppercase tracking-wider mb-1">High Stock Alerts</p>
           <p className="text-3xl font-black text-orange-600">{stats.highAlerts}</p>
         </div>
       </div>
 
-      {/* CHARTS SECTION */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
-        <div className="bg-white p-8 rounded-3xl shadow-sm border border-slate-100">
-          <h2 className="text-lg font-black text-[#0a2a5e] mb-8 uppercase tracking-tight">Movement Trends</h2>
-          <div className="h-80 w-full">
+        
+        {/* ✅ BAR CHART: Inward vs Outward */}
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+          <h2 className="text-xl font-bold text-gray-800 mb-6 uppercase tracking-tight">Stock Movements (Last 7 Days)</h2>
+          <div className="h-72 w-full">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={stats.activityData}>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{fontSize: 10, fontWeight: 'bold'}} />
-                <YAxis axisLine={false} tickLine={false} tick={{fontSize: 10, fontWeight: 'bold'}} />
-                <Tooltip />
-                <Legend verticalAlign="top" align="right" />
-                <Bar dataKey="inward" fill="#10B981" radius={[6, 6, 0, 0]} name="Inward" />
-                <Bar dataKey="outward" fill="#EF4444" radius={[6, 6, 0, 0]} name="Outward" />
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f3f4f6" />
+                <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{fontSize: 12, fontWeight: 'bold'}} />
+                <YAxis axisLine={false} tickLine={false} tick={{fontSize: 12, fontWeight: 'bold'}} />
+                <Tooltip cursor={{fill: '#f9fafb'}} />
+                <Legend verticalAlign="top" align="right" iconType="circle" wrapperStyle={{paddingBottom: '20px'}} />
+                <Bar dataKey="inward" fill="#10B981" radius={[4, 4, 0, 0]} name="Inward" />
+                <Bar dataKey="outward" fill="#EF4444" radius={[4, 4, 0, 0]} name="Outward" />
               </BarChart>
             </ResponsiveContainer>
           </div>
         </div>
 
-        <div className="bg-white p-8 rounded-3xl shadow-sm border border-slate-100 flex flex-col">
-          <h2 className="text-lg font-black text-[#0a2a5e] mb-8 uppercase tracking-tight">Stock Distribution</h2>
-          <div className="h-80 w-full">
+        {/* PIE CHART */}
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 flex flex-col items-center">
+          <h2 className="text-xl font-bold text-gray-800 mb-6 self-start uppercase tracking-tight">Stock Distribution</h2>
+          <div className="h-72 w-full">
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
-                <Pie data={stats.pieData} cx="50%" cy="50%" innerRadius={70} outerRadius={100} paddingAngle={8} dataKey="value" label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}>
+                <Pie
+                  data={stats.pieData}
+                  cx="50%"
+                  cy="50%"
+                  innerRadius={60}
+                  outerRadius={95}
+                  paddingAngle={5}
+                  dataKey="value"
+                  label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
+                >
                   {stats.pieData.map((entry, index) => (
                     <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                   ))}
                 </Pie>
-                <Tooltip />
-                <Legend verticalAlign="bottom" />
+                <Tooltip formatter={(value) => [value, "Items"]} />
+                <Legend verticalAlign="bottom" height={36} />
               </PieChart>
             </ResponsiveContainer>
           </div>
         </div>
       </div>
-      
-      {/* Modals remain same as before... */}
+
+      {/* RECENT TRANSACTIONS TABLE */}
+      <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+        <h2 className="text-xl font-bold text-gray-800 mb-4 tracking-tight uppercase">Recent Warehouse Activity</h2>
+        <div className="overflow-x-auto">
+          <table className="w-full text-left">
+            <thead>
+              <tr className="border-b border-gray-100">
+                <th className="pb-3 text-xs font-bold text-gray-400 uppercase">Item</th>
+                <th className="pb-3 text-xs font-bold text-gray-400 uppercase">Type</th>
+                <th className="pb-3 text-xs font-bold text-gray-400 uppercase">Qty</th>
+                <th className="pb-3 text-xs font-bold text-gray-400 uppercase">Time</th>
+              </tr>
+            </thead>
+            <tbody>
+              {stats.recentTransactions.map(t => (
+                <tr key={t.id} className="border-b border-gray-50 last:border-0 hover:bg-gray-50 transition-colors">
+                  <td className="py-3 text-sm font-bold text-gray-700 uppercase">
+                    {t.products?.product_id || "Unknown"}
+                  </td>
+                  <td className="py-3">
+                    <span className={`text-[10px] font-black px-2 py-1 rounded-full uppercase ${t.transaction_type === 'inward' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                      {t.transaction_type}
+                    </span>
+                  </td>
+                  <td className="py-3 text-sm font-bold">{t.quantity}</td>
+                  <td className="py-3 text-[10px] text-gray-400 font-bold uppercase">
+                  {formatIST(t.created_at)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* ALERT MODAL */}
+      {modalType && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4 backdrop-blur-sm">
+          <div className="bg-white w-full max-w-3xl max-h-[85vh] overflow-hidden rounded-[2rem] shadow-2xl flex flex-col border border-gray-100">
+            <div className={`p-6 text-white flex justify-between items-center ${modalType === 'low' ? 'bg-red-600' : 'bg-orange-500'}`}>
+              <h2 className="text-2xl font-black uppercase tracking-tighter italic">{modalType === 'low' ? 'CRITICAL LOW STOCK' : 'SURPLUS STOCK ALERT'}</h2>
+              <button onClick={() => setModalType(null)} className="bg-white text-gray-900 px-4 py-2 rounded-xl text-xs font-bold shadow-lg">Close</button>
+            </div>
+            <div className="p-6 overflow-y-auto">
+              <table className="w-full text-left">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="p-4 text-xs font-bold text-gray-500 uppercase">Product ID</th>
+                    <th className="p-4 text-xs font-bold text-gray-500 uppercase">Name</th>
+                    <th className="p-4 text-xs font-bold text-gray-500 uppercase">Stock</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(modalType === 'low' ? stats.lowAlertProducts : stats.highAlertProducts).map(p => (
+                    <tr key={p.id} className="hover:bg-gray-50 border-b last:border-0 transition-colors">
+                      <td className="p-4 font-bold text-[#0a2a5e] text-sm uppercase">{p.product_id}</td>
+                      <td className="p-4 text-xs text-gray-500 font-medium">{p.product_name}</td>
+                      <td className="p-4"><span className={`px-3 py-1 rounded-full text-xs font-black ${modalType === 'low' ? 'bg-red-100 text-red-700' : 'bg-orange-100 text-orange-700'}`}>{p.currentStock} Units</span></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
