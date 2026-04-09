@@ -62,7 +62,7 @@ export default function Scan() {
         transaction_type: form.transaction_type,
         quantity: Number(form.quantity),
         party: form.party,
-        employee: activeEmployee // ✅ FIX: Changed from 'created_by_email' to 'employee'
+        created_by_email: activeEmployee
       }]);
 
       if (error) throw error;

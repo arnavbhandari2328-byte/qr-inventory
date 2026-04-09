@@ -127,7 +127,7 @@ export default function Products() {
         // Fallback to localStorage just in case Supabase auth is slow
         const localEmail = localStorage.getItem("userEmail");
         const { data: { user } } = await supabase.auth.getUser();
-        const employeeEmail = user?.email || localEmail || "System Admin";
+        const activeEmployee = user?.email || localEmail || "System Admin";
 
         const bstr = evt.target.result;
         const wb = XLSX.read(bstr, { type: "binary" });
@@ -211,7 +211,7 @@ export default function Products() {
                   transaction_type: "inward",
                   quantity: stock,
                   party: "Bulk Opening Stock",
-                  employee: employeeEmail // ✅ FIX: Changed from created_by_email to employee
+                  created_by_email: activeEmployee
                   // ✅ NO TIMESTAMP: Let Supabase handle IST automatically
                 });
               }

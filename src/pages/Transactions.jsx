@@ -69,10 +69,7 @@ export default function Transactions() {
   // ✅ FIXED IST FORMATTER: Safely parses Supabase DB timestamps into Indian Standard Time
   const formatIST = (dbDateString) => {
     if (!dbDateString) return "-";
-    
-    // new Date() naturally understands Supabase's UTC format (+00:00)
     const date = new Date(dbDateString);
-    
     return date.toLocaleString("en-IN", {
       timeZone: "Asia/Kolkata",
       day: "2-digit",
@@ -91,14 +88,16 @@ export default function Transactions() {
     }
 
     try {
-      const { data: { user } } = await supabase.auth.getUser();
+      // ✅ FIX: Pull the active employee email from memory instead of relying on the slow auth check
+      const activeEmployee = localStorage.getItem("userEmail") || "Unknown User";
+
       const payload = {
         product_id: form.product_id,
         location_id: form.location_id,
         transaction_type: form.transaction_type,
         quantity: Number(form.quantity),
         party: form.party,
-        created_by_email: user?.email || "Manual Entry"
+        created_by_email: activeEmployee // ✅ FIX: Successfully maps the employee email to the database
       };
 
       if (editingId) {
