@@ -53,9 +53,8 @@ export default function Scan() {
     if (!form.location_id || !form.quantity) return alert("Select Location and Quantity");
 
     try {
-      // 👤 Identify the employee currently logged in
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) throw new Error("User session not found. Please log in again.");
+      // 1. Grab the active user email from local storage (set during login)
+      const activeEmployee = localStorage.getItem("userEmail") || "Unknown User";
 
       const { error } = await supabase.from("transactions").insert([{
         product_id: product.id,
@@ -63,11 +62,11 @@ export default function Scan() {
         transaction_type: form.transaction_type,
         quantity: Number(form.quantity),
         party: form.party,
-        created_by_email: user.email // ✅ Records which employee did the entry
+        employee: activeEmployee // ✅ FIX: Changed from 'created_by_email' to 'employee'
       }]);
 
       if (error) throw error;
-      alert(`Success! Recorded by ${user.email}`);
+      alert(`Success! Recorded by ${activeEmployee}`);
       navigate("/scan"); 
     } catch (err) {
       alert(`Save failed: ${err.message}`);
