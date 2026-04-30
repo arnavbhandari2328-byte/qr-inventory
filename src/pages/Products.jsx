@@ -2,12 +2,15 @@ import { useEffect, useState, useRef } from "react";
 import { supabase } from "../supabase";
 import * as XLSX from "xlsx";
 
+const STORAGE_KEY = "productDisplayOrder";
+
 export default function Products() {
   const [products, setProducts] = useState([]);
+  const [orderedIds, setOrderedIds] = useState([]);
   const [transactions, setTransactions] = useState([]);
-  const [locations, setLocations] = useState([]); 
+  const [locations, setLocations] = useState([]);
   const [search, setSearch] = useState("");
-  
+
   const [isAdmin, setIsAdmin] = useState(false);
 
   const [form, setForm] = useState({
@@ -20,11 +23,16 @@ export default function Products() {
   const [selectedProduct, setSelectedProduct] = useState(null);
   const [ledger, setLedger] = useState([]);
   const [editingId, setEditingId] = useState(null);
-  
+
+  // Drag state
+  const dragIndexRef = useRef(null);
+  const [dragOverIndex, setDragOverIndex] = useState(null);
+  const [isDragging, setIsDragging] = useState(false);
+
   const fileInputRef = useRef(null);
 
   useEffect(() => {
-    checkUserRole(); 
+    checkUserRole();
     loadProducts();
   }, []);
 
@@ -53,15 +61,110 @@ export default function Products() {
       setProducts(prod || []);
       setTransactions(formattedTrans);
       setLocations(loc || []);
+
+      // Apply saved order or default
+      const savedOrder = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
+      if (savedOrder.length > 0) {
+        const savedIds = savedOrder.filter(id => (prod || []).some(p => p.id === id));
+        const newIds = (prod || []).map(p => p.id).filter(id => !savedIds.includes(id));
+        setOrderedIds([...savedIds, ...newIds]);
+      } else {
+        setOrderedIds((prod || []).map(p => p.id));
+      }
     } catch (err) {
       console.error("Failed loading data from Supabase:", err.message);
     }
   };
 
-  // ✅ SIMPLE MODE: Displays the DB time exactly as it is (IST)
+  const saveOrder = (ids) => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(ids));
+  };
+
+  const resetOrder = () => {
+    const defaultIds = products.map(p => p.id);
+    setOrderedIds(defaultIds);
+    localStorage.removeItem(STORAGE_KEY);
+  };
+
+  // ── Drag handlers ──────────────────────────────────────────────
+  const handleDragStart = (e, index) => {
+    dragIndexRef.current = index;
+    setIsDragging(true);
+    e.dataTransfer.effectAllowed = "move";
+    // Transparent ghost image so row stays visible
+    const ghost = document.createElement("div");
+    ghost.style.position = "absolute";
+    ghost.style.top = "-9999px";
+    document.body.appendChild(ghost);
+    e.dataTransfer.setDragImage(ghost, 0, 0);
+    setTimeout(() => document.body.removeChild(ghost), 0);
+  };
+
+  const handleDragOver = (e, index) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    setDragOverIndex(index);
+  };
+
+  const handleDrop = (e, dropIndex) => {
+    e.preventDefault();
+    const fromIndex = dragIndexRef.current;
+    if (fromIndex === null || fromIndex === dropIndex) {
+      setDragOverIndex(null);
+      setIsDragging(false);
+      return;
+    }
+
+    const newIds = [...orderedIds];
+    const [moved] = newIds.splice(fromIndex, 1);
+    newIds.splice(dropIndex, 0, moved);
+    setOrderedIds(newIds);
+    saveOrder(newIds);
+
+    dragIndexRef.current = null;
+    setDragOverIndex(null);
+    setIsDragging(false);
+  };
+
+  const handleDragEnd = () => {
+    dragIndexRef.current = null;
+    setDragOverIndex(null);
+    setIsDragging(false);
+  };
+
+  // Touch drag support
+  const touchStartY = useRef(null);
+  const touchFromIndex = useRef(null);
+
+  const handleTouchStart = (e, index) => {
+    touchStartY.current = e.touches[0].clientY;
+    touchFromIndex.current = index;
+  };
+
+  const handleTouchEnd = (e, _index) => {
+    if (touchFromIndex.current === null) return;
+    const endY = e.changedTouches[0].clientY;
+    const rows = document.querySelectorAll("tr[data-drag-index]");
+    let dropIdx = touchFromIndex.current;
+    rows.forEach((row) => {
+      const rect = row.getBoundingClientRect();
+      const mid = rect.top + rect.height / 2;
+      if (endY > mid) dropIdx = Number(row.getAttribute("data-drag-index"));
+    });
+
+    if (dropIdx !== touchFromIndex.current) {
+      const newIds = [...orderedIds];
+      const [moved] = newIds.splice(touchFromIndex.current, 1);
+      newIds.splice(dropIdx, 0, moved);
+      setOrderedIds(newIds);
+      saveOrder(newIds);
+    }
+    touchFromIndex.current = null;
+  };
+  // ──────────────────────────────────────────────────────────────
+
   const formatTimeDisplay = (dbDateString) => {
     if (!dbDateString) return "-";
-    // This removes the 'T' and separates date/time clearly
     return dbDateString.replace('T', ' ').split('.')[0];
   };
 
@@ -71,36 +174,30 @@ export default function Products() {
         String(t.product_id) === String(productId) &&
         (t.location_name || "").toLowerCase() === locationName.toLowerCase()
     );
-
     let stock = 0;
     related.forEach((t) => {
       if (t.transaction_type === "inward") stock += Number(t.quantity);
       else stock -= Number(t.quantity);
     });
-
     return stock;
   };
 
   const openLedger = (product) => {
     setSelectedProduct(product);
-
     const filtered = transactions
       .filter((t) => String(t.product_id) === String(product.id))
       .sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
-
     let balance = 0;
     const calculated = filtered.map((t) => {
       if (t.transaction_type === "inward") balance += Number(t.quantity);
       else balance -= Number(t.quantity);
       return { ...t, balance };
     });
-
     setLedger(calculated);
   };
 
   const handleExportExcel = () => {
     if (!products.length) return;
-
     const data = products.map((p) => ({
       Product_ID: p.product_id,
       Product_Name: p.product_name,
@@ -110,7 +207,6 @@ export default function Products() {
       Low_Alert: p.low_stock_alert,
       High_Alert: p.high_stock_alert,
     }));
-
     const ws = XLSX.utils.json_to_sheet(data);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Products");
@@ -120,11 +216,9 @@ export default function Products() {
   const handleBulkUpload = (e) => {
     const file = e.target.files[0];
     if (!file) return;
-
     const reader = new FileReader();
     reader.onload = async (evt) => {
       try {
-        // Fallback to localStorage just in case Supabase auth is slow
         const localEmail = localStorage.getItem("userEmail");
         const { data: { user } } = await supabase.auth.getUser();
         const activeEmployee = user?.email || localEmail || "System Admin";
@@ -142,9 +236,7 @@ export default function Products() {
         const locationMap = [];
         locations.forEach(loc => {
           const match = headers.find(k => normalize(k) === normalize(loc.name));
-          if (match) {
-            locationMap.push({ id: loc.id, name: loc.name, headerKey: match });
-          }
+          if (match) locationMap.push({ id: loc.id, name: loc.name, headerKey: match });
         });
 
         if (locationMap.length === 0) {
@@ -158,18 +250,13 @@ export default function Products() {
 
         if (!highAlertKey) {
           const proceed = window.confirm(
-            `⚠️ WARNING: We couldn't find your "High Alert" column!\n\n` +
-            `The headers we successfully read from your file are:\n[ ${headers.join(", ")} ]\n\n` +
-            `Do you want to continue anyway and let High Alert default to 0?`
+            `⚠️ WARNING: We couldn't find your "High Alert" column!\n\nThe headers we successfully read from your file are:\n[ ${headers.join(", ")} ]\n\nDo you want to continue anyway and let High Alert default to 0?`
           );
-          if (!proceed) {
-             e.target.value = null;
-             return; 
-          }
+          if (!proceed) { e.target.value = null; return; }
         }
 
         const productsToUpsert = [];
-        const validRows = []; 
+        const validRows = [];
 
         data.forEach((row) => {
           if (idKey && row[idKey] && nameKey && row[nameKey]) {
@@ -177,7 +264,7 @@ export default function Products() {
               product_id: String(row[idKey]),
               product_name: String(row[nameKey]),
               low_stock_alert: Number(row[lowAlertKey] || 0),
-              high_stock_alert: Number(row[highAlertKey] || 0) 
+              high_stock_alert: Number(row[highAlertKey] || 0)
             });
             validRows.push(row);
           }
@@ -190,29 +277,26 @@ export default function Products() {
 
         const { data: upsertedProducts, error: prodErr } = await supabase
           .from("products")
-          .upsert(productsToUpsert, { onConflict: "product_id" }) 
-          .select("*"); 
+          .upsert(productsToUpsert, { onConflict: "product_id" })
+          .select("*");
 
         if (prodErr) throw prodErr;
 
         const transactionsToInsert = [];
-
         validRows.forEach((row) => {
           const pIdStr = String(row[idKey]);
           const dbProduct = upsertedProducts.find(p => p.product_id === pIdStr);
-
           if (dbProduct) {
             locationMap.forEach(loc => {
               const stock = Number(row[loc.headerKey] || 0);
               if (stock > 0) {
                 transactionsToInsert.push({
-                  product_id: dbProduct.id, 
-                  location_id: loc.id, 
+                  product_id: dbProduct.id,
+                  location_id: loc.id,
                   transaction_type: "inward",
                   quantity: stock,
                   party: "Bulk Opening Stock",
                   created_by_email: activeEmployee
-                  // ✅ NO TIMESTAMP: Let Supabase handle IST automatically
                 });
               }
             });
@@ -220,20 +304,17 @@ export default function Products() {
         });
 
         if (transactionsToInsert.length > 0) {
-          const { error: transErr } = await supabase
-            .from("transactions")
-            .insert(transactionsToInsert);
-          
+          const { error: transErr } = await supabase.from("transactions").insert(transactionsToInsert);
           if (transErr) throw transErr;
         }
 
         alert(`Success! Updated ${upsertedProducts.length} products and logged ${transactionsToInsert.length} stock allocations.`);
-        loadProducts(); 
+        loadProducts();
       } catch (err) {
         console.error("Bulk upload error:", err.message);
         alert(`Upload Failed: ${err.message}`);
       } finally {
-        e.target.value = null; 
+        e.target.value = null;
       }
     };
     reader.readAsBinaryString(file);
@@ -244,7 +325,6 @@ export default function Products() {
       alert("Please fill in the Product ID and Name.");
       return;
     }
-
     try {
       const payload = {
         product_id: form.product_id,
@@ -252,7 +332,6 @@ export default function Products() {
         low_stock_alert: Number(form.low_stock_alert || 0),
         high_stock_alert: Number(form.high_stock_alert || 0)
       };
-
       if (editingId) {
         const { error } = await supabase.from("products").update(payload).eq("id", editingId);
         if (error) throw error;
@@ -260,10 +339,9 @@ export default function Products() {
         const { error } = await supabase.from("products").insert([payload]);
         if (error) throw error;
       }
-
       setForm({ product_id: "", product_name: "", low_stock_alert: "", high_stock_alert: "" });
       setEditingId(null);
-      loadProducts(); 
+      loadProducts();
     } catch (err) {
       console.error("Failed to save product:", err.message);
       alert("Error saving product. Is the ID already taken?");
@@ -271,7 +349,7 @@ export default function Products() {
   };
 
   const handleEditClick = (e, product) => {
-    e.stopPropagation(); 
+    e.stopPropagation();
     setForm({
       product_id: product.product_id,
       product_name: product.product_name,
@@ -287,15 +365,9 @@ export default function Products() {
   };
 
   const handleDeleteProduct = async (e, productId) => {
-    e.stopPropagation(); 
-    
-    if (!isAdmin) {
-      alert("Unauthorized: Only the Master Admin can delete products.");
-      return;
-    }
-
+    e.stopPropagation();
+    if (!isAdmin) { alert("Unauthorized: Only the Master Admin can delete products."); return; }
     if (!window.confirm("Are you sure you want to delete this product?")) return;
-
     try {
       const { error } = await supabase.from("products").delete().eq("product_id", productId);
       if (error) throw error;
@@ -305,15 +377,20 @@ export default function Products() {
     }
   };
 
-  const filtered = products.filter(
+  const handleChange = (e) => {
+    setForm({ ...form, [e.target.name]: e.target.value });
+  };
+
+  // Build ordered + filtered list
+  const orderedProducts = orderedIds
+    .map(id => products.find(p => p.id === id))
+    .filter(Boolean);
+
+  const filtered = orderedProducts.filter(
     (p) =>
       p.product_name?.toLowerCase().includes(search.toLowerCase()) ||
       p.product_id?.toLowerCase().includes(search.toLowerCase())
   );
-
-  const handleChange = (e) => {
-    setForm({ ...form, [e.target.name]: e.target.value });
-  };
 
   return (
     <div className="p-6">
@@ -323,102 +400,143 @@ export default function Products() {
       <div className="bg-white shadow rounded p-4 mb-6 flex gap-3 items-center flex-wrap">
         <input name="product_id" placeholder="Product ID" value={form.product_id} onChange={handleChange} className="border p-2 rounded flex-1 min-w-[150px]" />
         <input name="product_name" placeholder="Product Name" value={form.product_name} onChange={handleChange} className="border p-2 rounded flex-1 min-w-[150px]" />
-        
         <input name="low_stock_alert" placeholder="Low Alert Qty" type="number" value={form.low_stock_alert} onChange={handleChange} className="border p-2 rounded w-32" />
         <input name="high_stock_alert" placeholder="High Alert Qty" type="number" value={form.high_stock_alert} onChange={handleChange} className="border p-2 rounded w-32" />
-        
         <button onClick={handleSaveProduct} className={`text-white px-6 py-2 rounded ${editingId ? 'bg-orange-500 hover:bg-orange-600' : 'bg-blue-600 hover:bg-blue-700'}`}>
           {editingId ? "Update" : "Add"}
         </button>
-        
         {editingId && (
-          <button onClick={cancelEdit} className="bg-gray-400 hover:bg-gray-500 text-white px-4 py-2 rounded">
-            Cancel
-          </button>
+          <button onClick={cancelEdit} className="bg-gray-400 hover:bg-gray-500 text-white px-4 py-2 rounded">Cancel</button>
         )}
 
         <div className="ml-auto flex gap-2 items-center">
-          <input 
-            type="file" 
-            accept=".xlsx, .xls, .csv" 
-            style={{ display: "none" }} 
-            ref={fileInputRef} 
-            onChange={handleBulkUpload} 
-          />
-          
+          <input type="file" accept=".xlsx, .xls, .csv" style={{ display: "none" }} ref={fileInputRef} onChange={handleBulkUpload} />
           <div className="flex flex-col items-end">
-            <button 
-              onClick={() => fileInputRef.current.click()} 
-              className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded transition-colors"
-            >
+            <button onClick={() => fileInputRef.current.click()} className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded transition-colors">
               Bulk Upload
             </button>
             <span className="text-xs text-gray-500 mt-1">Headers: Product ID, Product Name, Low Alert, High Alert, Office, Godown, Warehouse</span>
           </div>
-          
           <button onClick={handleExportExcel} className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded transition-colors self-start">
             Export Excel
           </button>
         </div>
       </div>
 
-      <input placeholder="Search by ID or Name..." value={search} onChange={(e) => setSearch(e.target.value)} className="border p-2 rounded w-full mb-4" />
+      {/* SEARCH + RESET ORDER */}
+      <div className="flex gap-3 items-center mb-4">
+        <input
+          placeholder="Search by ID or Name..."
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          className="border p-2 rounded flex-1"
+        />
+        <button
+          onClick={resetOrder}
+          title="Restore default product order"
+          className="bg-gray-200 hover:bg-gray-300 text-gray-700 text-sm font-semibold px-4 py-2 rounded transition-colors whitespace-nowrap"
+        >
+          ↺ Reset Order
+        </button>
+      </div>
 
       {/* TABLE */}
       <div className="bg-white shadow rounded overflow-hidden">
         <table className="w-full">
           <thead className="bg-gray-100 border-b">
             <tr className="text-left text-gray-700">
+              <th className="p-3 w-10 text-gray-400 text-xs uppercase">Order</th>
               <th className="p-3">Product ID</th>
               <th className="p-3">Product Name</th>
               <th className="p-3">Office</th>
               <th className="p-3">Godown</th>
               <th className="p-3">Warehouse</th>
               <th className="p-3">Low Alert</th>
-              <th className="p-3">High Alert</th> 
+              <th className="p-3">High Alert</th>
               <th className="p-3">Action</th>
             </tr>
           </thead>
           <tbody>
             {filtered.length === 0 ? (
-              <tr><td colSpan="8" className="p-4 text-gray-500 text-center">No products found</td></tr>
+              <tr><td colSpan="9" className="p-4 text-gray-500 text-center">No products found</td></tr>
             ) : (
-              filtered.map((p) => (
-                <tr key={p.id} className="border-b hover:bg-blue-50 cursor-pointer" onClick={() => openLedger(p)}>
-                  <td className="p-3 font-medium">{p.product_id}</td>
-                  <td className="p-3">{p.product_name}</td>
-                  <td className="p-3 font-semibold text-blue-600">{stockByLocation(p.id, "Office")}</td>
-                  <td className="p-3 font-semibold text-purple-600">{stockByLocation(p.id, "Godown")}</td>
-                  <td className="p-3 font-semibold text-green-600">{stockByLocation(p.id, "Warehouse")}</td>
-                  <td className="p-3">
-                    <span className="px-3 py-1 rounded-full bg-red-100 text-red-600 text-sm font-semibold">
-                      {p.low_stock_alert}
-                    </span>
-                  </td>
-                  <td className="p-3">
-                    <span className="px-3 py-1 rounded-full bg-orange-100 text-orange-600 text-sm font-semibold">
-                      {p.high_stock_alert || 0}
-                    </span>
-                  </td>
-                  <td className="p-3 flex gap-2">
-                    <button 
-                      onClick={(e) => handleEditClick(e, p)} 
-                      className="text-blue-600 hover:text-blue-800 font-semibold px-3 py-1 bg-blue-50 rounded hover:bg-blue-100 transition-colors"
+              filtered.map((p, index) => {
+                const isDraggedRow = isDragging && dragIndexRef.current === index;
+                const isDropTarget = dragOverIndex === index && dragIndexRef.current !== index;
+
+                return (
+                  <tr
+                    key={p.id}
+                    data-drag-index={index}
+                    draggable
+                    onDragStart={(e) => handleDragStart(e, index)}
+                    onDragOver={(e) => handleDragOver(e, index)}
+                    onDrop={(e) => handleDrop(e, index)}
+                    onDragEnd={handleDragEnd}
+                    onTouchStart={(e) => handleTouchStart(e, index)}
+                    onTouchEnd={(e) => handleTouchEnd(e, index)}
+                    onClick={() => openLedger(p)}
+                    className={`border-b cursor-pointer transition-all
+                      ${isDraggedRow ? "opacity-40 bg-blue-50" : ""}
+                      ${isDropTarget ? "border-t-2 border-t-blue-500 bg-blue-50" : "hover:bg-blue-50"}
+                    `}
+                  >
+                    {/* DRAG HANDLE */}
+                    <td
+                      className="p-3 text-gray-400 cursor-grab active:cursor-grabbing select-none"
+                      onClick={(e) => e.stopPropagation()}
+                      title="Drag to reorder"
                     >
-                      Edit
-                    </button>
-                    
-                    {isAdmin && (
-                      <button 
-                        onClick={(e) => handleDeleteProduct(e, p.product_id)} 
-                        className="text-red-500 hover:text-red-700 font-semibold px-3 py-1 bg-red-50 rounded hover:bg-red-100 transition-colors"
+                      <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        width="16" height="16"
+                        viewBox="0 0 24 24"
+                        fill="currentColor"
+                        className="mx-auto hover:text-gray-600 transition-colors"
                       >
-                        Delete
+                        <circle cx="9" cy="5" r="1.5"/>
+                        <circle cx="15" cy="5" r="1.5"/>
+                        <circle cx="9" cy="12" r="1.5"/>
+                        <circle cx="15" cy="12" r="1.5"/>
+                        <circle cx="9" cy="19" r="1.5"/>
+                        <circle cx="15" cy="19" r="1.5"/>
+                      </svg>
+                    </td>
+
+                    <td className="p-3 font-medium">{p.product_id}</td>
+                    <td className="p-3">{p.product_name}</td>
+                    <td className="p-3 font-semibold text-blue-600">{stockByLocation(p.id, "Office")}</td>
+                    <td className="p-3 font-semibold text-purple-600">{stockByLocation(p.id, "Godown")}</td>
+                    <td className="p-3 font-semibold text-green-600">{stockByLocation(p.id, "Warehouse")}</td>
+                    <td className="p-3">
+                      <span className="px-3 py-1 rounded-full bg-red-100 text-red-600 text-sm font-semibold">
+                        {p.low_stock_alert}
+                      </span>
+                    </td>
+                    <td className="p-3">
+                      <span className="px-3 py-1 rounded-full bg-orange-100 text-orange-600 text-sm font-semibold">
+                        {p.high_stock_alert || 0}
+                      </span>
+                    </td>
+                    <td className="p-3 flex gap-2" onClick={(e) => e.stopPropagation()}>
+                      <button
+                        onClick={(e) => handleEditClick(e, p)}
+                        className="text-blue-600 hover:text-blue-800 font-semibold px-3 py-1 bg-blue-50 rounded hover:bg-blue-100 transition-colors"
+                      >
+                        Edit
                       </button>
-                    )}
-                  </td>
-                </tr>
-              ))
+                      {isAdmin && (
+                        <button
+                          onClick={(e) => handleDeleteProduct(e, p.product_id)}
+                          className="text-red-500 hover:text-red-700 font-semibold px-3 py-1 bg-red-50 rounded hover:bg-red-100 transition-colors"
+                        >
+                          Delete
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })
             )}
           </tbody>
         </table>
@@ -432,7 +550,6 @@ export default function Products() {
               <h2 className="text-2xl font-bold">Ledger — {selectedProduct.product_name}</h2>
               <button onClick={() => setSelectedProduct(null)} className="bg-red-500 text-white px-4 py-1 rounded hover:bg-red-600 transition-colors">Close</button>
             </div>
-
             <table className="w-full border">
               <thead className="bg-gray-100">
                 <tr>
@@ -448,7 +565,6 @@ export default function Products() {
                   <tr><td colSpan="5" className="p-4 text-gray-500 text-center">No transactions</td></tr>
                 ) : ledger.map((l) => (
                   <tr key={l.id}>
-                    {/* ✅ Uses formatTimeDisplay for consistent IST readout */}
                     <td className="border p-2">{formatTimeDisplay(l.created_at)}</td>
                     <td className={`border p-2 font-semibold ${l.transaction_type === "inward" ? "text-green-600" : "text-red-600"}`}>{l.transaction_type}</td>
                     <td className="border p-2 text-sm text-gray-700 font-semibold">{l.party || "-"}</td>
