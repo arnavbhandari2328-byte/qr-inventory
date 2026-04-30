@@ -272,40 +272,6 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* RECENT TRANSACTIONS TABLE */}
-      <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
-        <h2 className="text-xl font-bold text-gray-800 mb-4 tracking-tight uppercase">Recent Warehouse Activity</h2>
-        <div className="overflow-x-auto">
-          <table className="w-full text-left">
-            <thead>
-              <tr className="border-b border-gray-100">
-                <th className="pb-3 text-xs font-bold text-gray-400 uppercase">Item</th>
-                <th className="pb-3 text-xs font-bold text-gray-400 uppercase">Type</th>
-                <th className="pb-3 text-xs font-bold text-gray-400 uppercase">Qty</th>
-                <th className="pb-3 text-xs font-bold text-gray-400 uppercase">Time</th>
-              </tr>
-            </thead>
-            <tbody>
-              {stats.recentTransactions.map(t => (
-                <tr key={t.id} className="border-b border-gray-50 last:border-0 hover:bg-gray-50 transition-colors">
-                  <td className="py-3 text-sm font-bold text-gray-700 uppercase">
-                    {t.products?.product_id || "Unknown"}
-                  </td>
-                  <td className="py-3">
-                    <span className={`text-[10px] font-black px-2 py-1 rounded-full uppercase ${t.transaction_type === 'inward' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-                      {t.transaction_type}
-                    </span>
-                  </td>
-                  <td className="py-3 text-sm font-bold">{t.quantity}</td>
-                  <td className="py-3 text-[10px] text-gray-400 font-bold uppercase">
-                  {formatIST(t.created_at)}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
 
       {/* ALERT MODAL */}
       {modalType && (
