@@ -18,17 +18,15 @@ export default function Dashboard() {
     pieData: [],
     activityData: [],
     lowAlertProducts: [], 
-    highAlertProducts: [],
-    tallyData: [] // last transaction date per product
+    highAlertProducts: []
   });
   
   const [loading, setLoading] = useState(true);
-  const [modalType, setModalType] = useState(null); // 'low' | 'high' | 'tally'
+  const [modalType, setModalType] = useState(null); // 'low' | 'high'
 
   const [question, setQuestion] = useState("");
   const [aiResponse, setAiResponse] = useState("");
   const [isAsking, setIsAsking] = useState(false);
-  const [tallySearch, setTallySearch] = useState("");
 
   // 5 colors for pie: Polish Pipe, NB Pipe, Seamless Pipe, Sheets, Others
   const COLORS = ["#3B82F6", "#10B981", "#F59E0B", "#EC4899", "#8B5CF6"];
@@ -57,20 +55,11 @@ export default function Dashboard() {
       let polish = 0, seamless = 0, nb = 0, sheets = 0, other = 0;
       const stockMap = {};
       const dailyMap = {};
-      // Track last transaction date per product_id (db uuid)
-      const lastTransMap = {};
 
       (allTrans || []).forEach(t => {
         const adjustedQty = t.transaction_type === "inward" ? Number(t.quantity) : -Number(t.quantity);
         totalStock += adjustedQty;
         if (t.product_id) stockMap[t.product_id] = (stockMap[t.product_id] || 0) + adjustedQty;
-
-        // Track latest transaction date per product
-        if (t.product_id && t.created_at) {
-          if (!lastTransMap[t.product_id] || new Date(t.created_at) > new Date(lastTransMap[t.product_id])) {
-            lastTransMap[t.product_id] = t.created_at;
-          }
-        }
 
         const pId = (t.products?.product_id || "").toUpperCase();
         const pName = (t.products?.product_name || "").toUpperCase();
@@ -104,18 +93,6 @@ export default function Dashboard() {
         if (p.high_stock_alert > 0 && currentStock >= p.high_stock_alert) highList.push({ ...p, currentStock });
       });
 
-      // Build tally data: all products with their last-updated date
-      const tallyData = (productsData || []).map(p => ({
-        ...p,
-        currentStock: stockMap[p.id] || 0,
-        lastUpdated: lastTransMap[p.id] || null
-      })).sort((a, b) => {
-        // Products never updated appear at bottom
-        if (!a.lastUpdated) return 1;
-        if (!b.lastUpdated) return -1;
-        return new Date(b.lastUpdated) - new Date(a.lastUpdated);
-      });
-
       setStats({
         totalProducts: productsData?.length || 0,
         totalStock,
@@ -131,8 +108,7 @@ export default function Dashboard() {
           { name: "Others",      value: Math.max(0, other) }
         ].filter(item => item.value > 0),
         lowAlertProducts: lowList,
-        highAlertProducts: highList,
-        tallyData
+        highAlertProducts: highList
       });
     } catch (err) {
       console.error("Dashboard error:", err.message);
@@ -188,43 +164,14 @@ export default function Dashboard() {
     });
   };
 
-  const formatTallyDate = (dbDateString) => {
-    if (!dbDateString) return null;
-    return new Date(dbDateString).toLocaleDateString("en-IN", {
-      timeZone: "Asia/Kolkata",
-      day: "2-digit", month: "short", year: "numeric"
-    });
-  };
-
-  const daysSince = (dbDateString) => {
-    if (!dbDateString) return null;
-    const diff = Date.now() - new Date(dbDateString).getTime();
-    return Math.floor(diff / (1000 * 60 * 60 * 24));
-  };
-
-  const filteredTally = stats.tallyData.filter(p =>
-    p.product_name?.toLowerCase().includes(tallySearch.toLowerCase()) ||
-    p.product_id?.toLowerCase().includes(tallySearch.toLowerCase())
-  );
-
   if (loading) return <div className="p-8 font-bold text-gray-500">Loading Dashboard...</div>;
 
   return (
     <div className="p-6 md:p-8">
 
-      {/* HEADER ROW: title + Tally Now button */}
+      {/* HEADER */}
       <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
         <h1 className="text-3xl font-bold text-gray-800 tracking-tight">Warehouse Intelligence</h1>
-        <button
-          onClick={() => { setModalType('tally'); setTallySearch(''); }}
-          className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold px-5 py-2.5 rounded-xl shadow transition-all text-sm"
-        >
-          <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-            <path d="M9 11l3 3L22 4"/>
-            <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
-          </svg>
-          Tally Now
-        </button>
       </div>
 
       {/* AI Assistant */}
@@ -297,7 +244,7 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* PIE CHART — now 5 categories */}
+        {/* PIE CHART — 5 categories */}
         <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 flex flex-col items-center">
           <h2 className="text-xl font-bold text-gray-800 mb-6 self-start uppercase tracking-tight">Stock Distribution</h2>
           <div className="h-72 w-full">
@@ -326,105 +273,39 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* ALERT + TALLY MODAL */}
+      {/* LOW / HIGH ALERT MODAL */}
       {modalType && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4 backdrop-blur-sm">
           <div className="bg-white w-full max-w-3xl max-h-[85vh] overflow-hidden rounded-[2rem] shadow-2xl flex flex-col border border-gray-100">
-
-            {/* Modal header */}
-            {modalType === 'tally' ? (
-              <div className="p-6 bg-indigo-600 text-white flex justify-between items-center">
-                <div>
-                  <h2 className="text-2xl font-black uppercase tracking-tighter italic">📋 Tally Status</h2>
-                  <p className="text-indigo-200 text-xs mt-1">Last ledger update date for each product</p>
-                </div>
-                <button onClick={() => setModalType(null)} className="bg-white text-gray-900 px-4 py-2 rounded-xl text-xs font-bold shadow-lg">Close</button>
-              </div>
-            ) : (
-              <div className={`p-6 text-white flex justify-between items-center ${modalType === 'low' ? 'bg-red-600' : 'bg-orange-500'}`}>
-                <h2 className="text-2xl font-black uppercase tracking-tighter italic">{modalType === 'low' ? 'CRITICAL LOW STOCK' : 'SURPLUS STOCK ALERT'}</h2>
-                <button onClick={() => setModalType(null)} className="bg-white text-gray-900 px-4 py-2 rounded-xl text-xs font-bold shadow-lg">Close</button>
-              </div>
-            )}
-
-            {/* Modal body */}
+            <div className={`p-6 text-white flex justify-between items-center ${modalType === 'low' ? 'bg-red-600' : 'bg-orange-500'}`}>
+              <h2 className="text-2xl font-black uppercase tracking-tighter italic">
+                {modalType === 'low' ? 'CRITICAL LOW STOCK' : 'SURPLUS STOCK ALERT'}
+              </h2>
+              <button onClick={() => setModalType(null)} className="bg-white text-gray-900 px-4 py-2 rounded-xl text-xs font-bold shadow-lg">Close</button>
+            </div>
             <div className="p-6 overflow-y-auto">
-
-              {/* TALLY body */}
-              {modalType === 'tally' && (
-                <>
-                  <input
-                    placeholder="Search product..."
-                    value={tallySearch}
-                    onChange={e => setTallySearch(e.target.value)}
-                    className="w-full border p-2 rounded-xl mb-4 text-sm outline-none focus:border-indigo-400"
-                  />
-                  <table className="w-full text-left">
-                    <thead className="bg-gray-50 sticky top-0">
-                      <tr>
-                        <th className="p-3 text-xs font-bold text-gray-500 uppercase">Product ID</th>
-                        <th className="p-3 text-xs font-bold text-gray-500 uppercase">Product Name</th>
-                        <th className="p-3 text-xs font-bold text-gray-500 uppercase">Stock</th>
-                        <th className="p-3 text-xs font-bold text-gray-500 uppercase">Last Updated</th>
-                        <th className="p-3 text-xs font-bold text-gray-500 uppercase">Days Ago</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {filteredTally.map(p => {
-                        const days = daysSince(p.lastUpdated);
-                        const dateLabel = formatTallyDate(p.lastUpdated);
-                        return (
-                          <tr key={p.id} className="border-b last:border-0 hover:bg-gray-50 transition-colors">
-                            <td className="p-3 font-bold text-indigo-700 text-sm uppercase">{p.product_id}</td>
-                            <td className="p-3 text-sm text-gray-700">{p.product_name}</td>
-                            <td className="p-3">
-                              <span className="px-2 py-1 rounded-full bg-blue-100 text-blue-700 text-xs font-bold">{p.currentStock}</span>
-                            </td>
-                            <td className="p-3 text-sm font-semibold text-gray-700">
-                              {dateLabel || <span className="text-gray-400 italic">No transactions</span>}
-                            </td>
-                            <td className="p-3">
-                              {days === null ? (
-                                <span className="px-2 py-1 rounded-full bg-gray-100 text-gray-400 text-xs font-bold">Never</span>
-                              ) : days === 0 ? (
-                                <span className="px-2 py-1 rounded-full bg-green-100 text-green-700 text-xs font-bold">Today</span>
-                              ) : days <= 3 ? (
-                                <span className="px-2 py-1 rounded-full bg-green-100 text-green-700 text-xs font-bold">{days}d ago</span>
-                              ) : days <= 7 ? (
-                                <span className="px-2 py-1 rounded-full bg-yellow-100 text-yellow-700 text-xs font-bold">{days}d ago</span>
-                              ) : (
-                                <span className="px-2 py-1 rounded-full bg-red-100 text-red-600 text-xs font-bold">{days}d ago</span>
-                              )}
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </>
-              )}
-
-              {/* LOW / HIGH alert body */}
-              {(modalType === 'low' || modalType === 'high') && (
-                <table className="w-full text-left">
-                  <thead className="bg-gray-50">
-                    <tr>
-                      <th className="p-4 text-xs font-bold text-gray-500 uppercase">Product ID</th>
-                      <th className="p-4 text-xs font-bold text-gray-500 uppercase">Name</th>
-                      <th className="p-4 text-xs font-bold text-gray-500 uppercase">Stock</th>
+              <table className="w-full text-left">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="p-4 text-xs font-bold text-gray-500 uppercase">Product ID</th>
+                    <th className="p-4 text-xs font-bold text-gray-500 uppercase">Name</th>
+                    <th className="p-4 text-xs font-bold text-gray-500 uppercase">Stock</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(modalType === 'low' ? stats.lowAlertProducts : stats.highAlertProducts).map(p => (
+                    <tr key={p.id} className="hover:bg-gray-50 border-b last:border-0 transition-colors">
+                      <td className="p-4 font-bold text-[#0a2a5e] text-sm uppercase">{p.product_id}</td>
+                      <td className="p-4 text-xs text-gray-500 font-medium">{p.product_name}</td>
+                      <td className="p-4">
+                        <span className={`px-3 py-1 rounded-full text-xs font-black ${modalType === 'low' ? 'bg-red-100 text-red-700' : 'bg-orange-100 text-orange-700'}`}>
+                          {p.currentStock} Units
+                        </span>
+                      </td>
                     </tr>
-                  </thead>
-                  <tbody>
-                    {(modalType === 'low' ? stats.lowAlertProducts : stats.highAlertProducts).map(p => (
-                      <tr key={p.id} className="hover:bg-gray-50 border-b last:border-0 transition-colors">
-                        <td className="p-4 font-bold text-[#0a2a5e] text-sm uppercase">{p.product_id}</td>
-                        <td className="p-4 text-xs text-gray-500 font-medium">{p.product_name}</td>
-                        <td className="p-4"><span className={`px-3 py-1 rounded-full text-xs font-black ${modalType === 'low' ? 'bg-red-100 text-red-700' : 'bg-orange-100 text-orange-700'}`}>{p.currentStock} Units</span></td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
+                  ))}
+                </tbody>
+              </table>
             </div>
           </div>
         </div>

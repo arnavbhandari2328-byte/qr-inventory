@@ -10,15 +10,17 @@ export default function Products() {
   const [transactions, setTransactions] = useState([]);
   const [locations, setLocations] = useState([]);
   const [search, setSearch] = useState("");
-
   const [isAdmin, setIsAdmin] = useState(false);
+
+  // Latest tally log entry
+  const [latestTally, setLatestTally] = useState(null);
+  const [tallyLoading, setTallyLoading] = useState(false);
 
   const [form, setForm] = useState({
     product_id: "",
     product_name: "",
     low_stock_alert: "",
     high_stock_alert: "",
-    // Edit-only stock adjustment fields
     adj_location_id: "",
     adj_quantity: "",
     adj_type: "inward",
@@ -39,12 +41,47 @@ export default function Products() {
   useEffect(() => {
     checkUserRole();
     loadProducts();
+    loadLatestTally();
   }, []);
 
   const checkUserRole = async () => {
     const { data: { user } } = await supabase.auth.getUser();
-    if (user?.email === "niveemetals@gmail.com") {
-      setIsAdmin(true);
+    if (user?.email === "niveemetals@gmail.com") setIsAdmin(true);
+  };
+
+  const loadLatestTally = async () => {
+    try {
+      const { data, error } = await supabase
+        .from("tally_logs")
+        .select("*")
+        .order("tallied_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (error) throw error;
+      setLatestTally(data || null);
+    } catch (err) {
+      console.error("Failed to load tally log:", err.message);
+    }
+  };
+
+  const handleTallyNow = async () => {
+    if (!window.confirm("Mark all products as tallied right now?")) return;
+    setTallyLoading(true);
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      const email = user?.email || "unknown";
+      const { error } = await supabase.from("tally_logs").insert([{
+        tallied_at: new Date().toISOString(),
+        tallied_by: email
+      }]);
+      if (error) throw error;
+      await loadLatestTally();
+      alert("✅ Tally recorded successfully!");
+    } catch (err) {
+      console.error("Tally error:", err.message);
+      alert("Error recording tally: " + err.message);
+    } finally {
+      setTallyLoading(false);
     }
   };
 
@@ -81,7 +118,6 @@ export default function Products() {
   };
 
   const saveOrder = (ids) => localStorage.setItem(STORAGE_KEY, JSON.stringify(ids));
-
   const resetOrder = () => {
     setOrderedIds(products.map(p => p.id));
     localStorage.removeItem(STORAGE_KEY);
@@ -155,10 +191,13 @@ export default function Products() {
     return dbDateString.replace('T', ' ').split('.')[0];
   };
 
-  const formatLastUpdatedDate = (dbDateString) => {
+  const formatTallyDisplay = (dbDateString) => {
     if (!dbDateString) return null;
-    const d = new Date(dbDateString);
-    return d.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
+    return new Date(dbDateString).toLocaleString("en-IN", {
+      timeZone: "Asia/Kolkata",
+      day: "2-digit", month: "short", year: "numeric",
+      hour: "2-digit", minute: "2-digit", hour12: true
+    });
   };
 
   const stockByLocation = (productId, locationName) => {
@@ -293,12 +332,9 @@ export default function Products() {
         low_stock_alert: Number(form.low_stock_alert || 0),
         high_stock_alert: Number(form.high_stock_alert || 0)
       };
-
       if (editingId) {
         const { error } = await supabase.from("products").update(payload).eq("id", editingId);
         if (error) throw error;
-
-        // If location + quantity are provided, log a stock transaction too
         if (form.adj_location_id && form.adj_quantity && Number(form.adj_quantity) > 0) {
           const { data: { user } } = await supabase.auth.getUser();
           const { error: transErr } = await supabase.from("transactions").insert([{
@@ -315,7 +351,6 @@ export default function Products() {
         const { error } = await supabase.from("products").insert([payload]);
         if (error) throw error;
       }
-
       setForm({ product_id: "", product_name: "", low_stock_alert: "", high_stock_alert: "", adj_location_id: "", adj_quantity: "", adj_type: "inward", adj_party: "" });
       setEditingId(null);
       loadProducts();
@@ -338,7 +373,6 @@ export default function Products() {
       adj_party: "",
     });
     setEditingId(product.id);
-    // Scroll to top so user sees the form
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
@@ -370,11 +404,32 @@ export default function Products() {
 
   return (
     <div className="p-6">
-      <h1 className="text-3xl font-bold mb-4">Products</h1>
+      {/* PAGE HEADER */}
+      <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
+        <h1 className="text-3xl font-bold">Products</h1>
+        <button
+          onClick={handleTallyNow}
+          disabled={tallyLoading}
+          className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-bold px-5 py-2.5 rounded-xl shadow transition-all text-sm"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+            <path d="M9 11l3 3L22 4"/>
+            <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
+          </svg>
+          {tallyLoading ? "Saving..." : "📋 Tally Now"}
+        </button>
+      </div>
+
+      {/* Last tally info bar */}
+      {latestTally && (
+        <div className="mb-4 px-4 py-2 bg-indigo-50 border border-indigo-200 rounded-xl text-sm text-indigo-700 flex items-center gap-2">
+          <span>✅</span>
+          <span>Last tallied on <strong>{formatTallyDisplay(latestTally.tallied_at)}</strong> by {latestTally.tallied_by}</span>
+        </div>
+      )}
 
       {/* ADD / EDIT FORM */}
       <div className="bg-white shadow rounded p-4 mb-6">
-        {/* Row 1: core product fields */}
         <div className="flex gap-3 items-center flex-wrap">
           <input name="product_id" placeholder="Product ID" value={form.product_id} onChange={handleChange} disabled={!!editingId} className="border p-2 rounded flex-1 min-w-[150px] disabled:bg-gray-100" />
           <input name="product_name" placeholder="Product Name" value={form.product_name} onChange={handleChange} className="border p-2 rounded flex-1 min-w-[150px]" />
@@ -382,9 +437,7 @@ export default function Products() {
           <input name="high_stock_alert" placeholder="High Alert Qty" type="number" value={form.high_stock_alert} onChange={handleChange} className="border p-2 rounded w-32" />
 
           {!editingId && (
-            <button onClick={handleSaveProduct} className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded">
-              Add
-            </button>
+            <button onClick={handleSaveProduct} className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded">Add</button>
           )}
 
           {!editingId && (
@@ -403,77 +456,22 @@ export default function Products() {
           )}
         </div>
 
-        {/* Row 2: stock adjustment — only visible in edit mode */}
         {editingId && (
           <div className="mt-4 pt-4 border-t border-dashed border-orange-300">
             <p className="text-xs font-semibold text-orange-600 uppercase tracking-wide mb-3">📦 Stock Adjustment (optional)</p>
             <div className="flex gap-3 items-center flex-wrap">
-              {/* Location dropdown */}
-              <select
-                name="adj_location_id"
-                value={form.adj_location_id}
-                onChange={handleChange}
-                className="border p-2 rounded flex-1 min-w-[140px] bg-white"
-              >
+              <select name="adj_location_id" value={form.adj_location_id} onChange={handleChange} className="border p-2 rounded flex-1 min-w-[140px] bg-white">
                 <option value="">— Select Location —</option>
-                {locations.map(loc => (
-                  <option key={loc.id} value={loc.id}>{loc.name}</option>
-                ))}
+                {locations.map(loc => (<option key={loc.id} value={loc.id}>{loc.name}</option>))}
               </select>
-
-              {/* Inward / Outward toggle */}
               <div className="flex rounded overflow-hidden border">
-                <button
-                  type="button"
-                  onClick={() => setForm(f => ({ ...f, adj_type: "inward" }))}
-                  className={`px-4 py-2 text-sm font-semibold transition-colors ${
-                    form.adj_type === "inward"
-                      ? "bg-green-600 text-white"
-                      : "bg-white text-gray-600 hover:bg-gray-50"
-                  }`}
-                >
-                  ▲ Inward
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setForm(f => ({ ...f, adj_type: "outward" }))}
-                  className={`px-4 py-2 text-sm font-semibold transition-colors ${
-                    form.adj_type === "outward"
-                      ? "bg-red-500 text-white"
-                      : "bg-white text-gray-600 hover:bg-gray-50"
-                  }`}
-                >
-                  ▼ Outward
-                </button>
+                <button type="button" onClick={() => setForm(f => ({ ...f, adj_type: "inward" }))} className={`px-4 py-2 text-sm font-semibold transition-colors ${form.adj_type === "inward" ? "bg-green-600 text-white" : "bg-white text-gray-600 hover:bg-gray-50"}`}>▲ Inward</button>
+                <button type="button" onClick={() => setForm(f => ({ ...f, adj_type: "outward" }))} className={`px-4 py-2 text-sm font-semibold transition-colors ${form.adj_type === "outward" ? "bg-red-500 text-white" : "bg-white text-gray-600 hover:bg-gray-50"}`}>▼ Outward</button>
               </div>
-
-              {/* Quantity */}
-              <input
-                name="adj_quantity"
-                placeholder="Quantity"
-                type="number"
-                min="0"
-                value={form.adj_quantity}
-                onChange={handleChange}
-                className="border p-2 rounded w-32"
-              />
-
-              {/* Party / Remark */}
-              <input
-                name="adj_party"
-                placeholder="Party / Remark (optional)"
-                value={form.adj_party}
-                onChange={handleChange}
-                className="border p-2 rounded flex-1 min-w-[180px]"
-              />
-
-              {/* Update button */}
-              <button onClick={handleSaveProduct} className="bg-orange-500 hover:bg-orange-600 text-white px-6 py-2 rounded font-semibold">
-                Update
-              </button>
-              <button onClick={cancelEdit} className="bg-gray-400 hover:bg-gray-500 text-white px-4 py-2 rounded">
-                Cancel
-              </button>
+              <input name="adj_quantity" placeholder="Quantity" type="number" min="0" value={form.adj_quantity} onChange={handleChange} className="border p-2 rounded w-32" />
+              <input name="adj_party" placeholder="Party / Remark (optional)" value={form.adj_party} onChange={handleChange} className="border p-2 rounded flex-1 min-w-[180px]" />
+              <button onClick={handleSaveProduct} className="bg-orange-500 hover:bg-orange-600 text-white px-6 py-2 rounded font-semibold">Update</button>
+              <button onClick={cancelEdit} className="bg-gray-400 hover:bg-gray-500 text-white px-4 py-2 rounded">Cancel</button>
             </div>
             <p className="text-xs text-gray-400 mt-2">Leave Location &amp; Quantity blank to update product details only without logging a transaction.</p>
           </div>
@@ -590,20 +588,20 @@ export default function Products() {
               </tbody>
             </table>
 
-            {/* Last updated footer */}
-            {ledger.length > 0 && (() => {
-              const lastEntry = ledger[ledger.length - 1];
-              const lastDate = formatLastUpdatedDate(lastEntry.created_at);
-              return (
-                <div className="mt-4 pt-4 border-t border-gray-200 flex items-center gap-2">
-                  <span className="text-lg">📅</span>
-                  <span className="text-sm text-gray-500">This stock was last updated on</span>
-                  <span className="text-sm font-bold text-gray-800 bg-green-50 border border-green-200 px-3 py-1 rounded-full">
-                    {lastDate}
-                  </span>
-                </div>
-              );
-            })()}
+            {/* Tally footer */}
+            <div className="mt-4 pt-4 border-t border-gray-200 flex items-center gap-2">
+              <span className="text-lg">📋</span>
+              {latestTally ? (
+                <span className="text-sm text-gray-600">
+                  This stock was tallied latest on{" "}
+                  <strong className="text-indigo-700 bg-indigo-50 border border-indigo-200 px-3 py-1 rounded-full">
+                    {formatTallyDisplay(latestTally.tallied_at)}
+                  </strong>
+                </span>
+              ) : (
+                <span className="text-sm text-gray-400 italic">Stock not yet tallied — click "📋 Tally Now" to record a tally.</span>
+              )}
+            </div>
           </div>
         </div>
       )}
