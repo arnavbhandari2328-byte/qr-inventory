@@ -82,7 +82,7 @@ export default function Products() {
       }]);
       if (error) throw error;
       await loadLatestTally();
-      alert("\u2705 Tally recorded successfully!");
+      alert("✅ Tally recorded successfully!");
     } catch (err) {
       console.error("Tally error:", err.message);
       alert("Error recording tally: " + err.message);
@@ -255,7 +255,7 @@ export default function Products() {
 
       doc.setFontSize(13);
       doc.setTextColor(10, 42, 94);
-      doc.text("Products Report \u2014 Nivee Metals", 14, 13);
+      doc.text("Products Report — Nivee Metals", 14, 13);
       doc.setFontSize(8);
       doc.setTextColor(120, 120, 120);
       doc.text("Generated: " + new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" }), 14, 19);
@@ -338,7 +338,7 @@ export default function Products() {
         const lowAlertKey = headers.find(k => normalize(k).includes('low'));
         const highAlertKey = headers.find(k => normalize(k).includes('high') || normalize(k).includes('max'));
         if (!highAlertKey) {
-          const proceed = window.confirm("\u26a0\ufe0f Couldn't find \"High Alert\" column.\nHeaders: [ " + headers.join(", ") + " ]\nContinue with High Alert = 0?");
+          const proceed = window.confirm("⚠️ Couldn't find High Alert column.\nHeaders: [ " + headers.join(", ") + " ]\nContinue with High Alert = 0?");
           if (!proceed) { e.target.value = null; return; }
         }
         const productsToUpsert = [];
@@ -483,14 +483,14 @@ export default function Products() {
             <path d="M9 11l3 3L22 4"/>
             <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
           </svg>
-          {tallyLoading ? "Saving..." : "\ud83d\udccb Tally Now"}
+          {tallyLoading ? "Saving..." : "📋 Tally Now"}
         </button>
       </div>
 
       {/* Last tally info bar */}
       {latestTally && (
         <div className="mb-4 px-4 py-2 bg-indigo-50 border border-indigo-200 rounded-xl text-sm text-indigo-700 flex items-center gap-2">
-          <span>\u2705</span>
+          <span>✅</span>
           <span>Last tallied on <strong>{formatTallyDisplay(latestTally.tallied_at)}</strong> by {latestTally.tallied_by}</span>
         </div>
       )}
@@ -528,15 +528,15 @@ export default function Products() {
 
         {editingId && (
           <div className="mt-4 pt-4 border-t border-dashed border-orange-300">
-            <p className="text-xs font-semibold text-orange-600 uppercase tracking-wide mb-3">\ud83d\udce6 Stock Adjustment (optional)</p>
+            <p className="text-xs font-semibold text-orange-600 uppercase tracking-wide mb-3">📦 Stock Adjustment (optional)</p>
             <div className="flex gap-3 items-center flex-wrap">
               <select name="adj_location_id" value={form.adj_location_id} onChange={handleChange} className="border p-2 rounded flex-1 min-w-[140px] bg-white">
-                <option value="">\u2014 Select Location \u2014</option>
+                <option value="">— Select Location —</option>
                 {locations.map(loc => (<option key={loc.id} value={loc.id}>{loc.name}</option>))}
               </select>
               <div className="flex rounded overflow-hidden border">
-                <button type="button" onClick={() => setForm(f => ({ ...f, adj_type: "inward" }))} className={`px-4 py-2 text-sm font-semibold transition-colors ${form.adj_type === "inward" ? "bg-green-600 text-white" : "bg-white text-gray-600 hover:bg-gray-50"}`}>\u25b2 Inward</button>
-                <button type="button" onClick={() => setForm(f => ({ ...f, adj_type: "outward" }))} className={`px-4 py-2 text-sm font-semibold transition-colors ${form.adj_type === "outward" ? "bg-red-500 text-white" : "bg-white text-gray-600 hover:bg-gray-50"}`}>\u25bc Outward</button>
+                <button type="button" onClick={() => setForm(f => ({ ...f, adj_type: "inward" }))} className={`px-4 py-2 text-sm font-semibold transition-colors ${form.adj_type === "inward" ? "bg-green-600 text-white" : "bg-white text-gray-600 hover:bg-gray-50"}`}>▲ Inward</button>
+                <button type="button" onClick={() => setForm(f => ({ ...f, adj_type: "outward" }))} className={`px-4 py-2 text-sm font-semibold transition-colors ${form.adj_type === "outward" ? "bg-red-500 text-white" : "bg-white text-gray-600 hover:bg-gray-50"}`}>▼ Outward</button>
               </div>
               <input name="adj_quantity" placeholder="Quantity" type="number" min="0" value={form.adj_quantity} onChange={handleChange} className="border p-2 rounded w-32" />
               <input name="adj_party" placeholder="Party / Remark (optional)" value={form.adj_party} onChange={handleChange} className="border p-2 rounded flex-1 min-w-[180px]" />
@@ -552,7 +552,7 @@ export default function Products() {
       <div className="flex gap-3 items-center mb-4">
         <input placeholder="Search by ID or Name..." value={search} onChange={(e) => setSearch(e.target.value)} className="border p-2 rounded flex-1" />
         <button onClick={resetOrder} title="Restore default product order" className="bg-gray-200 hover:bg-gray-300 text-gray-700 text-sm font-semibold px-4 py-2 rounded transition-colors whitespace-nowrap">
-          \u21ba Reset Order
+          ↺ Reset Order
         </button>
       </div>
 
@@ -630,7 +630,7 @@ export default function Products() {
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
           <div className="bg-white w-4/5 max-h-[85vh] overflow-y-auto rounded-lg shadow-xl p-6">
             <div className="flex justify-between items-center mb-4">
-              <h2 className="text-2xl font-bold">Ledger \u2014 {selectedProduct.product_name}</h2>
+              <h2 className="text-2xl font-bold">Ledger — {selectedProduct.product_name}</h2>
               <button onClick={() => setSelectedProduct(null)} className="bg-red-500 text-white px-4 py-1 rounded hover:bg-red-600 transition-colors">Close</button>
             </div>
             <table className="w-full border">
@@ -658,7 +658,7 @@ export default function Products() {
               </tbody>
             </table>
             <div className="mt-4 pt-4 border-t border-gray-200 flex items-center gap-2">
-              <span className="text-lg">\ud83d\udccb</span>
+              <span className="text-lg">📋</span>
               {latestTally ? (
                 <span className="text-sm text-gray-600">
                   This stock was tallied latest on{" "}
@@ -667,7 +667,7 @@ export default function Products() {
                   </strong>
                 </span>
               ) : (
-                <span className="text-sm text-gray-400 italic">Stock not yet tallied \u2014 click "\ud83d\udccb Tally Now" to record a tally.</span>
+                <span className="text-sm text-gray-400 italic">Stock not yet tallied — click "📋 Tally Now" to record a tally.</span>
               )}
             </div>
           </div>
