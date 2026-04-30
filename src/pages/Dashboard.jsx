@@ -14,9 +14,8 @@ export default function Dashboard() {
     totalStock: 0,
     lowAlerts: 0, 
     highAlerts: 0, 
-    recentTransactions: [],
     pieData: [],
-    activityData: [], // ✅ New state for the Bar Chart
+    activityData: [], 
     lowAlertProducts: [], 
     highAlertProducts: [] 
   });
@@ -24,12 +23,11 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [modalType, setModalType] = useState(null); 
 
-  // ✅ AI States
   const [question, setQuestion] = useState("");
   const [aiResponse, setAiResponse] = useState("");
   const [isAsking, setIsAsking] = useState(false);
 
-  const COLORS = ["#3B82F6", "#10B981", "#F59E0B", "#8B5CF6"]; 
+  const COLORS = ["#3B82F6", "#10B981", "#F59E0B", "#8B5CF6", "#EC4899"]; 
 
   useEffect(() => {
     fetchDashboardData();
@@ -41,21 +39,14 @@ export default function Dashboard() {
         .from("products")
         .select("id, product_id, product_name, low_stock_alert, high_stock_alert");
 
-      const { data: recentTrans } = await supabase
-        .from("transactions")
-        .select("*, products(product_name, product_id), locations(name)")
-        .order("created_at", { ascending: false })
-        .limit(5);
-
-      // ✅ Added 'created_at' to the query for the Bar Chart
       const { data: allTrans } = await supabase
         .from("transactions")
-        .select("product_id, transaction_type, quantity, created_at, products(product_id)");
+        .select("product_id, transaction_type, quantity, created_at, products(product_id, product_name)"); 
 
       let totalStock = 0;
-      let polish = 0, seamless = 0, nb = 0, other = 0;
+      let polish = 0, seamless = 0, nb = 0, sheets = 0, other = 0; 
       const stockMap = {};
-      const dailyMap = {}; // ✅ Map to store inward/outward totals per day
+      const dailyMap = {}; 
 
       (allTrans || []).forEach(t => {
         const adjustedQty = t.transaction_type === "inward" ? Number(t.quantity) : -Number(t.quantity);
@@ -63,12 +54,15 @@ export default function Dashboard() {
         if (t.product_id) stockMap[t.product_id] = (stockMap[t.product_id] || 0) + adjustedQty;
 
         const pId = (t.products?.product_id || "").toUpperCase();
+        const pName = (t.products?.product_name || "").toUpperCase(); 
+
+        // ✅ Updated logic to catch "NM-SNO" as Sheets
         if (pId.startsWith("NM-PP")) polish += adjustedQty;
         else if (pId.startsWith("NM-NBSMLS")) seamless += adjustedQty;
         else if (pId.startsWith("NM-NB")) nb += adjustedQty;
+        else if (pId.startsWith("NM-SH") || pId.startsWith("NM-SNO") || pId.includes("SHEET") || pName.includes("SHEET")) sheets += adjustedQty;
         else other += adjustedQty;
 
-        // ✅ TREND LOGIC: Group transactions by date for the Bar Chart
         if (t.created_at) {
             const date = new Date(t.created_at).toLocaleDateString("en-IN", { day: "2-digit", month: "short" });
             if (!dailyMap[date]) dailyMap[date] = { name: date, inward: 0, outward: 0 };
@@ -81,7 +75,6 @@ export default function Dashboard() {
         }
       });
 
-      // ✅ Convert map to array and take last 7 active days
       const activityData = Object.values(dailyMap).slice(-7);
 
       const lowList = [], highList = [];
@@ -96,12 +89,12 @@ export default function Dashboard() {
         totalStock,
         lowAlerts: lowList.length,
         highAlerts: highList.length,
-        recentTransactions: recentTrans || [],
-        activityData, // ✅ Save Bar Chart Data
+        activityData, 
         pieData: [
           { name: "Polish Pipe", value: polish },
           { name: "Seamless Pipe", value: seamless },
           { name: "NB Pipe", value: nb },
+          { name: "Sheets", value: sheets },
           { name: "Other", value: other }
         ].filter(item => item.value > 0),
         lowAlertProducts: lowList,
@@ -154,27 +147,12 @@ export default function Dashboard() {
     }
   };
 
-  const formatIST = (dbDateString) => {
-    if (!dbDateString) return "-";
-    const date = new Date(dbDateString);
-    return date.toLocaleString("en-IN", {
-      timeZone: "Asia/Kolkata",
-      day: "2-digit",
-      month: "short",
-      year: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-      hour12: true
-    });
-  };
-
   if (loading) return <div className="p-8 font-bold text-gray-500">Loading Dashboard...</div>;
 
   return (
     <div className="p-6 md:p-8">
       <h1 className="text-3xl font-bold mb-6 text-gray-800 tracking-tight">Warehouse Intelligence</h1>
 
-      {/* ✅ AI Assistant Section */}
       <div className="bg-white p-6 rounded-2xl shadow-sm border border-blue-100 mb-8">
         <h2 className="text-lg font-bold text-blue-600 mb-3 flex items-center gap-2">✨ Nivee AI Assistant</h2>
         <div className="flex gap-2">
@@ -204,7 +182,6 @@ export default function Dashboard() {
         )}
       </div>
 
-      {/* STATS CARDS */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
         <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
           <p className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-1">Total Products</p>
@@ -226,7 +203,6 @@ export default function Dashboard() {
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
         
-        {/* ✅ BAR CHART: Inward vs Outward */}
         <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
           <h2 className="text-xl font-bold text-gray-800 mb-6 uppercase tracking-tight">Stock Movements (Last 7 Days)</h2>
           <div className="h-72 w-full">
@@ -244,7 +220,6 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* PIE CHART */}
         <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 flex flex-col items-center">
           <h2 className="text-xl font-bold text-gray-800 mb-6 self-start uppercase tracking-tight">Stock Distribution</h2>
           <div className="h-72 w-full">
@@ -272,8 +247,6 @@ export default function Dashboard() {
         </div>
       </div>
 
-
-      {/* ALERT MODAL */}
       {modalType && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4 backdrop-blur-sm">
           <div className="bg-white w-full max-w-3xl max-h-[85vh] overflow-hidden rounded-[2rem] shadow-2xl flex flex-col border border-gray-100">
