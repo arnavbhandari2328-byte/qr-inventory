@@ -18,6 +18,11 @@ export default function Products() {
     product_name: "",
     low_stock_alert: "",
     high_stock_alert: "",
+    // Edit-only stock adjustment fields
+    adj_location_id: "",
+    adj_quantity: "",
+    adj_type: "inward",
+    adj_party: "",
   });
 
   const [selectedProduct, setSelectedProduct] = useState(null);
@@ -62,7 +67,6 @@ export default function Products() {
       setTransactions(formattedTrans);
       setLocations(loc || []);
 
-      // Apply saved order or default
       const savedOrder = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
       if (savedOrder.length > 0) {
         const savedIds = savedOrder.filter(id => (prod || []).some(p => p.id === id));
@@ -76,13 +80,10 @@ export default function Products() {
     }
   };
 
-  const saveOrder = (ids) => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(ids));
-  };
+  const saveOrder = (ids) => localStorage.setItem(STORAGE_KEY, JSON.stringify(ids));
 
   const resetOrder = () => {
-    const defaultIds = products.map(p => p.id);
-    setOrderedIds(defaultIds);
+    setOrderedIds(products.map(p => p.id));
     localStorage.removeItem(STORAGE_KEY);
   };
 
@@ -91,7 +92,6 @@ export default function Products() {
     dragIndexRef.current = index;
     setIsDragging(true);
     e.dataTransfer.effectAllowed = "move";
-    // Transparent ghost image so row stays visible
     const ghost = document.createElement("div");
     ghost.style.position = "absolute";
     ghost.style.top = "-9999px";
@@ -99,59 +99,46 @@ export default function Products() {
     e.dataTransfer.setDragImage(ghost, 0, 0);
     setTimeout(() => document.body.removeChild(ghost), 0);
   };
-
   const handleDragOver = (e, index) => {
     e.preventDefault();
     e.dataTransfer.dropEffect = "move";
     setDragOverIndex(index);
   };
-
   const handleDrop = (e, dropIndex) => {
     e.preventDefault();
     const fromIndex = dragIndexRef.current;
     if (fromIndex === null || fromIndex === dropIndex) {
-      setDragOverIndex(null);
-      setIsDragging(false);
-      return;
+      setDragOverIndex(null); setIsDragging(false); return;
     }
-
     const newIds = [...orderedIds];
     const [moved] = newIds.splice(fromIndex, 1);
     newIds.splice(dropIndex, 0, moved);
     setOrderedIds(newIds);
     saveOrder(newIds);
-
     dragIndexRef.current = null;
     setDragOverIndex(null);
     setIsDragging(false);
   };
-
   const handleDragEnd = () => {
     dragIndexRef.current = null;
     setDragOverIndex(null);
     setIsDragging(false);
   };
-
-  // Touch drag support
   const touchStartY = useRef(null);
   const touchFromIndex = useRef(null);
-
   const handleTouchStart = (e, index) => {
     touchStartY.current = e.touches[0].clientY;
     touchFromIndex.current = index;
   };
-
-  const handleTouchEnd = (e, _index) => {
+  const handleTouchEnd = (e) => {
     if (touchFromIndex.current === null) return;
     const endY = e.changedTouches[0].clientY;
     const rows = document.querySelectorAll("tr[data-drag-index]");
     let dropIdx = touchFromIndex.current;
     rows.forEach((row) => {
       const rect = row.getBoundingClientRect();
-      const mid = rect.top + rect.height / 2;
-      if (endY > mid) dropIdx = Number(row.getAttribute("data-drag-index"));
+      if (endY > rect.top + rect.height / 2) dropIdx = Number(row.getAttribute("data-drag-index"));
     });
-
     if (dropIdx !== touchFromIndex.current) {
       const newIds = [...orderedIds];
       const [moved] = newIds.splice(touchFromIndex.current, 1);
@@ -169,36 +156,34 @@ export default function Products() {
   };
 
   const stockByLocation = (productId, locationName) => {
-    const related = transactions.filter(
-      (t) =>
-        String(t.product_id) === String(productId) &&
-        (t.location_name || "").toLowerCase() === locationName.toLowerCase()
-    );
     let stock = 0;
-    related.forEach((t) => {
-      if (t.transaction_type === "inward") stock += Number(t.quantity);
-      else stock -= Number(t.quantity);
-    });
+    transactions
+      .filter(t => String(t.product_id) === String(productId) &&
+        (t.location_name || "").toLowerCase() === locationName.toLowerCase())
+      .forEach(t => {
+        if (t.transaction_type === "inward") stock += Number(t.quantity);
+        else stock -= Number(t.quantity);
+      });
     return stock;
   };
 
   const openLedger = (product) => {
     setSelectedProduct(product);
-    const filtered = transactions
-      .filter((t) => String(t.product_id) === String(product.id))
-      .sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
     let balance = 0;
-    const calculated = filtered.map((t) => {
-      if (t.transaction_type === "inward") balance += Number(t.quantity);
-      else balance -= Number(t.quantity);
-      return { ...t, balance };
-    });
+    const calculated = transactions
+      .filter(t => String(t.product_id) === String(product.id))
+      .sort((a, b) => new Date(a.created_at) - new Date(b.created_at))
+      .map(t => {
+        if (t.transaction_type === "inward") balance += Number(t.quantity);
+        else balance -= Number(t.quantity);
+        return { ...t, balance };
+      });
     setLedger(calculated);
   };
 
   const handleExportExcel = () => {
     if (!products.length) return;
-    const data = products.map((p) => ({
+    const data = products.map(p => ({
       Product_ID: p.product_id,
       Product_Name: p.product_name,
       Office: stockByLocation(p.id, "Office"),
@@ -222,43 +207,31 @@ export default function Products() {
         const localEmail = localStorage.getItem("userEmail");
         const { data: { user } } = await supabase.auth.getUser();
         const activeEmployee = user?.email || localEmail || "System Admin";
-
         const bstr = evt.target.result;
         const wb = XLSX.read(bstr, { type: "binary" });
         const ws = wb.Sheets[wb.SheetNames[0]];
         const data = XLSX.utils.sheet_to_json(ws, { defval: "" });
-
         if (data.length === 0) throw new Error("Spreadsheet is empty.");
-
         const headers = Object.keys(data[0]);
         const normalize = (str) => String(str).toLowerCase().replace(/[\s_]/g, '');
-
         const locationMap = [];
         locations.forEach(loc => {
           const match = headers.find(k => normalize(k) === normalize(loc.name));
           if (match) locationMap.push({ id: loc.id, name: loc.name, headerKey: match });
         });
-
-        if (locationMap.length === 0) {
-          throw new Error(`We couldn't find any location columns. Add columns named: ${locations.map(l => l.name).join(", ")}`);
-        }
-
+        if (locationMap.length === 0)
+          throw new Error(`Couldn't find location columns. Add: ${locations.map(l => l.name).join(", ")}`);
         const idKey = headers.find(k => normalize(k).includes('productid') || normalize(k) === 'id');
         const nameKey = headers.find(k => normalize(k).includes('productname') || normalize(k) === 'name');
         const lowAlertKey = headers.find(k => normalize(k).includes('low'));
         const highAlertKey = headers.find(k => normalize(k).includes('high') || normalize(k).includes('max'));
-
         if (!highAlertKey) {
-          const proceed = window.confirm(
-            `⚠️ WARNING: We couldn't find your "High Alert" column!\n\nThe headers we successfully read from your file are:\n[ ${headers.join(", ")} ]\n\nDo you want to continue anyway and let High Alert default to 0?`
-          );
+          const proceed = window.confirm(`⚠️ Couldn't find "High Alert" column.\nHeaders: [ ${headers.join(", ")} ]\nContinue with High Alert = 0?`);
           if (!proceed) { e.target.value = null; return; }
         }
-
         const productsToUpsert = [];
         const validRows = [];
-
-        data.forEach((row) => {
+        data.forEach(row => {
           if (idKey && row[idKey] && nameKey && row[nameKey]) {
             productsToUpsert.push({
               product_id: String(row[idKey]),
@@ -269,61 +242,43 @@ export default function Products() {
             validRows.push(row);
           }
         });
-
         if (productsToUpsert.length === 0) {
-          alert("No valid data found. Ensure headers include 'Product ID' and 'Product Name'.");
-          return;
+          alert("No valid data. Ensure headers include 'Product ID' and 'Product Name'."); return;
         }
-
         const { data: upsertedProducts, error: prodErr } = await supabase
-          .from("products")
-          .upsert(productsToUpsert, { onConflict: "product_id" })
-          .select("*");
-
+          .from("products").upsert(productsToUpsert, { onConflict: "product_id" }).select("*");
         if (prodErr) throw prodErr;
-
         const transactionsToInsert = [];
-        validRows.forEach((row) => {
-          const pIdStr = String(row[idKey]);
-          const dbProduct = upsertedProducts.find(p => p.product_id === pIdStr);
+        validRows.forEach(row => {
+          const dbProduct = upsertedProducts.find(p => p.product_id === String(row[idKey]));
           if (dbProduct) {
             locationMap.forEach(loc => {
               const stock = Number(row[loc.headerKey] || 0);
-              if (stock > 0) {
-                transactionsToInsert.push({
-                  product_id: dbProduct.id,
-                  location_id: loc.id,
-                  transaction_type: "inward",
-                  quantity: stock,
-                  party: "Bulk Opening Stock",
-                  created_by_email: activeEmployee
-                });
-              }
+              if (stock > 0) transactionsToInsert.push({
+                product_id: dbProduct.id, location_id: loc.id,
+                transaction_type: "inward", quantity: stock,
+                party: "Bulk Opening Stock", created_by_email: activeEmployee
+              });
             });
           }
         });
-
         if (transactionsToInsert.length > 0) {
           const { error: transErr } = await supabase.from("transactions").insert(transactionsToInsert);
           if (transErr) throw transErr;
         }
-
         alert(`Success! Updated ${upsertedProducts.length} products and logged ${transactionsToInsert.length} stock allocations.`);
         loadProducts();
       } catch (err) {
         console.error("Bulk upload error:", err.message);
         alert(`Upload Failed: ${err.message}`);
-      } finally {
-        e.target.value = null;
-      }
+      } finally { e.target.value = null; }
     };
     reader.readAsBinaryString(file);
   };
 
   const handleSaveProduct = async () => {
     if (!form.product_id || !form.product_name) {
-      alert("Please fill in the Product ID and Name.");
-      return;
+      alert("Please fill in the Product ID and Name."); return;
     }
     try {
       const payload = {
@@ -332,14 +287,30 @@ export default function Products() {
         low_stock_alert: Number(form.low_stock_alert || 0),
         high_stock_alert: Number(form.high_stock_alert || 0)
       };
+
       if (editingId) {
         const { error } = await supabase.from("products").update(payload).eq("id", editingId);
         if (error) throw error;
+
+        // If location + quantity are provided, log a stock transaction too
+        if (form.adj_location_id && form.adj_quantity && Number(form.adj_quantity) > 0) {
+          const { data: { user } } = await supabase.auth.getUser();
+          const { error: transErr } = await supabase.from("transactions").insert([{
+            product_id: editingId,
+            location_id: form.adj_location_id,
+            transaction_type: form.adj_type,
+            quantity: Number(form.adj_quantity),
+            party: form.adj_party || "Manual Adjustment",
+            created_by_email: user?.email || "admin"
+          }]);
+          if (transErr) throw transErr;
+        }
       } else {
         const { error } = await supabase.from("products").insert([payload]);
         if (error) throw error;
       }
-      setForm({ product_id: "", product_name: "", low_stock_alert: "", high_stock_alert: "" });
+
+      setForm({ product_id: "", product_name: "", low_stock_alert: "", high_stock_alert: "", adj_location_id: "", adj_quantity: "", adj_type: "inward", adj_party: "" });
       setEditingId(null);
       loadProducts();
     } catch (err) {
@@ -355,12 +326,18 @@ export default function Products() {
       product_name: product.product_name,
       low_stock_alert: product.low_stock_alert,
       high_stock_alert: product.high_stock_alert || "",
+      adj_location_id: "",
+      adj_quantity: "",
+      adj_type: "inward",
+      adj_party: "",
     });
     setEditingId(product.id);
+    // Scroll to top so user sees the form
+    window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
   const cancelEdit = () => {
-    setForm({ product_id: "", product_name: "", low_stock_alert: "", high_stock_alert: "" });
+    setForm({ product_id: "", product_name: "", low_stock_alert: "", high_stock_alert: "", adj_location_id: "", adj_quantity: "", adj_type: "inward", adj_party: "" });
     setEditingId(null);
   };
 
@@ -377,19 +354,12 @@ export default function Products() {
     }
   };
 
-  const handleChange = (e) => {
-    setForm({ ...form, [e.target.name]: e.target.value });
-  };
+  const handleChange = (e) => setForm({ ...form, [e.target.name]: e.target.value });
 
-  // Build ordered + filtered list
-  const orderedProducts = orderedIds
-    .map(id => products.find(p => p.id === id))
-    .filter(Boolean);
-
+  const orderedProducts = orderedIds.map(id => products.find(p => p.id === id)).filter(Boolean);
   const filtered = orderedProducts.filter(
-    (p) =>
-      p.product_name?.toLowerCase().includes(search.toLowerCase()) ||
-      p.product_id?.toLowerCase().includes(search.toLowerCase())
+    p => p.product_name?.toLowerCase().includes(search.toLowerCase()) ||
+         p.product_id?.toLowerCase().includes(search.toLowerCase())
   );
 
   return (
@@ -397,45 +367,117 @@ export default function Products() {
       <h1 className="text-3xl font-bold mb-4">Products</h1>
 
       {/* ADD / EDIT FORM */}
-      <div className="bg-white shadow rounded p-4 mb-6 flex gap-3 items-center flex-wrap">
-        <input name="product_id" placeholder="Product ID" value={form.product_id} onChange={handleChange} className="border p-2 rounded flex-1 min-w-[150px]" />
-        <input name="product_name" placeholder="Product Name" value={form.product_name} onChange={handleChange} className="border p-2 rounded flex-1 min-w-[150px]" />
-        <input name="low_stock_alert" placeholder="Low Alert Qty" type="number" value={form.low_stock_alert} onChange={handleChange} className="border p-2 rounded w-32" />
-        <input name="high_stock_alert" placeholder="High Alert Qty" type="number" value={form.high_stock_alert} onChange={handleChange} className="border p-2 rounded w-32" />
-        <button onClick={handleSaveProduct} className={`text-white px-6 py-2 rounded ${editingId ? 'bg-orange-500 hover:bg-orange-600' : 'bg-blue-600 hover:bg-blue-700'}`}>
-          {editingId ? "Update" : "Add"}
-        </button>
-        {editingId && (
-          <button onClick={cancelEdit} className="bg-gray-400 hover:bg-gray-500 text-white px-4 py-2 rounded">Cancel</button>
-        )}
+      <div className="bg-white shadow rounded p-4 mb-6">
+        {/* Row 1: core product fields */}
+        <div className="flex gap-3 items-center flex-wrap">
+          <input name="product_id" placeholder="Product ID" value={form.product_id} onChange={handleChange} disabled={!!editingId} className="border p-2 rounded flex-1 min-w-[150px] disabled:bg-gray-100" />
+          <input name="product_name" placeholder="Product Name" value={form.product_name} onChange={handleChange} className="border p-2 rounded flex-1 min-w-[150px]" />
+          <input name="low_stock_alert" placeholder="Low Alert Qty" type="number" value={form.low_stock_alert} onChange={handleChange} className="border p-2 rounded w-32" />
+          <input name="high_stock_alert" placeholder="High Alert Qty" type="number" value={form.high_stock_alert} onChange={handleChange} className="border p-2 rounded w-32" />
 
-        <div className="ml-auto flex gap-2 items-center">
-          <input type="file" accept=".xlsx, .xls, .csv" style={{ display: "none" }} ref={fileInputRef} onChange={handleBulkUpload} />
-          <div className="flex flex-col items-end">
-            <button onClick={() => fileInputRef.current.click()} className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded transition-colors">
-              Bulk Upload
+          {!editingId && (
+            <button onClick={handleSaveProduct} className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded">
+              Add
             </button>
-            <span className="text-xs text-gray-500 mt-1">Headers: Product ID, Product Name, Low Alert, High Alert, Office, Godown, Warehouse</span>
-          </div>
-          <button onClick={handleExportExcel} className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded transition-colors self-start">
-            Export Excel
-          </button>
+          )}
+
+          {!editingId && (
+            <div className="ml-auto flex gap-2 items-center">
+              <input type="file" accept=".xlsx, .xls, .csv" style={{ display: "none" }} ref={fileInputRef} onChange={handleBulkUpload} />
+              <div className="flex flex-col items-end">
+                <button onClick={() => fileInputRef.current.click()} className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded transition-colors">
+                  Bulk Upload
+                </button>
+                <span className="text-xs text-gray-500 mt-1">Headers: Product ID, Product Name, Low Alert, High Alert, Office, Godown, Warehouse</span>
+              </div>
+              <button onClick={handleExportExcel} className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded transition-colors self-start">
+                Export Excel
+              </button>
+            </div>
+          )}
         </div>
+
+        {/* Row 2: stock adjustment — only visible in edit mode */}
+        {editingId && (
+          <div className="mt-4 pt-4 border-t border-dashed border-orange-300">
+            <p className="text-xs font-semibold text-orange-600 uppercase tracking-wide mb-3">📦 Stock Adjustment (optional)</p>
+            <div className="flex gap-3 items-center flex-wrap">
+              {/* Location dropdown */}
+              <select
+                name="adj_location_id"
+                value={form.adj_location_id}
+                onChange={handleChange}
+                className="border p-2 rounded flex-1 min-w-[140px] bg-white"
+              >
+                <option value="">— Select Location —</option>
+                {locations.map(loc => (
+                  <option key={loc.id} value={loc.id}>{loc.name}</option>
+                ))}
+              </select>
+
+              {/* Inward / Outward toggle */}
+              <div className="flex rounded overflow-hidden border">
+                <button
+                  type="button"
+                  onClick={() => setForm(f => ({ ...f, adj_type: "inward" }))}
+                  className={`px-4 py-2 text-sm font-semibold transition-colors ${
+                    form.adj_type === "inward"
+                      ? "bg-green-600 text-white"
+                      : "bg-white text-gray-600 hover:bg-gray-50"
+                  }`}
+                >
+                  ▲ Inward
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setForm(f => ({ ...f, adj_type: "outward" }))}
+                  className={`px-4 py-2 text-sm font-semibold transition-colors ${
+                    form.adj_type === "outward"
+                      ? "bg-red-500 text-white"
+                      : "bg-white text-gray-600 hover:bg-gray-50"
+                  }`}
+                >
+                  ▼ Outward
+                </button>
+              </div>
+
+              {/* Quantity */}
+              <input
+                name="adj_quantity"
+                placeholder="Quantity"
+                type="number"
+                min="0"
+                value={form.adj_quantity}
+                onChange={handleChange}
+                className="border p-2 rounded w-32"
+              />
+
+              {/* Party / Remark */}
+              <input
+                name="adj_party"
+                placeholder="Party / Remark (optional)"
+                value={form.adj_party}
+                onChange={handleChange}
+                className="border p-2 rounded flex-1 min-w-[180px]"
+              />
+
+              {/* Update button */}
+              <button onClick={handleSaveProduct} className="bg-orange-500 hover:bg-orange-600 text-white px-6 py-2 rounded font-semibold">
+                Update
+              </button>
+              <button onClick={cancelEdit} className="bg-gray-400 hover:bg-gray-500 text-white px-4 py-2 rounded">
+                Cancel
+              </button>
+            </div>
+            <p className="text-xs text-gray-400 mt-2">Leave Location &amp; Quantity blank to update product details only without logging a transaction.</p>
+          </div>
+        )}
       </div>
 
       {/* SEARCH + RESET ORDER */}
       <div className="flex gap-3 items-center mb-4">
-        <input
-          placeholder="Search by ID or Name..."
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className="border p-2 rounded flex-1"
-        />
-        <button
-          onClick={resetOrder}
-          title="Restore default product order"
-          className="bg-gray-200 hover:bg-gray-300 text-gray-700 text-sm font-semibold px-4 py-2 rounded transition-colors whitespace-nowrap"
-        >
+        <input placeholder="Search by ID or Name..." value={search} onChange={(e) => setSearch(e.target.value)} className="border p-2 rounded flex-1" />
+        <button onClick={resetOrder} title="Restore default product order" className="bg-gray-200 hover:bg-gray-300 text-gray-700 text-sm font-semibold px-4 py-2 rounded transition-colors whitespace-nowrap">
           ↺ Reset Order
         </button>
       </div>
@@ -463,7 +505,6 @@ export default function Products() {
               filtered.map((p, index) => {
                 const isDraggedRow = isDragging && dragIndexRef.current === index;
                 const isDropTarget = dragOverIndex === index && dragIndexRef.current !== index;
-
                 return (
                   <tr
                     key={p.id}
@@ -477,61 +518,29 @@ export default function Products() {
                     onTouchEnd={(e) => handleTouchEnd(e, index)}
                     onClick={() => openLedger(p)}
                     className={`border-b cursor-pointer transition-all
+                      ${editingId === p.id ? "bg-orange-50 border-l-4 border-l-orange-400" : ""}
                       ${isDraggedRow ? "opacity-40 bg-blue-50" : ""}
-                      ${isDropTarget ? "border-t-2 border-t-blue-500 bg-blue-50" : "hover:bg-blue-50"}
+                      ${isDropTarget ? "border-t-2 border-t-blue-500 bg-blue-50" : (editingId === p.id ? "" : "hover:bg-blue-50")}
                     `}
                   >
-                    {/* DRAG HANDLE */}
-                    <td
-                      className="p-3 text-gray-400 cursor-grab active:cursor-grabbing select-none"
-                      onClick={(e) => e.stopPropagation()}
-                      title="Drag to reorder"
-                    >
-                      <svg
-                        xmlns="http://www.w3.org/2000/svg"
-                        width="16" height="16"
-                        viewBox="0 0 24 24"
-                        fill="currentColor"
-                        className="mx-auto hover:text-gray-600 transition-colors"
-                      >
-                        <circle cx="9" cy="5" r="1.5"/>
-                        <circle cx="15" cy="5" r="1.5"/>
-                        <circle cx="9" cy="12" r="1.5"/>
-                        <circle cx="15" cy="12" r="1.5"/>
-                        <circle cx="9" cy="19" r="1.5"/>
-                        <circle cx="15" cy="19" r="1.5"/>
+                    <td className="p-3 text-gray-400 cursor-grab active:cursor-grabbing select-none" onClick={(e) => e.stopPropagation()} title="Drag to reorder">
+                      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" className="mx-auto hover:text-gray-600 transition-colors">
+                        <circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/>
+                        <circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/>
+                        <circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/>
                       </svg>
                     </td>
-
                     <td className="p-3 font-medium">{p.product_id}</td>
                     <td className="p-3">{p.product_name}</td>
                     <td className="p-3 font-semibold text-blue-600">{stockByLocation(p.id, "Office")}</td>
                     <td className="p-3 font-semibold text-purple-600">{stockByLocation(p.id, "Godown")}</td>
                     <td className="p-3 font-semibold text-green-600">{stockByLocation(p.id, "Warehouse")}</td>
-                    <td className="p-3">
-                      <span className="px-3 py-1 rounded-full bg-red-100 text-red-600 text-sm font-semibold">
-                        {p.low_stock_alert}
-                      </span>
-                    </td>
-                    <td className="p-3">
-                      <span className="px-3 py-1 rounded-full bg-orange-100 text-orange-600 text-sm font-semibold">
-                        {p.high_stock_alert || 0}
-                      </span>
-                    </td>
+                    <td className="p-3"><span className="px-3 py-1 rounded-full bg-red-100 text-red-600 text-sm font-semibold">{p.low_stock_alert}</span></td>
+                    <td className="p-3"><span className="px-3 py-1 rounded-full bg-orange-100 text-orange-600 text-sm font-semibold">{p.high_stock_alert || 0}</span></td>
                     <td className="p-3 flex gap-2" onClick={(e) => e.stopPropagation()}>
-                      <button
-                        onClick={(e) => handleEditClick(e, p)}
-                        className="text-blue-600 hover:text-blue-800 font-semibold px-3 py-1 bg-blue-50 rounded hover:bg-blue-100 transition-colors"
-                      >
-                        Edit
-                      </button>
+                      <button onClick={(e) => handleEditClick(e, p)} className="text-blue-600 hover:text-blue-800 font-semibold px-3 py-1 bg-blue-50 rounded hover:bg-blue-100 transition-colors">Edit</button>
                       {isAdmin && (
-                        <button
-                          onClick={(e) => handleDeleteProduct(e, p.product_id)}
-                          className="text-red-500 hover:text-red-700 font-semibold px-3 py-1 bg-red-50 rounded hover:bg-red-100 transition-colors"
-                        >
-                          Delete
-                        </button>
+                        <button onClick={(e) => handleDeleteProduct(e, p.product_id)} className="text-red-500 hover:text-red-700 font-semibold px-3 py-1 bg-red-50 rounded hover:bg-red-100 transition-colors">Delete</button>
                       )}
                     </td>
                   </tr>
@@ -563,7 +572,7 @@ export default function Products() {
               <tbody>
                 {ledger.length === 0 ? (
                   <tr><td colSpan="5" className="p-4 text-gray-500 text-center">No transactions</td></tr>
-                ) : ledger.map((l) => (
+                ) : ledger.map(l => (
                   <tr key={l.id}>
                     <td className="border p-2">{formatTimeDisplay(l.created_at)}</td>
                     <td className={`border p-2 font-semibold ${l.transaction_type === "inward" ? "text-green-600" : "text-red-600"}`}>{l.transaction_type}</td>
