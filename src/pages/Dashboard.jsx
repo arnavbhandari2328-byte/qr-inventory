@@ -17,11 +17,13 @@ export default function Dashboard() {
     pieData: [],
     activityData: [],
     lowAlertProducts: [], 
-    highAlertProducts: []
+    highAlertProducts: [],
+    categoryProductsMap: {}
   });
   
   const [loading, setLoading] = useState(true);
   const [modalType, setModalType] = useState(null); // 'low' | 'high'
+  const [selectedCategory, setSelectedCategory] = useState(null); // pie slice click
 
   const [question, setQuestion] = useState("");
   const [aiResponse, setAiResponse] = useState("");
@@ -29,6 +31,14 @@ export default function Dashboard() {
 
   // 6 colors for pie: Seamless Pipe, Polish Pipe, NB Pipe, Sheets, Non-Polish Pipe, Others
   const COLORS = ["#F59E0B", "#3B82F6", "#10B981", "#EC4899", "#F97316", "#8B5CF6"];
+  const CATEGORY_COLORS = {
+    "Seamless Pipe":   "#F59E0B",
+    "Polish Pipe":     "#3B82F6",
+    "NB Pipe":         "#10B981",
+    "Sheets":          "#EC4899",
+    "Non-Polish Pipe": "#F97316",
+    "Others":          "#8B5CF6"
+  };
 
   useEffect(() => {
     fetchDashboardData();
@@ -54,28 +64,42 @@ export default function Dashboard() {
       let polish = 0, seamless = 0, nb = 0, sheets = 0, nonPolish = 0, other = 0;
       const stockMap = {};
       const dailyMap = {};
+      const productCategory = {}; // uuid → category name
+      const productInfo = {};     // uuid → { product_id, product_name }
 
       (allTrans || []).forEach(t => {
         const adjustedQty = t.transaction_type === "inward" ? Number(t.quantity) : -Number(t.quantity);
         totalStock += adjustedQty;
-        if (t.product_id) stockMap[t.product_id] = (stockMap[t.product_id] || 0) + adjustedQty;
+
+        if (t.product_id) {
+          stockMap[t.product_id] = (stockMap[t.product_id] || 0) + adjustedQty;
+          if (!productInfo[t.product_id]) {
+            productInfo[t.product_id] = {
+              product_id: t.products?.product_id || "",
+              product_name: t.products?.product_name || ""
+            };
+          }
+        }
 
         const pId = (t.products?.product_id || "").toUpperCase();
         const pName = (t.products?.product_name || "").toUpperCase();
 
+        let cat;
         if (pId.startsWith("NM-PP")) {
-          polish += adjustedQty;
+          polish += adjustedQty; cat = "Polish Pipe";
         } else if (pId.startsWith("NM-NBSMLS")) {
-          seamless += adjustedQty;
+          seamless += adjustedQty; cat = "Seamless Pipe";
         } else if (pId.startsWith("NM-NB")) {
-          nb += adjustedQty;
+          nb += adjustedQty; cat = "NB Pipe";
         } else if (pId.startsWith("NM-SH") || pId.startsWith("NM-SNO") || pId.includes("SHEET") || pName.includes("SHEET")) {
-          sheets += adjustedQty;
+          sheets += adjustedQty; cat = "Sheets";
         } else if (pId.startsWith("NM-NMPR") || pId.startsWith("NM-NPS") || pId.startsWith("NM-NPRE")) {
-          nonPolish += adjustedQty;
+          nonPolish += adjustedQty; cat = "Non-Polish Pipe";
         } else {
-          other += adjustedQty;
+          other += adjustedQty; cat = "Others";
         }
+
+        if (t.product_id) productCategory[t.product_id] = cat;
 
         if (t.created_at) {
           const date = new Date(t.created_at).toLocaleDateString("en-IN", { day: "2-digit", month: "short" });
@@ -83,6 +107,25 @@ export default function Dashboard() {
           if (t.transaction_type === "inward") dailyMap[date].inward += Number(t.quantity);
           else dailyMap[date].outward += Number(t.quantity);
         }
+      });
+
+      // Build category → products list
+      const categoryProductsMap = {};
+      Object.entries(stockMap).forEach(([uuid, stock]) => {
+        const cat = productCategory[uuid] || "Others";
+        if (!categoryProductsMap[cat]) categoryProductsMap[cat] = [];
+        const info = productInfo[uuid] || {};
+        categoryProductsMap[cat].push({
+          id: uuid,
+          product_id: info.product_id,
+          product_name: info.product_name,
+          currentStock: stock
+        });
+      });
+
+      // Sort each category by product_id
+      Object.keys(categoryProductsMap).forEach(cat => {
+        categoryProductsMap[cat].sort((a, b) => a.product_id.localeCompare(b.product_id));
       });
 
       const activityData = Object.values(dailyMap).slice(-7);
@@ -101,6 +144,7 @@ export default function Dashboard() {
         highAlerts: highList.length,
         recentTransactions: recentTrans || [],
         activityData,
+        categoryProductsMap,
         pieData: [
           { name: "Seamless Pipe",   value: Math.max(0, seamless) },
           { name: "Polish Pipe",     value: Math.max(0, polish) },
@@ -167,6 +211,9 @@ export default function Dashboard() {
   };
 
   if (loading) return <div className="p-8 font-bold text-gray-500">Loading Dashboard...</div>;
+
+  const categoryProducts = selectedCategory ? (stats.categoryProductsMap[selectedCategory] || []) : [];
+  const categoryColor = selectedCategory ? (CATEGORY_COLORS[selectedCategory] || "#8B5CF6") : "#8B5CF6";
 
   return (
     <div className="p-6 md:p-8">
@@ -244,10 +291,11 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* PIE CHART — 6 categories */}
+        {/* PIE CHART — 6 categories, clickable */}
         <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 flex flex-col items-center">
-          <h2 className="text-xl font-bold text-gray-800 mb-6 self-start uppercase tracking-tight">Stock Distribution</h2>
-          <div className="h-72 w-full">
+          <h2 className="text-xl font-bold text-gray-800 mb-1 self-start uppercase tracking-tight">Stock Distribution</h2>
+          <p className="text-xs text-gray-400 self-start mb-4">Click any slice to view products</p>
+          <div className="h-72 w-full cursor-pointer">
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
                 <Pie
@@ -260,9 +308,14 @@ export default function Dashboard() {
                   dataKey="value"
                   label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
                   labelLine={false}
+                  onClick={(data) => setSelectedCategory(data.name)}
                 >
                   {stats.pieData.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                    <Cell
+                      key={`cell-${index}`}
+                      fill={COLORS[index % COLORS.length]}
+                      style={{ cursor: "pointer", outline: "none" }}
+                    />
                   ))}
                 </Pie>
                 <Tooltip formatter={(value) => [value, "Items"]} />
@@ -272,6 +325,49 @@ export default function Dashboard() {
           </div>
         </div>
       </div>
+
+      {/* CATEGORY DRILL-DOWN MODAL */}
+      {selectedCategory && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4 backdrop-blur-sm">
+          <div className="bg-white w-full max-w-3xl max-h-[85vh] overflow-hidden rounded-[2rem] shadow-2xl flex flex-col border border-gray-100">
+            <div className="p-6 text-white flex justify-between items-center" style={{ backgroundColor: categoryColor }}>
+              <div>
+                <h2 className="text-2xl font-black uppercase tracking-tighter italic">{selectedCategory}</h2>
+                <p className="text-sm font-medium opacity-80 mt-1">{categoryProducts.length} products</p>
+              </div>
+              <button onClick={() => setSelectedCategory(null)} className="bg-white text-gray-900 px-4 py-2 rounded-xl text-xs font-bold shadow-lg">Close</button>
+            </div>
+            <div className="p-6 overflow-y-auto">
+              {categoryProducts.length === 0 ? (
+                <p className="text-center text-gray-400 py-8">No products found in this category.</p>
+              ) : (
+                <table className="w-full text-left">
+                  <thead className="bg-gray-50 sticky top-0">
+                    <tr>
+                      <th className="p-4 text-xs font-bold text-gray-500 uppercase">Product ID</th>
+                      <th className="p-4 text-xs font-bold text-gray-500 uppercase">Name</th>
+                      <th className="p-4 text-xs font-bold text-gray-500 uppercase">Current Stock</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {categoryProducts.map(p => (
+                      <tr key={p.id} className="hover:bg-gray-50 border-b last:border-0 transition-colors">
+                        <td className="p-4 font-bold text-[#0a2a5e] text-sm uppercase">{p.product_id}</td>
+                        <td className="p-4 text-xs text-gray-500 font-medium">{p.product_name}</td>
+                        <td className="p-4">
+                          <span className="px-3 py-1 rounded-full text-xs font-black text-white" style={{ backgroundColor: categoryColor }}>
+                            {p.currentStock} Units
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* LOW / HIGH ALERT MODAL */}
       {modalType && (
