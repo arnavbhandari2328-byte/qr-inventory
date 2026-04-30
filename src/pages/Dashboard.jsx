@@ -27,8 +27,8 @@ export default function Dashboard() {
   const [aiResponse, setAiResponse] = useState("");
   const [isAsking, setIsAsking] = useState(false);
 
-  // 5 colors for pie: Polish Pipe, NB Pipe, Seamless Pipe, Sheets, Others
-  const COLORS = ["#3B82F6", "#10B981", "#F59E0B", "#EC4899", "#8B5CF6"];
+  // 6 colors for pie: Seamless Pipe, Polish Pipe, NB Pipe, Sheets, Non-Polish Pipe, Others
+  const COLORS = ["#F59E0B", "#3B82F6", "#10B981", "#EC4899", "#F97316", "#8B5CF6"];
 
   useEffect(() => {
     fetchDashboardData();
@@ -51,7 +51,7 @@ export default function Dashboard() {
         .select("product_id, transaction_type, quantity, created_at, products(product_id, product_name)");
 
       let totalStock = 0;
-      let polish = 0, seamless = 0, nb = 0, sheets = 0, other = 0;
+      let polish = 0, seamless = 0, nb = 0, sheets = 0, nonPolish = 0, other = 0;
       const stockMap = {};
       const dailyMap = {};
 
@@ -63,7 +63,6 @@ export default function Dashboard() {
         const pId = (t.products?.product_id || "").toUpperCase();
         const pName = (t.products?.product_name || "").toUpperCase();
 
-        // ✅ Updated logic to catch "NM-SNO" as Sheets
         if (pId.startsWith("NM-PP")) {
           polish += adjustedQty;
         } else if (pId.startsWith("NM-NBSMLS")) {
@@ -72,6 +71,8 @@ export default function Dashboard() {
           nb += adjustedQty;
         } else if (pId.startsWith("NM-SH") || pId.startsWith("NM-SNO") || pId.includes("SHEET") || pName.includes("SHEET")) {
           sheets += adjustedQty;
+        } else if (pId.startsWith("NM-NMPR") || pId.startsWith("NM-NPS") || pId.startsWith("NM-NPRE")) {
+          nonPolish += adjustedQty;
         } else {
           other += adjustedQty;
         }
@@ -101,11 +102,12 @@ export default function Dashboard() {
         recentTransactions: recentTrans || [],
         activityData,
         pieData: [
-          { name: "Polish Pipe", value: Math.max(0, polish) },
-          { name: "NB Pipe",     value: Math.max(0, nb) },
-          { name: "Seamless Pipe", value: Math.max(0, seamless) },
-          { name: "Sheets",      value: Math.max(0, sheets) },
-          { name: "Others",      value: Math.max(0, other) }
+          { name: "Seamless Pipe",   value: Math.max(0, seamless) },
+          { name: "Polish Pipe",     value: Math.max(0, polish) },
+          { name: "NB Pipe",         value: Math.max(0, nb) },
+          { name: "Sheets",          value: Math.max(0, sheets) },
+          { name: "Non-Polish Pipe", value: Math.max(0, nonPolish) },
+          { name: "Others",          value: Math.max(0, other) }
         ].filter(item => item.value > 0),
         lowAlertProducts: lowList,
         highAlertProducts: highList
@@ -242,7 +244,7 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* PIE CHART — 5 categories */}
+        {/* PIE CHART — 6 categories */}
         <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 flex flex-col items-center">
           <h2 className="text-xl font-bold text-gray-800 mb-6 self-start uppercase tracking-tight">Stock Distribution</h2>
           <div className="h-72 w-full">
