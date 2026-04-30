@@ -93,7 +93,7 @@ export default function Dashboard() {
           nb += adjustedQty; cat = "NB Pipe";
         } else if (pId.startsWith("NM-SH") || pId.startsWith("NM-SNO") || pId.includes("SHEET") || pName.includes("SHEET")) {
           sheets += adjustedQty; cat = "Sheets";
-        } else if (pId.startsWith("NM-NMPR") || pId.startsWith("NM-NPS") || pId.startsWith("NM-NPRE")) {
+        } else if (pId.startsWith("NM-NMPR") || pId.startsWith("NM-NPS") || pId.startsWith("NM-NPR")) {
           nonPolish += adjustedQty; cat = "Non-Polish Pipe";
         } else {
           other += adjustedQty; cat = "Others";
