@@ -1,6 +1,8 @@
 import { useEffect, useState, useRef } from "react";
 import { supabase } from "../supabase";
 import * as XLSX from "xlsx";
+import jsPDF from "jspdf";
+import "jspdf-autotable";
 
 const STORAGE_KEY = "productDisplayOrder";
 
@@ -18,7 +20,6 @@ export default function Products() {
   const [search, setSearch] = useState("");
   const [isAdmin, setIsAdmin] = useState(false);
 
-  // Latest tally log entry
   const [latestTally, setLatestTally] = useState(null);
   const [tallyLoading, setTallyLoading] = useState(false);
 
@@ -37,7 +38,6 @@ export default function Products() {
   const [ledger, setLedger] = useState([]);
   const [editingId, setEditingId] = useState(null);
 
-  // Drag state
   const dragIndexRef = useRef(null);
   const [dragOverIndex, setDragOverIndex] = useState(null);
   const [isDragging, setIsDragging] = useState(false);
@@ -129,7 +129,6 @@ export default function Products() {
     localStorage.removeItem(STORAGE_KEY);
   };
 
-  // ── Drag handlers ──────────────────────────────────────────────
   const handleDragStart = (e, index) => {
     dragIndexRef.current = index;
     setIsDragging(true);
@@ -190,7 +189,6 @@ export default function Products() {
     }
     touchFromIndex.current = null;
   };
-  // ──────────────────────────────────────────────────────────────
 
   const formatTimeDisplay = (dbDateString) => {
     if (!dbDateString) return "-";
@@ -247,6 +245,62 @@ export default function Products() {
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Products");
     XLSX.writeFile(wb, "Products_Report.xlsx");
+  };
+
+  const handleExportPDF = () => {
+    if (!products.length) return;
+    const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
+    doc.setFontSize(13);
+    doc.setTextColor(10, 42, 94);
+    doc.text("Products Report — Nivee Metals", 14, 13);
+    doc.setFontSize(8);
+    doc.setTextColor(120);
+    doc.text(`Generated: ${new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })}`, 14, 19);
+
+    const head = [["Product ID", "Product Name", "Office", "Godown", "Warehouse", "Low Alert", "High Alert"]];
+    const body = products.map(p => [
+      p.product_id,
+      p.product_name,
+      stockByLocation(p.id, "Office"),
+      stockByLocation(p.id, "Godown"),
+      stockByLocation(p.id, "Warehouse"),
+      p.low_stock_alert,
+      p.high_stock_alert || 0
+    ]);
+
+    doc.autoTable({
+      head,
+      body,
+      startY: 23,
+      theme: "grid",
+      styles: {
+        fontSize: 7,
+        cellPadding: 2,
+        overflow: "ellipsize",
+        halign: "left",
+        lineColor: [220, 220, 220],
+        lineWidth: 0.2
+      },
+      headStyles: {
+        fillColor: [10, 42, 94],
+        textColor: 255,
+        fontStyle: "bold",
+        fontSize: 7
+      },
+      alternateRowStyles: { fillColor: [248, 249, 252] },
+      columnStyles: {
+        0: { cellWidth: 30 },
+        1: { cellWidth: 80 },
+        2: { cellWidth: 22, halign: "center" },
+        3: { cellWidth: 22, halign: "center" },
+        4: { cellWidth: 26, halign: "center" },
+        5: { cellWidth: 22, halign: "center" },
+        6: { cellWidth: 22, halign: "center" }
+      },
+      margin: { top: 23, left: 14, right: 14 }
+    });
+
+    doc.save("Products_Report.pdf");
   };
 
   const handleBulkUpload = (e) => {
@@ -458,6 +512,9 @@ export default function Products() {
               <button onClick={handleExportExcel} className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded transition-colors self-start">
                 Export Excel
               </button>
+              <button onClick={handleExportPDF} className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded transition-colors self-start">
+                Export PDF
+              </button>
             </div>
           )}
         </div>
@@ -593,8 +650,6 @@ export default function Products() {
                 ))}
               </tbody>
             </table>
-
-            {/* Tally footer */}
             <div className="mt-4 pt-4 border-t border-gray-200 flex items-center gap-2">
               <span className="text-lg">📋</span>
               {latestTally ? (

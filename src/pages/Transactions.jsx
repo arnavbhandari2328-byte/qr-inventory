@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { supabase } from "../supabase";
 import * as XLSX from "xlsx";
+import jsPDF from "jspdf";
+import "jspdf-autotable";
 
 const ADMIN_EMAILS = [
   "niveemetals@gmail.com",
@@ -16,10 +18,9 @@ export default function Transactions() {
   const [editingId, setEditingId] = useState(null);
   const [isAdmin, setIsAdmin] = useState(false);
 
-  // Pagination States
   const [page, setPage] = useState(0);
   const [totalCount, setTotalCount] = useState(0);
-  const PAGE_SIZE = 50; 
+  const PAGE_SIZE = 50;
 
   const [form, setForm] = useState({
     product_id: "",
@@ -30,7 +31,7 @@ export default function Transactions() {
   });
 
   useEffect(() => {
-    checkUserRole(); 
+    checkUserRole();
     fetchDropdowns();
   }, []);
 
@@ -56,15 +57,12 @@ export default function Transactions() {
     try {
       const from = page * PAGE_SIZE;
       const to = from + PAGE_SIZE - 1;
-
       const { data: trans, count, error } = await supabase
         .from("transactions")
         .select("*", { count: "exact" })
         .order("created_at", { ascending: false })
         .range(from, to);
-
       if (error) throw error;
-
       setTransactions(trans || []);
       if (count !== null) setTotalCount(count);
     } catch (err) {
@@ -72,7 +70,6 @@ export default function Transactions() {
     }
   }
 
-  // ✅ FIXED IST FORMATTER: Safely parses Supabase DB timestamps into Indian Standard Time
   const formatIST = (dbDateString) => {
     if (!dbDateString) return "-";
     const date = new Date(dbDateString);
@@ -92,26 +89,21 @@ export default function Transactions() {
       alert("Please fill required fields (Product, Location, Quantity)");
       return;
     }
-
     try {
-      // ✅ FIX: Pull the active employee email from memory instead of relying on the slow auth check
       const activeEmployee = localStorage.getItem("userEmail") || "Unknown User";
-
       const payload = {
         product_id: form.product_id,
         location_id: form.location_id,
         transaction_type: form.transaction_type,
         quantity: Number(form.quantity),
         party: form.party,
-        created_by_email: activeEmployee // ✅ FIX: Successfully maps the employee email to the database
+        created_by_email: activeEmployee
       };
-
       if (editingId) {
         await supabase.from("transactions").update(payload).eq("id", editingId);
       } else {
         await supabase.from("transactions").insert([payload]);
       }
-
       setForm({ product_id: "", location_id: "", transaction_type: "inward", quantity: "", party: "" });
       setEditingId(null);
       setPage(0);
@@ -150,23 +142,85 @@ export default function Transactions() {
         .from("transactions")
         .select("*")
         .order("created_at", { ascending: false });
-
       const exportData = (allTrans || []).map((t) => ({
         Date_IST: formatIST(t.created_at),
         Product: products.find((p) => p.id === t.product_id)?.product_name || "",
         Type: t.transaction_type.toUpperCase(),
         Quantity: t.quantity,
         Location: locations.find((l) => l.id === t.location_id)?.name || "",
-        Party: t.party || "-", 
-        Employee: t.created_by_email || "System" 
+        Party: t.party || "-",
+        Employee: t.created_by_email || "System"
       }));
-
       const ws = XLSX.utils.json_to_sheet(exportData);
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, "Transactions");
       XLSX.writeFile(wb, "Nivee_Metal_Transactions.xlsx");
     } catch (err) {
       alert("Export failed.");
+    }
+  };
+
+  const exportToPDF = async () => {
+    try {
+      const { data: allTrans } = await supabase
+        .from("transactions")
+        .select("*")
+        .order("created_at", { ascending: false });
+
+      const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
+      doc.setFontSize(13);
+      doc.setTextColor(10, 42, 94);
+      doc.text("Transactions Report — Nivee Metals", 14, 13);
+      doc.setFontSize(8);
+      doc.setTextColor(120);
+      doc.text(`Generated: ${new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })}`, 14, 19);
+
+      const head = [["Date (IST)", "Product", "Type", "Qty", "Location", "Party", "Employee"]];
+      const body = (allTrans || []).map(t => [
+        formatIST(t.created_at),
+        products.find(p => p.id === t.product_id)?.product_name || "-",
+        t.transaction_type.toUpperCase(),
+        t.quantity,
+        locations.find(l => l.id === t.location_id)?.name || "-",
+        t.party || "-",
+        t.created_by_email || "System"
+      ]);
+
+      doc.autoTable({
+        head,
+        body,
+        startY: 23,
+        theme: "grid",
+        styles: {
+          fontSize: 7,
+          cellPadding: 2,
+          overflow: "ellipsize",
+          halign: "left",
+          lineColor: [220, 220, 220],
+          lineWidth: 0.2
+        },
+        headStyles: {
+          fillColor: [5, 150, 105],
+          textColor: 255,
+          fontStyle: "bold",
+          fontSize: 7
+        },
+        alternateRowStyles: { fillColor: [248, 249, 252] },
+        columnStyles: {
+          0: { cellWidth: 38 },
+          1: { cellWidth: 70 },
+          2: { cellWidth: 18, halign: "center" },
+          3: { cellWidth: 14, halign: "center" },
+          4: { cellWidth: 22 },
+          5: { cellWidth: 48 },
+          6: { cellWidth: 48 }
+        },
+        margin: { top: 23, left: 14, right: 14 }
+      });
+
+      doc.save("Nivee_Metal_Transactions.pdf");
+    } catch (err) {
+      alert("PDF export failed.");
     }
   };
 
@@ -209,7 +263,10 @@ export default function Transactions() {
 
       <div className="flex justify-between items-center mb-4">
         <input placeholder="Search products..." value={search} onChange={(e) => setSearch(e.target.value)} className="border p-3 rounded w-80 shadow-sm outline-none" />
-        <button onClick={exportToExcel} className="bg-green-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-green-700 shadow-lg transition-all">Export to Excel</button>
+        <div className="flex gap-3">
+          <button onClick={exportToExcel} className="bg-green-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-green-700 shadow-lg transition-all">Export to Excel</button>
+          <button onClick={exportToPDF} className="bg-red-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-red-700 shadow-lg transition-all">Export to PDF</button>
+        </div>
       </div>
 
       {/* TABLE SECTION */}
@@ -230,9 +287,7 @@ export default function Transactions() {
           <tbody>
             {filtered.map((t) => (
               <tr key={t.id} className="border-b hover:bg-gray-50 transition-colors">
-                <td className="p-4 text-sm text-gray-600 whitespace-nowrap font-medium">
-                  {formatIST(t.created_at)}
-                 </td>
+                <td className="p-4 text-sm text-gray-600 whitespace-nowrap font-medium">{formatIST(t.created_at)}</td>
                 <td className="p-4 font-bold text-gray-800">{products.find(p => p.id === t.product_id)?.product_name}</td>
                 <td className={`p-4 font-black ${t.transaction_type === "inward" ? "text-green-600" : "text-red-600"}`}>
                   {t.transaction_type.toUpperCase()}
