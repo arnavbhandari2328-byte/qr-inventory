@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { supabase } from "../supabase";
 import * as XLSX from "xlsx";
 import jsPDF from "jspdf";
-import "jspdf-autotable";
+import autoTable from "jspdf-autotable";
 
 const ADMIN_EMAILS = [
   "niveemetals@gmail.com",
@@ -162,31 +162,34 @@ export default function Transactions() {
 
   const exportToPDF = async () => {
     try {
-      const { data: allTrans } = await supabase
+      const { data: allTrans, error } = await supabase
         .from("transactions")
         .select("*")
         .order("created_at", { ascending: false });
 
+      if (error) throw error;
+
       const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
+
       doc.setFontSize(13);
       doc.setTextColor(10, 42, 94);
-      doc.text("Transactions Report — Nivee Metals", 14, 13);
+      doc.text("Transactions Report \u2014 Nivee Metals", 14, 13);
       doc.setFontSize(8);
-      doc.setTextColor(120);
-      doc.text(`Generated: ${new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })}`, 14, 19);
+      doc.setTextColor(120, 120, 120);
+      doc.text("Generated: " + new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" }), 14, 19);
 
       const head = [["Date (IST)", "Product", "Type", "Qty", "Location", "Party", "Employee"]];
       const body = (allTrans || []).map(t => [
         formatIST(t.created_at),
         products.find(p => p.id === t.product_id)?.product_name || "-",
         t.transaction_type.toUpperCase(),
-        t.quantity,
+        String(t.quantity),
         locations.find(l => l.id === t.location_id)?.name || "-",
         t.party || "-",
         t.created_by_email || "System"
       ]);
 
-      doc.autoTable({
+      autoTable(doc, {
         head,
         body,
         startY: 23,
@@ -220,7 +223,8 @@ export default function Transactions() {
 
       doc.save("Nivee_Metal_Transactions.pdf");
     } catch (err) {
-      alert("PDF export failed.");
+      console.error("PDF export error:", err);
+      alert("PDF export failed: " + err.message);
     }
   };
 
