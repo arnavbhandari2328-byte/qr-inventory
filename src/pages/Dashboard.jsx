@@ -15,19 +15,20 @@ export default function Dashboard() {
     lowAlerts: 0, 
     highAlerts: 0, 
     pieData: [],
-    activityData: [], 
+    activityData: [],
     lowAlertProducts: [], 
-    highAlertProducts: [] 
+    highAlertProducts: []
   });
   
   const [loading, setLoading] = useState(true);
-  const [modalType, setModalType] = useState(null); 
+  const [modalType, setModalType] = useState(null); // 'low' | 'high'
 
   const [question, setQuestion] = useState("");
   const [aiResponse, setAiResponse] = useState("");
   const [isAsking, setIsAsking] = useState(false);
 
-  const COLORS = ["#3B82F6", "#10B981", "#F59E0B", "#8B5CF6", "#EC4899"]; 
+  // 5 colors for pie: Polish Pipe, NB Pipe, Seamless Pipe, Sheets, Others
+  const COLORS = ["#3B82F6", "#10B981", "#F59E0B", "#EC4899", "#8B5CF6"];
 
   useEffect(() => {
     fetchDashboardData();
@@ -39,14 +40,20 @@ export default function Dashboard() {
         .from("products")
         .select("id, product_id, product_name, low_stock_alert, high_stock_alert");
 
+      const { data: recentTrans } = await supabase
+        .from("transactions")
+        .select("*, products(product_name, product_id), locations(name)")
+        .order("created_at", { ascending: false })
+        .limit(5);
+
       const { data: allTrans } = await supabase
         .from("transactions")
-        .select("product_id, transaction_type, quantity, created_at, products(product_id, product_name)"); 
+        .select("product_id, transaction_type, quantity, created_at, products(product_id, product_name)");
 
       let totalStock = 0;
-      let polish = 0, seamless = 0, nb = 0, sheets = 0, other = 0; 
+      let polish = 0, seamless = 0, nb = 0, sheets = 0, other = 0;
       const stockMap = {};
-      const dailyMap = {}; 
+      const dailyMap = {};
 
       (allTrans || []).forEach(t => {
         const adjustedQty = t.transaction_type === "inward" ? Number(t.quantity) : -Number(t.quantity);
@@ -54,24 +61,26 @@ export default function Dashboard() {
         if (t.product_id) stockMap[t.product_id] = (stockMap[t.product_id] || 0) + adjustedQty;
 
         const pId = (t.products?.product_id || "").toUpperCase();
-        const pName = (t.products?.product_name || "").toUpperCase(); 
+        const pName = (t.products?.product_name || "").toUpperCase();
 
         // ✅ Updated logic to catch "NM-SNO" as Sheets
-        if (pId.startsWith("NM-PP")) polish += adjustedQty;
-        else if (pId.startsWith("NM-NBSMLS")) seamless += adjustedQty;
-        else if (pId.startsWith("NM-NB")) nb += adjustedQty;
-        else if (pId.startsWith("NM-SH") || pId.startsWith("NM-SNO") || pId.includes("SHEET") || pName.includes("SHEET")) sheets += adjustedQty;
-        else other += adjustedQty;
+        if (pId.startsWith("NM-PP")) {
+          polish += adjustedQty;
+        } else if (pId.startsWith("NM-NBSMLS")) {
+          seamless += adjustedQty;
+        } else if (pId.startsWith("NM-NB")) {
+          nb += adjustedQty;
+        } else if (pId.startsWith("NM-SH") || pId.startsWith("NM-SNO") || pId.includes("SHEET") || pName.includes("SHEET")) {
+          sheets += adjustedQty;
+        } else {
+          other += adjustedQty;
+        }
 
         if (t.created_at) {
-            const date = new Date(t.created_at).toLocaleDateString("en-IN", { day: "2-digit", month: "short" });
-            if (!dailyMap[date]) dailyMap[date] = { name: date, inward: 0, outward: 0 };
-            
-            if (t.transaction_type === "inward") {
-                dailyMap[date].inward += Number(t.quantity);
-            } else {
-                dailyMap[date].outward += Number(t.quantity);
-            }
+          const date = new Date(t.created_at).toLocaleDateString("en-IN", { day: "2-digit", month: "short" });
+          if (!dailyMap[date]) dailyMap[date] = { name: date, inward: 0, outward: 0 };
+          if (t.transaction_type === "inward") dailyMap[date].inward += Number(t.quantity);
+          else dailyMap[date].outward += Number(t.quantity);
         }
       });
 
@@ -89,13 +98,14 @@ export default function Dashboard() {
         totalStock,
         lowAlerts: lowList.length,
         highAlerts: highList.length,
-        activityData, 
+        recentTransactions: recentTrans || [],
+        activityData,
         pieData: [
-          { name: "Polish Pipe", value: polish },
-          { name: "Seamless Pipe", value: seamless },
-          { name: "NB Pipe", value: nb },
-          { name: "Sheets", value: sheets },
-          { name: "Other", value: other }
+          { name: "Polish Pipe", value: Math.max(0, polish) },
+          { name: "NB Pipe",     value: Math.max(0, nb) },
+          { name: "Seamless Pipe", value: Math.max(0, seamless) },
+          { name: "Sheets",      value: Math.max(0, sheets) },
+          { name: "Others",      value: Math.max(0, other) }
         ].filter(item => item.value > 0),
         lowAlertProducts: lowList,
         highAlertProducts: highList
@@ -115,7 +125,7 @@ export default function Dashboard() {
       const res = await fetch("/api/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question: question }), 
+        body: JSON.stringify({ question }),
       });
       const data = await res.json();
       setAiResponse(data.answer || "Error: AI could not generate a response.");
@@ -131,28 +141,39 @@ export default function Dashboard() {
     const lines = aiResponse.split('\n')
       .filter(l => l.includes('|') || l.includes(',') || l.includes('\t'))
       .map(line => line.split(/[|,\t]/).map(cell => cell.trim()).filter(cell => cell !== ""));
-
     if (lines.length === 0) return alert("Try asking for a 'Table report'.");
-
     if (format === 'excel') {
       const ws = XLSX.utils.aoa_to_sheet(lines);
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, "AI_Report");
-      XLSX.writeFile(wb, `Nivee_AI_Report_${new Date().getTime()}.xlsx`);
+      XLSX.writeFile(wb, `Nivee_AI_Report_${Date.now()}.xlsx`);
     } else if (format === 'pdf') {
       const doc = new jsPDF();
       doc.text("AI Analysis Report", 14, 15);
       doc.autoTable({ head: [lines[0]], body: lines.slice(1), startY: 20, theme: 'grid' });
-      doc.save(`Nivee_AI_Report_${new Date().getTime()}.pdf`);
+      doc.save(`Nivee_AI_Report_${Date.now()}.pdf`);
     }
+  };
+
+  const formatIST = (dbDateString) => {
+    if (!dbDateString) return "-";
+    return new Date(dbDateString).toLocaleString("en-IN", {
+      timeZone: "Asia/Kolkata",
+      day: "2-digit", month: "short", year: "numeric",
+      hour: "2-digit", minute: "2-digit", hour12: true
+    });
   };
 
   if (loading) return <div className="p-8 font-bold text-gray-500">Loading Dashboard...</div>;
 
   return (
     <div className="p-6 md:p-8">
-      <h1 className="text-3xl font-bold mb-6 text-gray-800 tracking-tight">Warehouse Intelligence</h1>
+      {/* HEADER */}
+      <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
+        <h1 className="text-3xl font-bold text-gray-800 tracking-tight">Warehouse Intelligence</h1>
+      </div>
 
+      {/* AI Assistant */}
       <div className="bg-white p-6 rounded-2xl shadow-sm border border-blue-100 mb-8">
         <h2 className="text-lg font-bold text-blue-600 mb-3 flex items-center gap-2">✨ Nivee AI Assistant</h2>
         <div className="flex gap-2">
@@ -169,11 +190,11 @@ export default function Dashboard() {
         {aiResponse && (
           <div className="mt-4 space-y-3">
             <div className="flex justify-between items-center bg-gray-50 p-3 rounded-t-xl border-x border-t border-blue-100">
-                <span className="text-xs font-bold text-blue-600 uppercase">Analysis Results</span>
-                <div className="flex gap-2">
-                    <button onClick={() => exportAiData('excel')} className="bg-green-600 text-white px-3 py-1 rounded-lg text-xs font-bold">📥 Excel</button>
-                    <button onClick={() => exportAiData('pdf')} className="bg-red-600 text-white px-3 py-1 rounded-lg text-xs font-bold">📄 PDF</button>
-                </div>
+              <span className="text-xs font-bold text-blue-600 uppercase">Analysis Results</span>
+              <div className="flex gap-2">
+                <button onClick={() => exportAiData('excel')} className="bg-green-600 text-white px-3 py-1 rounded-lg text-xs font-bold">📥 Excel</button>
+                <button onClick={() => exportAiData('pdf')} className="bg-red-600 text-white px-3 py-1 rounded-lg text-xs font-bold">📄 PDF</button>
+              </div>
             </div>
             <div className="p-4 bg-white rounded-b-xl border border-blue-100 text-sm text-gray-700 whitespace-pre-wrap shadow-inner overflow-x-auto">
               {aiResponse}
@@ -191,18 +212,19 @@ export default function Dashboard() {
           <p className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-1">Total Stock Items</p>
           <p className="text-3xl font-black text-green-600">{stats.totalStock}</p>
         </div>
-        <div onClick={() => setModalType('low')} className="bg-white p-6 rounded-2xl shadow-sm border border-red-100 cursor-pointer">
+        <div onClick={() => setModalType('low')} className="bg-white p-6 rounded-2xl shadow-sm border border-red-100 cursor-pointer hover:shadow-md transition-shadow">
           <p className="text-sm font-bold text-red-400 uppercase tracking-wider mb-1">Low Stock Alerts</p>
           <p className="text-3xl font-black text-red-600">{stats.lowAlerts}</p>
         </div>
-        <div onClick={() => setModalType('high')} className="bg-white p-6 rounded-2xl shadow-sm border border-orange-100 cursor-pointer">
+        <div onClick={() => setModalType('high')} className="bg-white p-6 rounded-2xl shadow-sm border border-orange-100 cursor-pointer hover:shadow-md transition-shadow">
           <p className="text-sm font-bold text-orange-400 uppercase tracking-wider mb-1">High Stock Alerts</p>
           <p className="text-3xl font-black text-orange-600">{stats.highAlerts}</p>
         </div>
       </div>
 
+      {/* CHARTS */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
-        
+        {/* BAR CHART */}
         <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
           <h2 className="text-xl font-bold text-gray-800 mb-6 uppercase tracking-tight">Stock Movements (Last 7 Days)</h2>
           <div className="h-72 w-full">
@@ -213,13 +235,14 @@ export default function Dashboard() {
                 <YAxis axisLine={false} tickLine={false} tick={{fontSize: 12, fontWeight: 'bold'}} />
                 <Tooltip cursor={{fill: '#f9fafb'}} />
                 <Legend verticalAlign="top" align="right" iconType="circle" wrapperStyle={{paddingBottom: '20px'}} />
-                <Bar dataKey="inward" fill="#10B981" radius={[4, 4, 0, 0]} name="Inward" />
-                <Bar dataKey="outward" fill="#EF4444" radius={[4, 4, 0, 0]} name="Outward" />
+                <Bar dataKey="inward" fill="#10B981" radius={[4,4,0,0]} name="Inward" />
+                <Bar dataKey="outward" fill="#EF4444" radius={[4,4,0,0]} name="Outward" />
               </BarChart>
             </ResponsiveContainer>
           </div>
         </div>
 
+        {/* PIE CHART — 5 categories */}
         <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 flex flex-col items-center">
           <h2 className="text-xl font-bold text-gray-800 mb-6 self-start uppercase tracking-tight">Stock Distribution</h2>
           <div className="h-72 w-full">
@@ -229,11 +252,12 @@ export default function Dashboard() {
                   data={stats.pieData}
                   cx="50%"
                   cy="50%"
-                  innerRadius={60}
-                  outerRadius={95}
-                  paddingAngle={5}
+                  innerRadius={55}
+                  outerRadius={90}
+                  paddingAngle={4}
                   dataKey="value"
                   label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
+                  labelLine={false}
                 >
                   {stats.pieData.map((entry, index) => (
                     <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
@@ -247,11 +271,14 @@ export default function Dashboard() {
         </div>
       </div>
 
+      {/* LOW / HIGH ALERT MODAL */}
       {modalType && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4 backdrop-blur-sm">
           <div className="bg-white w-full max-w-3xl max-h-[85vh] overflow-hidden rounded-[2rem] shadow-2xl flex flex-col border border-gray-100">
             <div className={`p-6 text-white flex justify-between items-center ${modalType === 'low' ? 'bg-red-600' : 'bg-orange-500'}`}>
-              <h2 className="text-2xl font-black uppercase tracking-tighter italic">{modalType === 'low' ? 'CRITICAL LOW STOCK' : 'SURPLUS STOCK ALERT'}</h2>
+              <h2 className="text-2xl font-black uppercase tracking-tighter italic">
+                {modalType === 'low' ? 'CRITICAL LOW STOCK' : 'SURPLUS STOCK ALERT'}
+              </h2>
               <button onClick={() => setModalType(null)} className="bg-white text-gray-900 px-4 py-2 rounded-xl text-xs font-bold shadow-lg">Close</button>
             </div>
             <div className="p-6 overflow-y-auto">
@@ -268,7 +295,11 @@ export default function Dashboard() {
                     <tr key={p.id} className="hover:bg-gray-50 border-b last:border-0 transition-colors">
                       <td className="p-4 font-bold text-[#0a2a5e] text-sm uppercase">{p.product_id}</td>
                       <td className="p-4 text-xs text-gray-500 font-medium">{p.product_name}</td>
-                      <td className="p-4"><span className={`px-3 py-1 rounded-full text-xs font-black ${modalType === 'low' ? 'bg-red-100 text-red-700' : 'bg-orange-100 text-orange-700'}`}>{p.currentStock} Units</span></td>
+                      <td className="p-4">
+                        <span className={`px-3 py-1 rounded-full text-xs font-black ${modalType === 'low' ? 'bg-red-100 text-red-700' : 'bg-orange-100 text-orange-700'}`}>
+                          {p.currentStock} Units
+                        </span>
+                      </td>
                     </tr>
                   ))}
                 </tbody>

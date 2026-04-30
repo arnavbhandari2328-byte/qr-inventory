@@ -52,6 +52,8 @@ export default function Login() {
         deviceLimit = 4; // Admin Tier
       } else if (userEmail === 'pursingh1@gmail.com') {
         deviceLimit = 2; // Priority Employee Tier
+      } else if (userEmail === 'vishalom999@gmail.com' || userEmail === 'vikrambhandari7171@gmail.com') {
+        deviceLimit = 1; // Head Admin Tier
       }
 
       // Check if this device is already in your allowed list
