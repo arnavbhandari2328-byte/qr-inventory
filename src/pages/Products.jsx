@@ -155,6 +155,12 @@ export default function Products() {
     return dbDateString.replace('T', ' ').split('.')[0];
   };
 
+  const formatLastUpdatedDate = (dbDateString) => {
+    if (!dbDateString) return null;
+    const d = new Date(dbDateString);
+    return d.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
+  };
+
   const stockByLocation = (productId, locationName) => {
     let stock = 0;
     transactions
@@ -583,6 +589,21 @@ export default function Products() {
                 ))}
               </tbody>
             </table>
+
+            {/* Last updated footer */}
+            {ledger.length > 0 && (() => {
+              const lastEntry = ledger[ledger.length - 1];
+              const lastDate = formatLastUpdatedDate(lastEntry.created_at);
+              return (
+                <div className="mt-4 pt-4 border-t border-gray-200 flex items-center gap-2">
+                  <span className="text-lg">📅</span>
+                  <span className="text-sm text-gray-500">This stock was last updated on</span>
+                  <span className="text-sm font-bold text-gray-800 bg-green-50 border border-green-200 px-3 py-1 rounded-full">
+                    {lastDate}
+                  </span>
+                </div>
+              );
+            })()}
           </div>
         </div>
       )}
