@@ -4,6 +4,12 @@ import * as XLSX from "xlsx";
 
 const STORAGE_KEY = "productDisplayOrder";
 
+const ADMIN_EMAILS = [
+  "niveemetals@gmail.com",
+  "vishalom999@gmail.com",
+  "vikrambhandari7171@gmail.com",
+];
+
 export default function Products() {
   const [products, setProducts] = useState([]);
   const [orderedIds, setOrderedIds] = useState([]);
@@ -46,7 +52,7 @@ export default function Products() {
 
   const checkUserRole = async () => {
     const { data: { user } } = await supabase.auth.getUser();
-    if (user?.email === "niveemetals@gmail.com") setIsAdmin(true);
+    if (ADMIN_EMAILS.includes(user?.email)) setIsAdmin(true);
   };
 
   const loadLatestTally = async () => {
@@ -383,7 +389,7 @@ export default function Products() {
 
   const handleDeleteProduct = async (e, productId) => {
     e.stopPropagation();
-    if (!isAdmin) { alert("Unauthorized: Only the Master Admin can delete products."); return; }
+    if (!isAdmin) { alert("Unauthorized: Only admins can delete products."); return; }
     if (!window.confirm("Are you sure you want to delete this product?")) return;
     try {
       const { error } = await supabase.from("products").delete().eq("product_id", productId);

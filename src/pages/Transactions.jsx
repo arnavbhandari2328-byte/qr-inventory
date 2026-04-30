@@ -2,6 +2,12 @@ import { useEffect, useState } from "react";
 import { supabase } from "../supabase";
 import * as XLSX from "xlsx";
 
+const ADMIN_EMAILS = [
+  "niveemetals@gmail.com",
+  "vishalom999@gmail.com",
+  "vikrambhandari7171@gmail.com",
+];
+
 export default function Transactions() {
   const [products, setProducts] = useState([]);
   const [locations, setLocations] = useState([]);
@@ -34,7 +40,7 @@ export default function Transactions() {
 
   const checkUserRole = async () => {
     const { data: { user } } = await supabase.auth.getUser();
-    if (user?.email === "niveemetals@gmail.com") {
+    if (ADMIN_EMAILS.includes(user?.email)) {
       setIsAdmin(true);
     }
   };
