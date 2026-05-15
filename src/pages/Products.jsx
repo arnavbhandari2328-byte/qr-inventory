@@ -94,7 +94,13 @@ export default function Products() {
   const loadProducts = async () => {
     try {
       const { data: prod, error: prodErr } = await supabase.from("products").select("*");
-      const { data: trans, error: transErr } = await supabase.from("transactions").select("*, locations(name)");
+
+      // ✅ FIX: explicitly set limit to 10000 to avoid Supabase's default 1000-row cap
+      const { data: trans, error: transErr } = await supabase
+        .from("transactions")
+        .select("*, locations(name)")
+        .limit(10000);
+
       const { data: loc, error: locErr } = await supabase.from("locations").select("*");
 
       if (prodErr) throw prodErr;
