@@ -55,78 +55,64 @@ export default function Dashboard() {
 
   const fetchDashboardData = async () => {
     try {
-      // ✅ Fetch products with alert thresholds
       const { data: productsData } = await supabase
         .from("products")
         .select("id, product_id, product_name, low_stock_alert, high_stock_alert");
 
-      // ✅ Fetch accurate stock from stock_summary view (same as Products page)
-      const { data: stockSummaryData } = await supabase
-        .from("stock_summary")
-        .select("product_id, current_stock, total_stock");
-
-      // Build stockMap: product uuid → current stock (from view)
-      const stockMap = {};
-      (stockSummaryData || []).forEach(row => {
-        stockMap[row.product_id] = row.current_stock ?? row.total_stock ?? 0;
-      });
-
-      // ✅ Recent transactions for activity feed
       const { data: recentTrans } = await supabase
         .from("transactions")
         .select("*, products(product_name, product_id), locations(name)")
         .order("created_at", { ascending: false })
         .limit(5);
 
-      // ✅ Last 7 days transactions for bar chart
+      // ✅ FIX: raised limit to 10000 to match Products page — default Supabase cap
+      // of 1000 rows was causing the dashboard chart/modal to show stale/incomplete stock
       const { data: allTrans } = await supabase
         .from("transactions")
         .select("product_id, transaction_type, quantity, created_at, products(product_id, product_name)")
         .limit(10000);
 
-      // Calculate totalStock from stockMap (sum of all current stocks)
-      const totalStock = Object.values(stockMap).reduce((sum, s) => sum + (s || 0), 0);
-
-      // Build category distribution using accurate stockMap
+      let totalStock = 0;
       let polish = 0, seamless = 0, nb = 0, sheets = 0, nonPolish = 0, other = 0;
+      const stockMap = {};
+      const dailyMap = {};
       const productCategory = {}; // uuid → category name
       const productInfo = {};     // uuid → { product_id, product_name }
-      const dailyMap = {};
 
-      // Build productInfo from productsData
-      (productsData || []).forEach(p => {
-        productInfo[p.id] = { product_id: p.product_id, product_name: p.product_name };
-        const pId = (p.product_id || "").toUpperCase();
-        const pName = (p.product_name || "").toUpperCase();
+      (allTrans || []).forEach(t => {
+        const adjustedQty = t.transaction_type === "inward" ? Number(t.quantity) : -Number(t.quantity);
+        totalStock += adjustedQty;
+
+        if (t.product_id) {
+          stockMap[t.product_id] = (stockMap[t.product_id] || 0) + adjustedQty;
+          if (!productInfo[t.product_id]) {
+            productInfo[t.product_id] = {
+              product_id: t.products?.product_id || "",
+              product_name: t.products?.product_name || ""
+            };
+          }
+        }
+
+        const pId = (t.products?.product_id || "").toUpperCase();
+        const pName = (t.products?.product_name || "").toUpperCase();
 
         let cat;
         if (pId.startsWith("NM-PP")) {
-          cat = "Polish Pipe";
+          polish += adjustedQty; cat = "Polish Pipe";
         } else if (pId.startsWith("NM-NBSMLS")) {
-          cat = "Seamless Pipe";
+          seamless += adjustedQty; cat = "Seamless Pipe";
         } else if (pId.startsWith("NM-NB")) {
-          cat = "NB Pipe";
+          nb += adjustedQty; cat = "NB Pipe";
         } else if (pId.startsWith("NM-SH") || pId.startsWith("NM-SNO") || pId.includes("SHEET") || pName.includes("SHEET")) {
-          cat = "Sheets";
+          sheets += adjustedQty; cat = "Sheets";
         } else if (pId.startsWith("NM-NMPR") || pId.startsWith("NM-NPS") || pId.startsWith("NM-NPR")) {
-          cat = "Non-Polish Pipe";
+          nonPolish += adjustedQty; cat = "Non-Polish Pipe";
         } else {
-          cat = "Others";
+          other += adjustedQty; cat = "Others";
         }
-        productCategory[p.id] = cat;
 
-        // Add to category totals using accurate stock
-        const stock = stockMap[p.id] || 0;
-        if (cat === "Polish Pipe")     polish     += stock;
-        else if (cat === "Seamless Pipe") seamless += stock;
-        else if (cat === "NB Pipe")    nb         += stock;
-        else if (cat === "Sheets")     sheets     += stock;
-        else if (cat === "Non-Polish Pipe") nonPolish += stock;
-        else                           other      += stock;
-      });
+        if (t.product_id) productCategory[t.product_id] = cat;
 
-      // Build daily bar chart data from transactions
-      (allTrans || []).forEach(t => {
         if (t.created_at) {
           const date = new Date(t.created_at).toLocaleDateString("en-IN", { day: "2-digit", month: "short" });
           if (!dailyMap[date]) dailyMap[date] = { name: date, inward: 0, outward: 0 };
@@ -135,16 +121,17 @@ export default function Dashboard() {
         }
       });
 
-      // Build category → products list using accurate stockMap
+      // Build category → products list
       const categoryProductsMap = {};
-      (productsData || []).forEach(p => {
-        const cat = productCategory[p.id] || "Others";
+      Object.entries(stockMap).forEach(([uuid, stock]) => {
+        const cat = productCategory[uuid] || "Others";
         if (!categoryProductsMap[cat]) categoryProductsMap[cat] = [];
+        const info = productInfo[uuid] || {};
         categoryProductsMap[cat].push({
-          id: p.id,
-          product_id: p.product_id,
-          product_name: p.product_name,
-          currentStock: stockMap[p.id] || 0
+          id: uuid,
+          product_id: info.product_id,
+          product_name: info.product_name,
+          currentStock: stock
         });
       });
 
@@ -155,7 +142,6 @@ export default function Dashboard() {
 
       const activityData = Object.values(dailyMap).slice(-7);
 
-      // ✅ Low/high alerts also use accurate stock from stockMap
       const lowList = [], highList = [];
       (productsData || []).forEach(p => {
         const currentStock = stockMap[p.id] || 0;
@@ -412,7 +398,6 @@ export default function Dashboard() {
                     <th className="p-4 text-xs font-bold text-gray-500 uppercase">Product ID</th>
                     <th className="p-4 text-xs font-bold text-gray-500 uppercase">Name</th>
                     <th className="p-4 text-xs font-bold text-gray-500 uppercase">Stock</th>
-                    <th className="p-4 text-xs font-bold text-gray-500 uppercase">Alert Threshold</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -424,9 +409,6 @@ export default function Dashboard() {
                         <span className={`px-3 py-1 rounded-full text-xs font-black ${modalType === 'low' ? 'bg-red-100 text-red-700' : 'bg-orange-100 text-orange-700'}`}>
                           {p.currentStock} Units
                         </span>
-                      </td>
-                      <td className="p-4 text-xs text-gray-400 font-semibold">
-                        {modalType === 'low' ? `≤ ${p.low_stock_alert}` : `≥ ${p.high_stock_alert}`}
                       </td>
                     </tr>
                   ))}
