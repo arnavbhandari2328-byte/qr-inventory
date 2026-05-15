@@ -15,7 +15,7 @@ const ADMIN_EMAILS = [
 export default function Products() {
   const [products, setProducts] = useState([]);
   const [orderedIds, setOrderedIds] = useState([]);
-  const [transactions, setTransactions] = useState([]);
+  const [stockSummary, setStockSummary] = useState({}); // { productId: { Office: n, Godown: n, Warehouse: n } }
   const [locations, setLocations] = useState([]);
   const [search, setSearch] = useState("");
   const [isAdmin, setIsAdmin] = useState(false);
@@ -49,6 +49,24 @@ export default function Products() {
     checkUserRole();
     loadProducts();
     loadLatestTally();
+
+    // ✅ Realtime subscription on transactions table
+    // Whenever any transaction is inserted/updated/deleted (from any page/device),
+    // reload stock summary so Products page is always up to date.
+    const channel = supabase
+      .channel("transactions-changes")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "transactions" },
+        () => {
+          loadStockSummary();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, []);
 
   // ✅ Auto-refresh when user switches back to this tab
@@ -101,28 +119,34 @@ export default function Products() {
     }
   };
 
+  // ✅ Lightweight stock summary fetch from the stock_summary view
+  // No more looping through 10,000 transactions in React memory!
+  const loadStockSummary = async () => {
+    try {
+      const { data, error } = await supabase.from("stock_summary").select("*");
+      if (error) throw error;
+
+      // Build a lookup: { productId: { locationName: quantity } }
+      const summary = {};
+      (data || []).forEach(row => {
+        if (!summary[row.product_id]) summary[row.product_id] = {};
+        summary[row.product_id][row.location_name] = row.total_stock;
+      });
+      setStockSummary(summary);
+    } catch (err) {
+      console.error("Failed to load stock summary:", err.message);
+    }
+  };
+
   const loadProducts = async () => {
     try {
       const { data: prod, error: prodErr } = await supabase.from("products").select("*");
-
-      const { data: trans, error: transErr } = await supabase
-        .from("transactions")
-        .select("*, locations(name)")
-        .limit(10000);
-
       const { data: loc, error: locErr } = await supabase.from("locations").select("*");
 
       if (prodErr) throw prodErr;
-      if (transErr) throw transErr;
       if (locErr) throw locErr;
 
-      const formattedTrans = (trans || []).map(t => ({
-        ...t,
-        location_name: t.locations?.name || ""
-      }));
-
       setProducts(prod || []);
-      setTransactions(formattedTrans);
       setLocations(loc || []);
 
       const savedOrder = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
@@ -133,9 +157,17 @@ export default function Products() {
       } else {
         setOrderedIds((prod || []).map(p => p.id));
       }
+
+      // Also refresh stock summary
+      await loadStockSummary();
     } catch (err) {
       console.error("Failed loading data from Supabase:", err.message);
     }
+  };
+
+  // ✅ Helper: get stock for a product at a location from the summary view
+  const stockByLocation = (productId, locationName) => {
+    return stockSummary[productId]?.[locationName] ?? 0;
   };
 
   const saveOrder = (ids) => localStorage.setItem(STORAGE_KEY, JSON.stringify(ids));
@@ -219,52 +251,32 @@ export default function Products() {
     });
   };
 
-  const stockByLocation = (productId, locationName) => {
-    let stock = 0;
-    transactions
-      .filter(t => String(t.product_id) === String(productId) &&
-        (t.location_name || "").toLowerCase() === locationName.toLowerCase())
-      .forEach(t => {
-        if (t.transaction_type === "inward") stock += Number(t.quantity);
-        else stock -= Number(t.quantity);
-      });
-    return stock;
-  };
-
-  // ✅ FIX: fetch ALL fresh transactions from Supabase when ledger opens,
-  // then immediately update the transactions state so stock columns refresh
-  // without waiting for a separate loadProducts() call to complete.
   const openLedger = async (product) => {
     setSelectedProduct(product);
     setLedger([]);
     setLedgerLoading(true);
     try {
-      // Fetch ALL transactions fresh (needed to update stock columns too)
-      const { data: allFreshTrans, error: allErr } = await supabase
+      const { data: productTrans, error } = await supabase
         .from("transactions")
         .select("*, locations(name)")
-        .limit(10000);
-      if (allErr) throw allErr;
+        .eq("product_id", product.id)
+        .order("created_at", { ascending: true });
+      if (error) throw error;
 
-      const formattedAll = (allFreshTrans || []).map(t => ({
-        ...t,
-        location_name: t.locations?.name || ""
-      }));
-
-      // ✅ Update transactions state immediately so stock columns re-render now
-      setTransactions(formattedAll);
-
-      // Build the ledger for this specific product
       let balance = 0;
-      const calculated = formattedAll
-        .filter(t => String(t.product_id) === String(product.id))
-        .sort((a, b) => new Date(a.created_at) - new Date(b.created_at))
-        .map(t => {
-          if (t.transaction_type === "inward") balance += Number(t.quantity);
-          else balance -= Number(t.quantity);
-          return { ...t, balance };
-        });
+      const calculated = (productTrans || []).map(t => {
+        if (t.transaction_type === "inward") balance += Number(t.quantity);
+        else balance -= Number(t.quantity);
+        return {
+          ...t,
+          location_name: t.locations?.name || "",
+          balance
+        };
+      });
       setLedger(calculated);
+
+      // Also refresh stock summary so columns stay accurate
+      await loadStockSummary();
     } catch (err) {
       console.error("Failed to load ledger:", err.message);
     } finally {
@@ -669,59 +681,53 @@ export default function Products() {
 
       {/* LEDGER MODAL */}
       {selectedProduct && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-          <div className="bg-white w-4/5 max-h-[85vh] overflow-y-auto rounded-lg shadow-xl p-6">
-            <div className="flex justify-between items-center mb-4">
-              <h2 className="text-2xl font-bold">Ledger — {selectedProduct.product_name}</h2>
-              <button onClick={() => setSelectedProduct(null)} className="bg-red-500 text-white px-4 py-1 rounded hover:bg-red-600 transition-colors">Close</button>
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-4xl max-h-[85vh] flex flex-col">
+            <div className="flex items-center justify-between p-5 border-b">
+              <div>
+                <h2 className="text-xl font-bold text-gray-800">📒 Ledger — {selectedProduct.product_name}</h2>
+                <p className="text-sm text-gray-500 mt-0.5">ID: {selectedProduct.product_id}</p>
+              </div>
+              <button onClick={() => setSelectedProduct(null)} className="text-gray-400 hover:text-gray-700 text-2xl font-bold leading-none">×</button>
             </div>
-            <table className="w-full border">
-              <thead className="bg-gray-100">
-                <tr>
-                  <th className="p-2 border">Date</th>
-                  <th className="p-2 border">Type</th>
-                  <th className="p-2 border">Party</th>
-                  <th className="p-2 border">Qty</th>
-                  <th className="p-2 border">Balance</th>
-                </tr>
-              </thead>
-              <tbody>
-                {ledgerLoading ? (
-                  <tr>
-                    <td colSpan="5" className="p-6 text-center text-gray-400">
-                      <div className="flex items-center justify-center gap-2">
-                        <svg className="animate-spin w-5 h-5 text-indigo-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
-                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
-                        </svg>
-                        Loading ledger...
-                      </div>
-                    </td>
-                  </tr>
-                ) : ledger.length === 0 ? (
-                  <tr><td colSpan="5" className="p-4 text-gray-500 text-center">No transactions</td></tr>
-                ) : ledger.map(l => (
-                  <tr key={l.id}>
-                    <td className="border p-2">{formatTimeDisplay(l.created_at)}</td>
-                    <td className={`border p-2 font-semibold ${l.transaction_type === "inward" ? "text-green-600" : "text-red-600"}`}>{l.transaction_type}</td>
-                    <td className="border p-2 text-sm text-gray-700 font-semibold">{l.party || "-"}</td>
-                    <td className="border p-2 font-bold">{l.quantity}</td>
-                    <td className="border p-2 font-bold">{l.balance}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <div className="mt-4 pt-4 border-t border-gray-200 flex items-center gap-2">
-              <span className="text-lg">📋</span>
-              {latestTally ? (
-                <span className="text-sm text-gray-600">
-                  This stock was tallied latest on{" "}
-                  <strong className="text-indigo-700 bg-indigo-50 border border-indigo-200 px-3 py-1 rounded-full">
-                    {formatTallyDisplay(latestTally.tallied_at)}
-                  </strong>
-                </span>
+            <div className="overflow-auto flex-1 p-4">
+              {ledgerLoading ? (
+                <div className="text-center py-12 text-gray-400">Loading transactions...</div>
+              ) : ledger.length === 0 ? (
+                <div className="text-center py-12 text-gray-400">No transactions found for this product.</div>
               ) : (
-                <span className="text-sm text-gray-400 italic">Stock not yet tallied — click "📋 Tally Now" to record a tally.</span>
+                <table className="w-full text-sm">
+                  <thead className="bg-gray-50 sticky top-0">
+                    <tr className="text-left text-gray-600 border-b">
+                      <th className="p-3">Date / Time</th>
+                      <th className="p-3">Type</th>
+                      <th className="p-3">Location</th>
+                      <th className="p-3">Qty</th>
+                      <th className="p-3">Balance</th>
+                      <th className="p-3">Party</th>
+                      <th className="p-3">By</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {ledger.map((t, i) => (
+                      <tr key={t.id || i} className="border-b hover:bg-gray-50">
+                        <td className="p-3 text-gray-500 whitespace-nowrap">{formatTimeDisplay(t.created_at)}</td>
+                        <td className="p-3">
+                          <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${t.transaction_type === "inward" ? "bg-green-100 text-green-700" : "bg-red-100 text-red-600"}`}>
+                            {t.transaction_type === "inward" ? "▲ In" : "▼ Out"}
+                          </span>
+                        </td>
+                        <td className="p-3 text-gray-700">{t.location_name}</td>
+                        <td className={`p-3 font-semibold ${t.transaction_type === "inward" ? "text-green-600" : "text-red-500"}`}>
+                          {t.transaction_type === "inward" ? "+" : "-"}{t.quantity}
+                        </td>
+                        <td className="p-3 font-bold text-gray-800">{t.balance}</td>
+                        <td className="p-3 text-gray-600">{t.party || "—"}</td>
+                        <td className="p-3 text-gray-400 text-xs">{t.created_by_email || "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               )}
             </div>
           </div>
