@@ -36,6 +36,7 @@ export default function Products() {
 
   const [selectedProduct, setSelectedProduct] = useState(null);
   const [ledger, setLedger] = useState([]);
+  const [ledgerLoading, setLedgerLoading] = useState(false);
   const [editingId, setEditingId] = useState(null);
 
   const dragIndexRef = useRef(null);
@@ -222,18 +223,35 @@ export default function Products() {
     return stock;
   };
 
-  const openLedger = (product) => {
+  // ✅ FIX: fetch fresh transactions from Supabase each time the ledger is opened
+  // Previously this used stale in-memory state, missing any transactions added after page load
+  const openLedger = async (product) => {
     setSelectedProduct(product);
-    let balance = 0;
-    const calculated = transactions
-      .filter(t => String(t.product_id) === String(product.id))
-      .sort((a, b) => new Date(a.created_at) - new Date(b.created_at))
-      .map(t => {
+    setLedger([]);
+    setLedgerLoading(true);
+    try {
+      const { data: freshTrans, error } = await supabase
+        .from("transactions")
+        .select("*, locations(name)")
+        .eq("product_id", product.id)
+        .order("created_at", { ascending: true });
+      if (error) throw error;
+
+      let balance = 0;
+      const calculated = (freshTrans || []).map(t => {
         if (t.transaction_type === "inward") balance += Number(t.quantity);
         else balance -= Number(t.quantity);
         return { ...t, balance };
       });
-    setLedger(calculated);
+      setLedger(calculated);
+
+      // Also refresh the in-memory transactions so the stock table updates too
+      loadProducts();
+    } catch (err) {
+      console.error("Failed to load ledger:", err.message);
+    } finally {
+      setLedgerLoading(false);
+    }
   };
 
   const handleExportExcel = () => {
@@ -650,7 +668,19 @@ export default function Products() {
                 </tr>
               </thead>
               <tbody>
-                {ledger.length === 0 ? (
+                {ledgerLoading ? (
+                  <tr>
+                    <td colSpan="5" className="p-6 text-center text-gray-400">
+                      <div className="flex items-center justify-center gap-2">
+                        <svg className="animate-spin w-5 h-5 text-indigo-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
+                        </svg>
+                        Loading ledger...
+                      </div>
+                    </td>
+                  </tr>
+                ) : ledger.length === 0 ? (
                   <tr><td colSpan="5" className="p-4 text-gray-500 text-center">No transactions</td></tr>
                 ) : ledger.map(l => (
                   <tr key={l.id}>
