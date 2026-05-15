@@ -65,72 +65,64 @@ export default function Dashboard() {
         .order("created_at", { ascending: false })
         .limit(5);
 
-      // ✅ FIX: raised limit to 10000 to match Products page — default Supabase cap
-      // of 1000 rows was causing the dashboard chart/modal to show stale/incomplete stock
-      const { data: allTrans } = await supabase
-        .from("transactions")
-        .select("product_id, transaction_type, quantity, created_at, products(product_id, product_name)")
-        .limit(10000);
+      // ✅ FIX: Use stock_summary view (same as Products page) so tally-adjusted
+      // stock is used everywhere — raw transaction sum was causing stock mismatches.
+      const { data: stockSummaryData } = await supabase
+        .from("stock_summary")
+        .select("*");
 
+      // Build stockMap: { uuid → total stock across all locations } from stock_summary
+      const stockMap = {};
+      const productIdMap = {}; // uuid → product_id string (from products table join below)
+
+      (stockSummaryData || []).forEach(row => {
+        const qty = row.current_stock ?? row.total_stock ?? 0;
+        stockMap[row.product_id] = (stockMap[row.product_id] || 0) + qty;
+      });
+
+      // Build productInfo map from productsData
+      const productInfo = {};
+      (productsData || []).forEach(p => {
+        productInfo[p.id] = {
+          product_id: p.product_id,
+          product_name: p.product_name
+        };
+      });
+
+      // Compute category totals and categoryProductsMap from stock_summary-based stockMap
       let totalStock = 0;
       let polish = 0, seamless = 0, nb = 0, sheets = 0, nonPolish = 0, other = 0;
-      const stockMap = {};
-      const dailyMap = {};
-      const productCategory = {}; // uuid → category name
-      const productInfo = {};     // uuid → { product_id, product_name }
+      const productCategory = {};
+      const categoryProductsMap = {};
 
-      (allTrans || []).forEach(t => {
-        const adjustedQty = t.transaction_type === "inward" ? Number(t.quantity) : -Number(t.quantity);
-        totalStock += adjustedQty;
+      Object.entries(stockMap).forEach(([uuid, stock]) => {
+        totalStock += stock;
 
-        if (t.product_id) {
-          stockMap[t.product_id] = (stockMap[t.product_id] || 0) + adjustedQty;
-          if (!productInfo[t.product_id]) {
-            productInfo[t.product_id] = {
-              product_id: t.products?.product_id || "",
-              product_name: t.products?.product_name || ""
-            };
-          }
-        }
-
-        const pId = (t.products?.product_id || "").toUpperCase();
-        const pName = (t.products?.product_name || "").toUpperCase();
+        const info = productInfo[uuid] || {};
+        const pId = (info.product_id || "").toUpperCase();
+        const pName = (info.product_name || "").toUpperCase();
 
         let cat;
         if (pId.startsWith("NM-PP")) {
-          polish += adjustedQty; cat = "Polish Pipe";
+          polish += stock; cat = "Polish Pipe";
         } else if (pId.startsWith("NM-NBSMLS")) {
-          seamless += adjustedQty; cat = "Seamless Pipe";
+          seamless += stock; cat = "Seamless Pipe";
         } else if (pId.startsWith("NM-NB")) {
-          nb += adjustedQty; cat = "NB Pipe";
+          nb += stock; cat = "NB Pipe";
         } else if (pId.startsWith("NM-SH") || pId.startsWith("NM-SNO") || pId.includes("SHEET") || pName.includes("SHEET")) {
-          sheets += adjustedQty; cat = "Sheets";
+          sheets += stock; cat = "Sheets";
         } else if (pId.startsWith("NM-NMPR") || pId.startsWith("NM-NPS") || pId.startsWith("NM-NPR")) {
-          nonPolish += adjustedQty; cat = "Non-Polish Pipe";
+          nonPolish += stock; cat = "Non-Polish Pipe";
         } else {
-          other += adjustedQty; cat = "Others";
+          other += stock; cat = "Others";
         }
 
-        if (t.product_id) productCategory[t.product_id] = cat;
-
-        if (t.created_at) {
-          const date = new Date(t.created_at).toLocaleDateString("en-IN", { day: "2-digit", month: "short" });
-          if (!dailyMap[date]) dailyMap[date] = { name: date, inward: 0, outward: 0 };
-          if (t.transaction_type === "inward") dailyMap[date].inward += Number(t.quantity);
-          else dailyMap[date].outward += Number(t.quantity);
-        }
-      });
-
-      // Build category → products list
-      const categoryProductsMap = {};
-      Object.entries(stockMap).forEach(([uuid, stock]) => {
-        const cat = productCategory[uuid] || "Others";
+        productCategory[uuid] = cat;
         if (!categoryProductsMap[cat]) categoryProductsMap[cat] = [];
-        const info = productInfo[uuid] || {};
         categoryProductsMap[cat].push({
           id: uuid,
-          product_id: info.product_id,
-          product_name: info.product_name,
+          product_id: info.product_id || "",
+          product_name: info.product_name || "",
           currentStock: stock
         });
       });
@@ -140,8 +132,25 @@ export default function Dashboard() {
         categoryProductsMap[cat].sort((a, b) => a.product_id.localeCompare(b.product_id));
       });
 
+      // Daily activity still uses raw transactions (for movement chart only — not stock values)
+      const { data: allTrans } = await supabase
+        .from("transactions")
+        .select("transaction_type, quantity, created_at")
+        .limit(10000);
+
+      const dailyMap = {};
+      (allTrans || []).forEach(t => {
+        if (t.created_at) {
+          const date = new Date(t.created_at).toLocaleDateString("en-IN", { day: "2-digit", month: "short" });
+          if (!dailyMap[date]) dailyMap[date] = { name: date, inward: 0, outward: 0 };
+          if (t.transaction_type === "inward") dailyMap[date].inward += Number(t.quantity);
+          else dailyMap[date].outward += Number(t.quantity);
+        }
+      });
+
       const activityData = Object.values(dailyMap).slice(-7);
 
+      // Low/High alerts use stock_summary-based stockMap
       const lowList = [], highList = [];
       (productsData || []).forEach(p => {
         const currentStock = stockMap[p.id] || 0;
