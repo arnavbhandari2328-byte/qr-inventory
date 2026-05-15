@@ -50,9 +50,6 @@ export default function Products() {
     loadProducts();
     loadLatestTally();
 
-    // ✅ Realtime subscription on transactions table
-    // Whenever any transaction is inserted/updated/deleted (from any page/device),
-    // reload stock summary so Products page is always up to date.
     const channel = supabase
       .channel("transactions-changes")
       .on(
@@ -69,7 +66,6 @@ export default function Products() {
     };
   }, []);
 
-  // ✅ Auto-refresh when user switches back to this tab
   useEffect(() => {
     const handleVisibility = () => {
       if (document.visibilityState === "visible") loadProducts();
@@ -119,18 +115,18 @@ export default function Products() {
     }
   };
 
-  // ✅ Lightweight stock summary fetch from the stock_summary view
-  // No more looping through 10,000 transactions in React memory!
+  // ✅ FIX: Handle both 'current_stock' and 'total_stock' column names from the view
   const loadStockSummary = async () => {
     try {
       const { data, error } = await supabase.from("stock_summary").select("*");
       if (error) throw error;
 
-      // Build a lookup: { productId: { locationName: quantity } }
       const summary = {};
       (data || []).forEach(row => {
         if (!summary[row.product_id]) summary[row.product_id] = {};
-        summary[row.product_id][row.location_name] = row.total_stock;
+        // Support both column name variants from the DB view
+        const qty = row.current_stock ?? row.total_stock ?? 0;
+        summary[row.product_id][row.location_name] = qty;
       });
       setStockSummary(summary);
     } catch (err) {
@@ -158,14 +154,12 @@ export default function Products() {
         setOrderedIds((prod || []).map(p => p.id));
       }
 
-      // Also refresh stock summary
       await loadStockSummary();
     } catch (err) {
       console.error("Failed loading data from Supabase:", err.message);
     }
   };
 
-  // ✅ Helper: get stock for a product at a location from the summary view
   const stockByLocation = (productId, locationName) => {
     return stockSummary[productId]?.[locationName] ?? 0;
   };
@@ -275,7 +269,6 @@ export default function Products() {
       });
       setLedger(calculated);
 
-      // Also refresh stock summary so columns stay accurate
       await loadStockSummary();
     } catch (err) {
       console.error("Failed to load ledger:", err.message);
@@ -683,6 +676,7 @@ export default function Products() {
       {selectedProduct && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-xl shadow-2xl w-full max-w-4xl max-h-[85vh] flex flex-col">
+            {/* Modal Header */}
             <div className="flex items-center justify-between p-5 border-b">
               <div>
                 <h2 className="text-xl font-bold text-gray-800">📒 Ledger — {selectedProduct.product_name}</h2>
@@ -690,6 +684,8 @@ export default function Products() {
               </div>
               <button onClick={() => setSelectedProduct(null)} className="text-gray-400 hover:text-gray-700 text-2xl font-bold leading-none">×</button>
             </div>
+
+            {/* Modal Body */}
             <div className="overflow-auto flex-1 p-4">
               {ledgerLoading ? (
                 <div className="text-center py-12 text-gray-400">Loading transactions...</div>
@@ -729,6 +725,24 @@ export default function Products() {
                   </tbody>
                 </table>
               )}
+            </div>
+
+            {/* ✅ Modal Footer — Latest Tally Date */}
+            <div className="border-t px-5 py-3 bg-gray-50 rounded-b-xl flex items-center justify-between flex-wrap gap-2">
+              {latestTally ? (
+                <span className="text-sm text-indigo-700 flex items-center gap-1.5">
+                  <span>✅</span>
+                  <span>Last tallied on <strong>{formatTallyDisplay(latestTally.tallied_at)}</strong> by {latestTally.tallied_by}</span>
+                </span>
+              ) : (
+                <span className="text-sm text-gray-400">No tally recorded yet.</span>
+              )}
+              <button
+                onClick={() => setSelectedProduct(null)}
+                className="text-sm text-gray-500 hover:text-gray-700 font-medium px-4 py-1.5 bg-white border rounded-lg hover:bg-gray-100 transition-colors"
+              >
+                Close
+              </button>
             </div>
           </div>
         </div>
