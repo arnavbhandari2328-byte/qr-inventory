@@ -51,6 +51,15 @@ export default function Products() {
     loadLatestTally();
   }, []);
 
+  // ✅ Auto-refresh when user switches back to this tab
+  useEffect(() => {
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible") loadProducts();
+    };
+    document.addEventListener("visibilitychange", handleVisibility);
+    return () => document.removeEventListener("visibilitychange", handleVisibility);
+  }, []);
+
   const checkUserRole = async () => {
     const { data: { user } } = await supabase.auth.getUser();
     if (ADMIN_EMAILS.includes(user?.email)) setIsAdmin(true);

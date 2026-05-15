@@ -44,6 +44,15 @@ export default function Dashboard() {
     fetchDashboardData();
   }, []);
 
+  // ✅ Auto-refresh when user switches back to this tab
+  useEffect(() => {
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible") fetchDashboardData();
+    };
+    document.addEventListener("visibilitychange", handleVisibility);
+    return () => document.removeEventListener("visibilitychange", handleVisibility);
+  }, []);
+
   const fetchDashboardData = async () => {
     try {
       const { data: productsData } = await supabase
