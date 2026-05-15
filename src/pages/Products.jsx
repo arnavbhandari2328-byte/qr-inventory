@@ -96,7 +96,6 @@ export default function Products() {
     try {
       const { data: prod, error: prodErr } = await supabase.from("products").select("*");
 
-      // ✅ FIX: explicitly set limit to 10000 to avoid Supabase's default 1000-row cap
       const { data: trans, error: transErr } = await supabase
         .from("transactions")
         .select("*, locations(name)")
@@ -223,30 +222,40 @@ export default function Products() {
     return stock;
   };
 
-  // ✅ FIX: fetch fresh transactions from Supabase each time the ledger is opened
-  // Previously this used stale in-memory state, missing any transactions added after page load
+  // ✅ FIX: fetch ALL fresh transactions from Supabase when ledger opens,
+  // then immediately update the transactions state so stock columns refresh
+  // without waiting for a separate loadProducts() call to complete.
   const openLedger = async (product) => {
     setSelectedProduct(product);
     setLedger([]);
     setLedgerLoading(true);
     try {
-      const { data: freshTrans, error } = await supabase
+      // Fetch ALL transactions fresh (needed to update stock columns too)
+      const { data: allFreshTrans, error: allErr } = await supabase
         .from("transactions")
         .select("*, locations(name)")
-        .eq("product_id", product.id)
-        .order("created_at", { ascending: true });
-      if (error) throw error;
+        .limit(10000);
+      if (allErr) throw allErr;
 
+      const formattedAll = (allFreshTrans || []).map(t => ({
+        ...t,
+        location_name: t.locations?.name || ""
+      }));
+
+      // ✅ Update transactions state immediately so stock columns re-render now
+      setTransactions(formattedAll);
+
+      // Build the ledger for this specific product
       let balance = 0;
-      const calculated = (freshTrans || []).map(t => {
-        if (t.transaction_type === "inward") balance += Number(t.quantity);
-        else balance -= Number(t.quantity);
-        return { ...t, balance };
-      });
+      const calculated = formattedAll
+        .filter(t => String(t.product_id) === String(product.id))
+        .sort((a, b) => new Date(a.created_at) - new Date(b.created_at))
+        .map(t => {
+          if (t.transaction_type === "inward") balance += Number(t.quantity);
+          else balance -= Number(t.quantity);
+          return { ...t, balance };
+        });
       setLedger(calculated);
-
-      // Also refresh the in-memory transactions so the stock table updates too
-      loadProducts();
     } catch (err) {
       console.error("Failed to load ledger:", err.message);
     } finally {

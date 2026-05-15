@@ -56,9 +56,12 @@ export default function Dashboard() {
         .order("created_at", { ascending: false })
         .limit(5);
 
+      // ✅ FIX: raised limit to 10000 to match Products page — default Supabase cap
+      // of 1000 rows was causing the dashboard chart/modal to show stale/incomplete stock
       const { data: allTrans } = await supabase
         .from("transactions")
-        .select("product_id, transaction_type, quantity, created_at, products(product_id, product_name)");
+        .select("product_id, transaction_type, quantity, created_at, products(product_id, product_name)")
+        .limit(10000);
 
       let totalStock = 0;
       let polish = 0, seamless = 0, nb = 0, sheets = 0, nonPolish = 0, other = 0;
