@@ -106,7 +106,7 @@ export default function Products() {
       }]);
       if (error) throw error;
       await loadLatestTally();
-      alert("✅ Tally recorded successfully!");
+      alert("\u2705 Tally recorded successfully!");
     } catch (err) {
       console.error("Tally error:", err.message);
       alert("Error recording tally: " + err.message);
@@ -134,6 +134,12 @@ export default function Products() {
     }
   };
 
+  // Returns product IDs sorted alphabetically by product_id string — the canonical default order
+  const getDefaultOrder = (prod) =>
+    [...prod]
+      .sort((a, b) => a.product_id.localeCompare(b.product_id))
+      .map(p => p.id);
+
   const loadProducts = async () => {
     try {
       const { data: prod, error: prodErr } = await supabase.from("products").select("*");
@@ -148,10 +154,11 @@ export default function Products() {
       const savedOrder = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
       if (savedOrder.length > 0) {
         const savedIds = savedOrder.filter(id => (prod || []).some(p => p.id === id));
-        const newIds = (prod || []).map(p => p.id).filter(id => !savedIds.includes(id));
+        const newIds = getDefaultOrder(prod || []).filter(id => !savedIds.includes(id));
         setOrderedIds([...savedIds, ...newIds]);
       } else {
-        setOrderedIds((prod || []).map(p => p.id));
+        // No saved order — use alphabetical default
+        setOrderedIds(getDefaultOrder(prod || []));
       }
 
       await loadStockSummary();
@@ -165,8 +172,11 @@ export default function Products() {
   };
 
   const saveOrder = (ids) => localStorage.setItem(STORAGE_KEY, JSON.stringify(ids));
+
+  // ✅ FIX: Reset to alphabetical order by product_id, not random DB insertion order
   const resetOrder = () => {
-    setOrderedIds(products.map(p => p.id));
+    const defaultIds = getDefaultOrder(products);
+    setOrderedIds(defaultIds);
     localStorage.removeItem(STORAGE_KEY);
   };
 
@@ -302,7 +312,7 @@ export default function Products() {
 
       doc.setFontSize(13);
       doc.setTextColor(10, 42, 94);
-      doc.text("Products Report — Nivee Metals", 14, 13);
+      doc.text("Products Report \u2014 Nivee Metals", 14, 13);
       doc.setFontSize(8);
       doc.setTextColor(120, 120, 120);
       doc.text("Generated: " + new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" }), 14, 19);
@@ -385,7 +395,7 @@ export default function Products() {
         const lowAlertKey = headers.find(k => normalize(k).includes('low'));
         const highAlertKey = headers.find(k => normalize(k).includes('high') || normalize(k).includes('max'));
         if (!highAlertKey) {
-          const proceed = window.confirm("⚠️ Couldn't find High Alert column.\nHeaders: [ " + headers.join(", ") + " ]\nContinue with High Alert = 0?");
+          const proceed = window.confirm("\u26a0\ufe0f Couldn't find High Alert column.\nHeaders: [ " + headers.join(", ") + " ]\nContinue with High Alert = 0?");
           if (!proceed) { e.target.value = null; return; }
         }
         const productsToUpsert = [];
@@ -530,14 +540,14 @@ export default function Products() {
             <path d="M9 11l3 3L22 4"/>
             <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
           </svg>
-          {tallyLoading ? "Saving..." : "📋 Tally Now"}
+          {tallyLoading ? "Saving..." : "\ud83d\udccb Tally Now"}
         </button>
       </div>
 
       {/* Last tally info bar */}
       {latestTally && (
         <div className="mb-4 px-4 py-2 bg-indigo-50 border border-indigo-200 rounded-xl text-sm text-indigo-700 flex items-center gap-2">
-          <span>✅</span>
+          <span>\u2705</span>
           <span>Last tallied on <strong>{formatTallyDisplay(latestTally.tallied_at)}</strong> by {latestTally.tallied_by}</span>
         </div>
       )}
@@ -575,15 +585,15 @@ export default function Products() {
 
         {editingId && (
           <div className="mt-4 pt-4 border-t border-dashed border-orange-300">
-            <p className="text-xs font-semibold text-orange-600 uppercase tracking-wide mb-3">📦 Stock Adjustment (optional)</p>
+            <p className="text-xs font-semibold text-orange-600 uppercase tracking-wide mb-3">\ud83d\udce6 Stock Adjustment (optional)</p>
             <div className="flex gap-3 items-center flex-wrap">
               <select name="adj_location_id" value={form.adj_location_id} onChange={handleChange} className="border p-2 rounded flex-1 min-w-[140px] bg-white">
-                <option value="">— Select Location —</option>
+                <option value="">\u2014 Select Location \u2014</option>
                 {locations.map(loc => (<option key={loc.id} value={loc.id}>{loc.name}</option>))}
               </select>
               <div className="flex rounded overflow-hidden border">
-                <button type="button" onClick={() => setForm(f => ({ ...f, adj_type: "inward" }))} className={`px-4 py-2 text-sm font-semibold transition-colors ${form.adj_type === "inward" ? "bg-green-600 text-white" : "bg-white text-gray-600 hover:bg-gray-50"}`}>▲ Inward</button>
-                <button type="button" onClick={() => setForm(f => ({ ...f, adj_type: "outward" }))} className={`px-4 py-2 text-sm font-semibold transition-colors ${form.adj_type === "outward" ? "bg-red-500 text-white" : "bg-white text-gray-600 hover:bg-gray-50"}`}>▼ Outward</button>
+                <button type="button" onClick={() => setForm(f => ({ ...f, adj_type: "inward" }))} className={`px-4 py-2 text-sm font-semibold transition-colors ${form.adj_type === "inward" ? "bg-green-600 text-white" : "bg-white text-gray-600 hover:bg-gray-50"}`}>\u25b2 Inward</button>
+                <button type="button" onClick={() => setForm(f => ({ ...f, adj_type: "outward" }))} className={`px-4 py-2 text-sm font-semibold transition-colors ${form.adj_type === "outward" ? "bg-red-500 text-white" : "bg-white text-gray-600 hover:bg-gray-50"}`}>\u25bc Outward</button>
               </div>
               <input name="adj_quantity" placeholder="Quantity" type="number" min="0" value={form.adj_quantity} onChange={handleChange} className="border p-2 rounded w-32" />
               <input name="adj_party" placeholder="Party / Remark (optional)" value={form.adj_party} onChange={handleChange} className="border p-2 rounded flex-1 min-w-[180px]" />
@@ -598,8 +608,8 @@ export default function Products() {
       {/* SEARCH + RESET ORDER */}
       <div className="flex gap-3 items-center mb-4">
         <input placeholder="Search by ID or Name..." value={search} onChange={(e) => setSearch(e.target.value)} className="border p-2 rounded flex-1" />
-        <button onClick={resetOrder} title="Restore default product order" className="bg-gray-200 hover:bg-gray-300 text-gray-700 text-sm font-semibold px-4 py-2 rounded transition-colors whitespace-nowrap">
-          ↺ Reset Order
+        <button onClick={resetOrder} title="Restore alphabetical product order" className="bg-gray-200 hover:bg-gray-300 text-gray-700 text-sm font-semibold px-4 py-2 rounded transition-colors whitespace-nowrap">
+          \u21ba Reset Order
         </button>
       </div>
 
@@ -679,10 +689,10 @@ export default function Products() {
             {/* Modal Header */}
             <div className="flex items-center justify-between p-5 border-b">
               <div>
-                <h2 className="text-xl font-bold text-gray-800">📒 Ledger — {selectedProduct.product_name}</h2>
+                <h2 className="text-xl font-bold text-gray-800">\ud83d\udcd2 Ledger \u2014 {selectedProduct.product_name}</h2>
                 <p className="text-sm text-gray-500 mt-0.5">ID: {selectedProduct.product_id}</p>
               </div>
-              <button onClick={() => setSelectedProduct(null)} className="text-gray-400 hover:text-gray-700 text-2xl font-bold leading-none">×</button>
+              <button onClick={() => setSelectedProduct(null)} className="text-gray-400 hover:text-gray-700 text-2xl font-bold leading-none">\u00d7</button>
             </div>
 
             {/* Modal Body */}
@@ -710,7 +720,7 @@ export default function Products() {
                         <td className="p-3 text-gray-500 whitespace-nowrap">{formatTimeDisplay(t.created_at)}</td>
                         <td className="p-3">
                           <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${t.transaction_type === "inward" ? "bg-green-100 text-green-700" : "bg-red-100 text-red-600"}`}>
-                            {t.transaction_type === "inward" ? "▲ In" : "▼ Out"}
+                            {t.transaction_type === "inward" ? "\u25b2 In" : "\u25bc Out"}
                           </span>
                         </td>
                         <td className="p-3 text-gray-700">{t.location_name}</td>
@@ -718,8 +728,8 @@ export default function Products() {
                           {t.transaction_type === "inward" ? "+" : "-"}{t.quantity}
                         </td>
                         <td className="p-3 font-bold text-gray-800">{t.balance}</td>
-                        <td className="p-3 text-gray-600">{t.party || "—"}</td>
-                        <td className="p-3 text-gray-400 text-xs">{t.created_by_email || "—"}</td>
+                        <td className="p-3 text-gray-600">{t.party || "\u2014"}</td>
+                        <td className="p-3 text-gray-400 text-xs">{t.created_by_email || "\u2014"}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -727,11 +737,11 @@ export default function Products() {
               )}
             </div>
 
-            {/* ✅ Modal Footer — Latest Tally Date */}
+            {/* \u2705 Modal Footer \u2014 Latest Tally Date */}
             <div className="border-t px-5 py-3 bg-gray-50 rounded-b-xl flex items-center justify-between flex-wrap gap-2">
               {latestTally ? (
                 <span className="text-sm text-indigo-700 flex items-center gap-1.5">
-                  <span>✅</span>
+                  <span>\u2705</span>
                   <span>Last tallied on <strong>{formatTallyDisplay(latestTally.tallied_at)}</strong> by {latestTally.tallied_by}</span>
                 </span>
               ) : (
