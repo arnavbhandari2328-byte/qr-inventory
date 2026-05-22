@@ -42,12 +42,19 @@ function inferCategory(productName) {
   if (n.includes("SEAMLESS")) return "Seamless";
   if (n.includes("POLISH") || n.includes("POLISHED")) return "Polish Pipe";
   if (n.includes("SQUARE")) return "Square Pipe";
-  if (n.includes("RECTANGLE") || n.includes("RECTANGULAR")) return "Rectangular Pipe";
-  if (n.includes("ROUND BAR") || n.includes("ROUND ROD")) return "Round Bar";
+  // Fix: also catch "RECTANGE" (common typo in product names)
+  if (n.includes("RECTANGLE") || n.includes("RECTANGULAR") || n.includes("RECTANGE")) return "Rectangular Pipe";
+  if (n.includes("ROUND BAR") || n.includes("ROUND ROD") || n.includes("BRIGHT ROD") || n.includes("BRIGHT BAR")) return "Round Bar";
   if (n.includes("FLAT BAR") || n.includes("FLAT ROD")) return "Flat Bar";
   if (n.includes("ANGLE")) return "Angle";
   if (n.includes("CHANNEL")) return "Channel";
-  if (n.includes("SHEET") || n.includes("PLATE")) return "Sheet / Plate";
+  // Fix: catch "NO.4 MAT" and similar sheet/mat finishes before generic PIPE check
+  if (
+    n.includes("SHEET") || n.includes("PLATE") ||
+    n.includes(" MAT ") || n.includes(" MAT$") || n.endsWith(" MAT") ||
+    n.includes("NO.4") || n.includes("NO.2") || n.includes("NO.8") ||
+    n.includes("2B FINISH") || n.includes("BA FINISH") || n.includes("HAIRLINE")
+  ) return "Sheet / Plate";
   if (n.includes("COIL") || n.includes("STRIP")) return "Coil / Strip";
   if (n.includes("ERW")) return "ERW";
   if (n.includes("PIPE")) return "Pipe (General)";
@@ -881,76 +888,128 @@ export default function Products() {
       )}
 
       {/* ═══════════════════════════════
-          LEDGER MODAL (unchanged)
+          LEDGER MODAL — improved UI
           ═══════════════════════════════ */}
       {selectedProduct && (
-        <div className="fixed inset-0 bg-black/50 flex items-start justify-center z-50 pt-16 px-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[80vh] flex flex-col">
-            <div className="flex items-center justify-between px-6 py-4 border-b">
-              <div>
-                <h2 className="text-xl font-bold text-gray-800">{selectedProduct.product_name}</h2>
-                <p className="text-sm text-gray-500 font-mono mt-0.5">{selectedProduct.product_id}</p>
-              </div>
-              <div className="flex items-center gap-4">
-                <div className="text-right">
-                  <p className="text-xs text-gray-400 uppercase tracking-wide">Current Stock</p>
-                  <div className="flex gap-3 text-sm font-semibold text-gray-700">
-                    {locations.map(loc => (
-                      <span key={loc.id} className="bg-gray-100 px-2 py-1 rounded">
-                        {loc.name}: <span className="text-blue-700">{stockByLocation(selectedProduct.id, loc.name)}</span>
-                      </span>
-                    ))}
-                  </div>
+        <div className="fixed inset-0 bg-black/60 flex items-start justify-center z-50 pt-10 px-4 pb-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-5xl max-h-[88vh] flex flex-col">
+
+            {/* ── Modal Header ── */}
+            <div className="px-7 py-5 border-b bg-gradient-to-r from-blue-700 to-blue-800 rounded-t-2xl text-white">
+              <div className="flex items-start justify-between gap-4">
+                <div className="flex-1 min-w-0">
+                  <h2 className="text-xl font-bold leading-tight truncate">{selectedProduct.product_name}</h2>
+                  <p className="text-blue-200 font-mono text-sm mt-1">{selectedProduct.product_id}</p>
                 </div>
                 <button
                   onClick={() => setSelectedProduct(null)}
-                  className="text-gray-400 hover:text-gray-700 text-2xl font-light transition-colors"
+                  className="text-blue-200 hover:text-white text-3xl font-light transition-colors leading-none mt-0.5 shrink-0"
                 >
                   ✕
                 </button>
               </div>
             </div>
+
+            {/* ── Stock Summary Cards ── */}
+            <div className="px-7 py-4 bg-gray-50 border-b">
+              <div className="flex flex-wrap gap-3 items-center justify-between">
+                {/* Location stock pills */}
+                <div className="flex flex-wrap gap-3">
+                  {locations.map(loc => (
+                    <div key={loc.id} className="flex flex-col items-center bg-white border border-gray-200 rounded-xl px-5 py-3 shadow-sm min-w-[90px]">
+                      <span className="text-xs text-gray-400 uppercase tracking-wide font-semibold mb-1">{loc.name}</span>
+                      <span className="text-2xl font-extrabold text-blue-700 tabular-nums">{stockByLocation(selectedProduct.id, loc.name)}</span>
+                    </div>
+                  ))}
+                  <div className="flex flex-col items-center bg-blue-700 border border-blue-700 rounded-xl px-5 py-3 shadow-sm min-w-[90px]">
+                    <span className="text-xs text-blue-200 uppercase tracking-wide font-semibold mb-1">Total</span>
+                    <span className="text-2xl font-extrabold text-white tabular-nums">{totalStock(selectedProduct.id)}</span>
+                  </div>
+                </div>
+
+                {/* Last tally badge */}
+                <div className={`flex items-center gap-2 rounded-xl px-4 py-3 border text-sm font-medium ${
+                  latestTally ? "bg-indigo-50 border-indigo-200 text-indigo-700" : "bg-gray-100 border-gray-200 text-gray-400"
+                }`}>
+                  <span className="text-base">{latestTally ? "✅" : "⏳"}</span>
+                  <div>
+                    <div className="text-xs uppercase tracking-wide font-semibold opacity-70 mb-0.5">Last Tally</div>
+                    {latestTally ? (
+                      <>
+                        <div className="font-bold">{formatTallyDisplay(latestTally.tallied_at)}</div>
+                        <div className="text-xs opacity-70">by {latestTally.tallied_by}</div>
+                      </>
+                    ) : (
+                      <div>No tally recorded yet</div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* ── Ledger Table ── */}
             <div className="overflow-y-auto flex-1">
               {ledgerLoading ? (
-                <div className="p-8 text-center text-gray-400">Loading ledger...</div>
+                <div className="p-10 text-center text-gray-400 text-base">
+                  <div className="text-3xl mb-3">⏳</div>
+                  Loading transactions...
+                </div>
               ) : ledger.length === 0 ? (
-                <div className="p-8 text-center text-gray-400">No transactions yet for this product.</div>
+                <div className="p-10 text-center text-gray-400 text-base">
+                  <div className="text-3xl mb-3">📭</div>
+                  No transactions yet for this product.
+                </div>
               ) : (
                 <table className="w-full text-sm">
-                  <thead className="bg-gray-50 sticky top-0 border-b">
+                  <thead className="bg-gray-50 sticky top-0 border-b shadow-sm">
                     <tr className="text-left text-gray-500 text-xs uppercase tracking-wide">
-                      <th className="px-4 py-3">Date / Time</th>
-                      <th className="px-4 py-3">Type</th>
-                      <th className="px-4 py-3">Location</th>
-                      <th className="px-4 py-3 text-right">Qty</th>
-                      <th className="px-4 py-3 text-right">Balance</th>
-                      <th className="px-4 py-3">Party</th>
-                      <th className="px-4 py-3">By</th>
+                      <th className="px-5 py-3 font-semibold">Date / Time</th>
+                      <th className="px-4 py-3 font-semibold">Type</th>
+                      <th className="px-4 py-3 font-semibold">Location</th>
+                      <th className="px-4 py-3 text-right font-semibold">Qty</th>
+                      <th className="px-4 py-3 text-right font-semibold">Balance</th>
+                      <th className="px-4 py-3 font-semibold">Party</th>
+                      <th className="px-4 py-3 font-semibold">By</th>
                     </tr>
                   </thead>
                   <tbody>
                     {ledger.map((t, i) => (
-                      <tr key={t.id} className={`border-b ${i % 2 === 0 ? "bg-white" : "bg-gray-50/50"}`}>
-                        <td className="px-4 py-2.5 text-gray-500 text-xs font-mono whitespace-nowrap">
-                          {t.created_at?.replace('T', ' ').split('.')[0]}
+                      <tr key={t.id} className={`border-b hover:bg-blue-50/40 transition-colors ${i % 2 === 0 ? "bg-white" : "bg-gray-50/40"}`}>
+                        <td className="px-5 py-3 text-gray-600 text-sm font-mono whitespace-nowrap">
+                          {new Date(t.created_at).toLocaleString("en-IN", {
+                            timeZone: "Asia/Kolkata",
+                            day: "2-digit", month: "short", year: "numeric",
+                            hour: "2-digit", minute: "2-digit", hour12: true
+                          })}
                         </td>
-                        <td className="px-4 py-2.5">
-                          <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${t.transaction_type === "inward" ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"}`}>
+                        <td className="px-4 py-3">
+                          <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${t.transaction_type === "inward" ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"}`}>
                             {t.transaction_type === "inward" ? "▲ IN" : "▼ OUT"}
                           </span>
                         </td>
-                        <td className="px-4 py-2.5 text-gray-600">{t.location_name}</td>
-                        <td className={`px-4 py-2.5 text-right font-semibold tabular-nums ${t.transaction_type === "inward" ? "text-green-700" : "text-red-600"}`}>
+                        <td className="px-4 py-3 text-gray-700 font-medium">{t.location_name}</td>
+                        <td className={`px-4 py-3 text-right font-bold text-base tabular-nums ${t.transaction_type === "inward" ? "text-green-700" : "text-red-600"}`}>
                           {t.transaction_type === "inward" ? "+" : "-"}{t.quantity}
                         </td>
-                        <td className="px-4 py-2.5 text-right font-bold tabular-nums text-gray-800">{t.balance}</td>
-                        <td className="px-4 py-2.5 text-gray-600 text-xs">{t.party || "—"}</td>
-                        <td className="px-4 py-2.5 text-gray-400 text-xs">{t.created_by_email || "—"}</td>
+                        <td className="px-4 py-3 text-right font-extrabold text-base tabular-nums text-gray-800">{t.balance}</td>
+                        <td className="px-4 py-3 text-gray-600 text-sm">{t.party || "—"}</td>
+                        <td className="px-4 py-3 text-gray-400 text-xs">{t.created_by_email || "—"}</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               )}
+            </div>
+
+            {/* ── Modal Footer ── */}
+            <div className="px-7 py-4 border-t bg-gray-50 rounded-b-2xl flex items-center justify-between">
+              <span className="text-sm text-gray-400">{ledger.length} transaction{ledger.length !== 1 ? "s" : ""} recorded</span>
+              <button
+                onClick={() => setSelectedProduct(null)}
+                className="bg-gray-700 hover:bg-gray-800 text-white font-semibold px-6 py-2.5 rounded-xl transition-colors text-sm"
+              >
+                Close
+              </button>
             </div>
           </div>
         </div>
