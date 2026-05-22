@@ -12,16 +12,77 @@ const ADMIN_EMAILS = [
   "vikrambhandari7171@gmail.com",
 ];
 
+// ─── Catalog grouping helpers ────────────────────────────────────────────────
+
+function inferMaterial(productName) {
+  const n = productName.toUpperCase();
+  if (n.includes("316L")) return "SS 316L";
+  if (n.includes("316")) return "SS 316";
+  if (n.includes("304L")) return "SS 304L";
+  if (n.includes("304")) return "SS 304";
+  if (n.includes("202")) return "SS 202";
+  if (n.includes("201")) return "SS 201";
+  if (n.includes("310")) return "SS 310";
+  if (n.includes("321")) return "SS 321";
+  if (n.includes("409")) return "SS 409";
+  if (n.includes("430")) return "SS 430";
+  if (n.includes("MS") || n.includes("MILD STEEL")) return "MS";
+  if (n.includes("GI") || n.includes("GALVANISED") || n.includes("GALVANIZED")) return "GI";
+  if (n.includes("CARBON STEEL") || n.includes("CS")) return "Carbon Steel";
+  return "Other";
+}
+
+function inferCategory(productName) {
+  const n = productName.toUpperCase();
+  if (n.includes("SCH 160") || n.includes("SCH-160") || n.includes("SCH160")) return "SCH 160";
+  if (n.includes("SCH 80") || n.includes("SCH-80") || n.includes("SCH80")) return "SCH 80";
+  if (n.includes("SCH 40") || n.includes("SCH-40") || n.includes("SCH40")) return "SCH 40";
+  if (n.includes("SCH 20") || n.includes("SCH-20") || n.includes("SCH20")) return "SCH 20";
+  if (n.includes("SCH 10") || n.includes("SCH-10") || n.includes("SCH10")) return "SCH 10";
+  if (n.includes("SEAMLESS")) return "Seamless";
+  if (n.includes("POLISH") || n.includes("POLISHED")) return "Polish Pipe";
+  if (n.includes("SQUARE")) return "Square Pipe";
+  if (n.includes("RECTANGLE") || n.includes("RECTANGULAR")) return "Rectangular Pipe";
+  if (n.includes("ROUND BAR") || n.includes("ROUND ROD")) return "Round Bar";
+  if (n.includes("FLAT BAR") || n.includes("FLAT ROD")) return "Flat Bar";
+  if (n.includes("ANGLE")) return "Angle";
+  if (n.includes("CHANNEL")) return "Channel";
+  if (n.includes("SHEET") || n.includes("PLATE")) return "Sheet / Plate";
+  if (n.includes("COIL") || n.includes("STRIP")) return "Coil / Strip";
+  if (n.includes("ERW")) return "ERW";
+  if (n.includes("PIPE")) return "Pipe (General)";
+  return "General";
+}
+
+function buildCatalog(products) {
+  const catalog = {};
+  products.forEach(p => {
+    const mat = inferMaterial(p.product_name);
+    const cat = inferCategory(p.product_name);
+    if (!catalog[mat]) catalog[mat] = {};
+    if (!catalog[mat][cat]) catalog[mat][cat] = [];
+    catalog[mat][cat].push(p);
+  });
+  return catalog;
+}
+
+// ─── Main Component ──────────────────────────────────────────────────────────
+
 export default function Products() {
   const [products, setProducts] = useState([]);
   const [orderedIds, setOrderedIds] = useState([]);
-  const [stockSummary, setStockSummary] = useState({}); // { productId: { Office: n, Godown: n, Warehouse: n } }
+  const [stockSummary, setStockSummary] = useState({});
   const [locations, setLocations] = useState([]);
   const [search, setSearch] = useState("");
   const [isAdmin, setIsAdmin] = useState(false);
+  const [viewMode, setViewMode] = useState("catalog"); // "catalog" | "table"
 
   const [latestTally, setLatestTally] = useState(null);
   const [tallyLoading, setTallyLoading] = useState(false);
+
+  // Accordion open state: { [material]: bool } and { [material+cat]: bool }
+  const [openMaterials, setOpenMaterials] = useState({});
+  const [openCategories, setOpenCategories] = useState({});
 
   const [form, setForm] = useState({
     product_id: "",
@@ -55,15 +116,11 @@ export default function Products() {
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "transactions" },
-        () => {
-          loadStockSummary();
-        }
+        () => { loadStockSummary(); }
       )
       .subscribe();
 
-    return () => {
-      supabase.removeChannel(channel);
-    };
+    return () => { supabase.removeChannel(channel); };
   }, []);
 
   useEffect(() => {
@@ -106,7 +163,7 @@ export default function Products() {
       }]);
       if (error) throw error;
       await loadLatestTally();
-      alert("\u2705 Tally recorded successfully!");
+      alert("✅ Tally recorded successfully!");
     } catch (err) {
       console.error("Tally error:", err.message);
       alert("Error recording tally: " + err.message);
@@ -115,16 +172,13 @@ export default function Products() {
     }
   };
 
-  // ✅ FIX: Handle both 'current_stock' and 'total_stock' column names from the view
   const loadStockSummary = async () => {
     try {
       const { data, error } = await supabase.from("stock_summary").select("*");
       if (error) throw error;
-
       const summary = {};
       (data || []).forEach(row => {
         if (!summary[row.product_id]) summary[row.product_id] = {};
-        // Support both column name variants from the DB view
         const qty = row.current_stock ?? row.total_stock ?? 0;
         summary[row.product_id][row.location_name] = qty;
       });
@@ -134,7 +188,6 @@ export default function Products() {
     }
   };
 
-  // Returns product IDs sorted alphabetically by product_id string — the canonical default order
   const getDefaultOrder = (prod) =>
     [...prod]
       .sort((a, b) => a.product_id.localeCompare(b.product_id))
@@ -157,7 +210,6 @@ export default function Products() {
         const newIds = getDefaultOrder(prod || []).filter(id => !savedIds.includes(id));
         setOrderedIds([...savedIds, ...newIds]);
       } else {
-        // No saved order — use alphabetical default
         setOrderedIds(getDefaultOrder(prod || []));
       }
 
@@ -167,13 +219,14 @@ export default function Products() {
     }
   };
 
-  const stockByLocation = (productId, locationName) => {
-    return stockSummary[productId]?.[locationName] ?? 0;
-  };
+  const stockByLocation = (productId, locationName) =>
+    stockSummary[productId]?.[locationName] ?? 0;
+
+  const totalStock = (productId) =>
+    Object.values(stockSummary[productId] || {}).reduce((s, v) => s + v, 0);
 
   const saveOrder = (ids) => localStorage.setItem(STORAGE_KEY, JSON.stringify(ids));
 
-  // ✅ FIX: Reset to alphabetical order by product_id, not random DB insertion order
   const resetOrder = () => {
     const defaultIds = getDefaultOrder(products);
     setOrderedIds(defaultIds);
@@ -241,11 +294,6 @@ export default function Products() {
     touchFromIndex.current = null;
   };
 
-  const formatTimeDisplay = (dbDateString) => {
-    if (!dbDateString) return "-";
-    return dbDateString.replace('T', ' ').split('.')[0];
-  };
-
   const formatTallyDisplay = (dbDateString) => {
     if (!dbDateString) return null;
     return new Date(dbDateString).toLocaleString("en-IN", {
@@ -271,14 +319,9 @@ export default function Products() {
       const calculated = (productTrans || []).map(t => {
         if (t.transaction_type === "inward") balance += Number(t.quantity);
         else balance -= Number(t.quantity);
-        return {
-          ...t,
-          location_name: t.locations?.name || "",
-          balance
-        };
+        return { ...t, location_name: t.locations?.name || "", balance };
       });
       setLedger(calculated);
-
       await loadStockSummary();
     } catch (err) {
       console.error("Failed to load ledger:", err.message);
@@ -307,59 +350,30 @@ export default function Products() {
   const handleExportPDF = () => {
     try {
       if (!products.length) return;
-
       const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
-
       doc.setFontSize(13);
       doc.setTextColor(10, 42, 94);
-      doc.text("Products Report \u2014 Nivee Metals", 14, 13);
+      doc.text("Products Report — Nivee Metals", 14, 13);
       doc.setFontSize(8);
       doc.setTextColor(120, 120, 120);
       doc.text("Generated: " + new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" }), 14, 19);
-
       const head = [["Product ID", "Product Name", "Office", "Godown", "Warehouse", "Low Alert", "High Alert"]];
       const body = products.map(p => [
-        p.product_id,
-        p.product_name,
+        p.product_id, p.product_name,
         String(stockByLocation(p.id, "Office")),
         String(stockByLocation(p.id, "Godown")),
         String(stockByLocation(p.id, "Warehouse")),
         String(p.low_stock_alert),
         String(p.high_stock_alert || 0)
       ]);
-
       autoTable(doc, {
-        head,
-        body,
-        startY: 23,
-        theme: "grid",
-        styles: {
-          fontSize: 7,
-          cellPadding: 2,
-          overflow: "ellipsize",
-          halign: "left",
-          lineColor: [220, 220, 220],
-          lineWidth: 0.2
-        },
-        headStyles: {
-          fillColor: [10, 42, 94],
-          textColor: 255,
-          fontStyle: "bold",
-          fontSize: 7
-        },
+        head, body, startY: 23, theme: "grid",
+        styles: { fontSize: 7, cellPadding: 2, overflow: "ellipsize", halign: "left", lineColor: [220, 220, 220], lineWidth: 0.2 },
+        headStyles: { fillColor: [10, 42, 94], textColor: 255, fontStyle: "bold", fontSize: 7 },
         alternateRowStyles: { fillColor: [248, 249, 252] },
-        columnStyles: {
-          0: { cellWidth: 30 },
-          1: { cellWidth: 80 },
-          2: { cellWidth: 22, halign: "center" },
-          3: { cellWidth: 22, halign: "center" },
-          4: { cellWidth: 26, halign: "center" },
-          5: { cellWidth: 22, halign: "center" },
-          6: { cellWidth: 22, halign: "center" }
-        },
+        columnStyles: { 0: { cellWidth: 30 }, 1: { cellWidth: 80 }, 2: { cellWidth: 22, halign: "center" }, 3: { cellWidth: 22, halign: "center" }, 4: { cellWidth: 26, halign: "center" }, 5: { cellWidth: 22, halign: "center" }, 6: { cellWidth: 22, halign: "center" } },
         margin: { top: 23, left: 14, right: 14 }
       });
-
       doc.save("Products_Report.pdf");
     } catch (err) {
       console.error("PDF export error:", err);
@@ -395,7 +409,7 @@ export default function Products() {
         const lowAlertKey = headers.find(k => normalize(k).includes('low'));
         const highAlertKey = headers.find(k => normalize(k).includes('high') || normalize(k).includes('max'));
         if (!highAlertKey) {
-          const proceed = window.confirm("\u26a0\ufe0f Couldn't find High Alert column.\nHeaders: [ " + headers.join(", ") + " ]\nContinue with High Alert = 0?");
+          const proceed = window.confirm("⚠️ Couldn't find High Alert column.\nHeaders: [ " + headers.join(", ") + " ]\nContinue with High Alert = 0?");
           if (!proceed) { e.target.value = null; return; }
         }
         const productsToUpsert = [];
@@ -526,28 +540,66 @@ export default function Products() {
          p.product_id?.toLowerCase().includes(search.toLowerCase())
   );
 
+  // Build catalog from ALL products (filtered by search if active)
+  const catalogSource = search ? filtered : products;
+  const catalog = buildCatalog(catalogSource);
+  const materialKeys = Object.keys(catalog).sort();
+
+  const toggleMaterial = (mat) =>
+    setOpenMaterials(prev => ({ ...prev, [mat]: !prev[mat] }));
+
+  const toggleCategory = (key) =>
+    setOpenCategories(prev => ({ ...prev, [key]: !prev[key] }));
+
+  // Stock alert badge
+  const stockBadge = (product) => {
+    const total = totalStock(product.id);
+    const low = product.low_stock_alert;
+    if (low && total <= low) return (
+      <span className="ml-2 text-xs bg-red-100 text-red-700 font-semibold px-2 py-0.5 rounded-full">Low Stock</span>
+    );
+    return null;
+  };
+
   return (
     <div className="p-6">
       {/* PAGE HEADER */}
       <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
         <h1 className="text-3xl font-bold">Products</h1>
-        <button
-          onClick={handleTallyNow}
-          disabled={tallyLoading}
-          className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-bold px-5 py-2.5 rounded-xl shadow transition-all text-sm"
-        >
-          <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-            <path d="M9 11l3 3L22 4"/>
-            <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
-          </svg>
-          {tallyLoading ? "Saving..." : "\ud83d\udccb Tally Now"}
-        </button>
+        <div className="flex gap-2 items-center flex-wrap">
+          {/* View toggle */}
+          <div className="flex rounded-lg overflow-hidden border border-gray-300 text-sm font-semibold">
+            <button
+              onClick={() => setViewMode("catalog")}
+              className={`px-4 py-2 transition-colors ${viewMode === "catalog" ? "bg-blue-600 text-white" : "bg-white text-gray-600 hover:bg-gray-50"}`}
+            >
+              📂 Catalog View
+            </button>
+            <button
+              onClick={() => setViewMode("table")}
+              className={`px-4 py-2 transition-colors ${viewMode === "table" ? "bg-blue-600 text-white" : "bg-white text-gray-600 hover:bg-gray-50"}`}
+            >
+              📋 Table View
+            </button>
+          </div>
+          <button
+            onClick={handleTallyNow}
+            disabled={tallyLoading}
+            className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-bold px-5 py-2.5 rounded-xl shadow transition-all text-sm"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+              <path d="M9 11l3 3L22 4"/>
+              <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
+            </svg>
+            {tallyLoading ? "Saving..." : "📋 Tally Now"}
+          </button>
+        </div>
       </div>
 
       {/* Last tally info bar */}
       {latestTally && (
         <div className="mb-4 px-4 py-2 bg-indigo-50 border border-indigo-200 rounded-xl text-sm text-indigo-700 flex items-center gap-2">
-          <span>\u2705</span>
+          <span>✅</span>
           <span>Last tallied on <strong>{formatTallyDisplay(latestTally.tallied_at)}</strong> by {latestTally.tallied_by}</span>
         </div>
       )}
@@ -585,15 +637,15 @@ export default function Products() {
 
         {editingId && (
           <div className="mt-4 pt-4 border-t border-dashed border-orange-300">
-            <p className="text-xs font-semibold text-orange-600 uppercase tracking-wide mb-3">\ud83d\udce6 Stock Adjustment (optional)</p>
+            <p className="text-xs font-semibold text-orange-600 uppercase tracking-wide mb-3">📦 Stock Adjustment (optional)</p>
             <div className="flex gap-3 items-center flex-wrap">
               <select name="adj_location_id" value={form.adj_location_id} onChange={handleChange} className="border p-2 rounded flex-1 min-w-[140px] bg-white">
-                <option value="">\u2014 Select Location \u2014</option>
+                <option value="">— Select Location —</option>
                 {locations.map(loc => (<option key={loc.id} value={loc.id}>{loc.name}</option>))}
               </select>
               <div className="flex rounded overflow-hidden border">
-                <button type="button" onClick={() => setForm(f => ({ ...f, adj_type: "inward" }))} className={`px-4 py-2 text-sm font-semibold transition-colors ${form.adj_type === "inward" ? "bg-green-600 text-white" : "bg-white text-gray-600 hover:bg-gray-50"}`}>\u25b2 Inward</button>
-                <button type="button" onClick={() => setForm(f => ({ ...f, adj_type: "outward" }))} className={`px-4 py-2 text-sm font-semibold transition-colors ${form.adj_type === "outward" ? "bg-red-500 text-white" : "bg-white text-gray-600 hover:bg-gray-50"}`}>\u25bc Outward</button>
+                <button type="button" onClick={() => setForm(f => ({ ...f, adj_type: "inward" }))} className={`px-4 py-2 text-sm font-semibold transition-colors ${form.adj_type === "inward" ? "bg-green-600 text-white" : "bg-white text-gray-600 hover:bg-gray-50"}`}>▲ Inward</button>
+                <button type="button" onClick={() => setForm(f => ({ ...f, adj_type: "outward" }))} className={`px-4 py-2 text-sm font-semibold transition-colors ${form.adj_type === "outward" ? "bg-red-500 text-white" : "bg-white text-gray-600 hover:bg-gray-50"}`}>▼ Outward</button>
               </div>
               <input name="adj_quantity" placeholder="Quantity" type="number" min="0" value={form.adj_quantity} onChange={handleChange} className="border p-2 rounded w-32" />
               <input name="adj_party" placeholder="Party / Remark (optional)" value={form.adj_party} onChange={handleChange} className="border p-2 rounded flex-1 min-w-[180px]" />
@@ -607,152 +659,298 @@ export default function Products() {
 
       {/* SEARCH + RESET ORDER */}
       <div className="flex gap-3 items-center mb-4">
-        <input placeholder="Search by ID or Name..." value={search} onChange={(e) => setSearch(e.target.value)} className="border p-2 rounded flex-1" />
-        <button onClick={resetOrder} title="Restore alphabetical product order" className="bg-gray-200 hover:bg-gray-300 text-gray-700 text-sm font-semibold px-4 py-2 rounded transition-colors whitespace-nowrap">
-          \u21ba Reset Order
-        </button>
+        <input
+          placeholder="Search by ID or Name..."
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          className="border p-2 rounded flex-1"
+        />
+        {viewMode === "table" && (
+          <button onClick={resetOrder} title="Restore alphabetical product order" className="bg-gray-200 hover:bg-gray-300 text-gray-700 text-sm font-semibold px-4 py-2 rounded transition-colors whitespace-nowrap">
+            ↺ Reset Order
+          </button>
+        )}
       </div>
 
-      {/* TABLE */}
-      <div className="bg-white shadow rounded overflow-hidden">
-        <table className="w-full">
-          <thead className="bg-gray-100 border-b">
-            <tr className="text-left text-gray-700">
-              <th className="p-3 w-10 text-gray-400 text-xs uppercase">Order</th>
-              <th className="p-3">Product ID</th>
-              <th className="p-3">Product Name</th>
-              <th className="p-3">Office</th>
-              <th className="p-3">Godown</th>
-              <th className="p-3">Warehouse</th>
-              <th className="p-3">Low Alert</th>
-              <th className="p-3">High Alert</th>
-              <th className="p-3">Action</th>
-            </tr>
-          </thead>
-          <tbody>
-            {filtered.length === 0 ? (
-              <tr><td colSpan="9" className="p-4 text-gray-500 text-center">No products found</td></tr>
-            ) : (
-              filtered.map((p, index) => {
-                const isDraggedRow = isDragging && dragIndexRef.current === index;
-                const isDropTarget = dragOverIndex === index && dragIndexRef.current !== index;
-                return (
-                  <tr
-                    key={p.id}
-                    data-drag-index={index}
-                    draggable
-                    onDragStart={(e) => handleDragStart(e, index)}
-                    onDragOver={(e) => handleDragOver(e, index)}
-                    onDrop={(e) => handleDrop(e, index)}
-                    onDragEnd={handleDragEnd}
-                    onTouchStart={(e) => handleTouchStart(e, index)}
-                    onTouchEnd={(e) => handleTouchEnd(e, index)}
-                    onClick={() => openLedger(p)}
-                    className={`border-b cursor-pointer transition-all
-                      ${editingId === p.id ? "bg-orange-50 border-l-4 border-l-orange-400" : ""}
-                      ${isDraggedRow ? "opacity-40 bg-blue-50" : ""}
-                      ${isDropTarget ? "border-t-2 border-t-blue-500 bg-blue-50" : (editingId === p.id ? "" : "hover:bg-blue-50")}
-                    `}
+      {/* ═══════════════════════════════════════════════
+          CATALOG VIEW — Material → Category → Products
+          ═══════════════════════════════════════════════ */}
+      {viewMode === "catalog" && (
+        <div className="space-y-3">
+          {materialKeys.length === 0 ? (
+            <div className="bg-white rounded-xl shadow p-8 text-center text-gray-400">No products found</div>
+          ) : (
+            materialKeys.map(mat => {
+              const isMaterialOpen = openMaterials[mat] !== false; // default open
+              const catKeys = Object.keys(catalog[mat]).sort();
+              const totalProductsInMat = catKeys.reduce((s, c) => s + catalog[mat][c].length, 0);
+
+              return (
+                <div key={mat} className="bg-white rounded-xl shadow overflow-hidden border border-gray-100">
+                  {/* Material header */}
+                  <button
+                    onClick={() => toggleMaterial(mat)}
+                    className="w-full flex items-center justify-between px-5 py-4 bg-gradient-to-r from-blue-700 to-blue-800 text-white hover:from-blue-800 hover:to-blue-900 transition-all"
                   >
-                    <td className="p-3 text-gray-400 cursor-grab active:cursor-grabbing select-none" onClick={(e) => e.stopPropagation()} title="Drag to reorder">
-                      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" className="mx-auto hover:text-gray-600 transition-colors">
-                        <circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/>
-                        <circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/>
-                        <circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/>
-                      </svg>
-                    </td>
-                    <td className="p-3 font-medium">{p.product_id}</td>
-                    <td className="p-3">{p.product_name}</td>
-                    <td className="p-3 font-semibold text-blue-600">{stockByLocation(p.id, "Office")}</td>
-                    <td className="p-3 font-semibold text-purple-600">{stockByLocation(p.id, "Godown")}</td>
-                    <td className="p-3 font-semibold text-green-600">{stockByLocation(p.id, "Warehouse")}</td>
-                    <td className="p-3"><span className="px-3 py-1 rounded-full bg-red-100 text-red-600 text-sm font-semibold">{p.low_stock_alert}</span></td>
-                    <td className="p-3"><span className="px-3 py-1 rounded-full bg-orange-100 text-orange-600 text-sm font-semibold">{p.high_stock_alert || 0}</span></td>
-                    <td className="p-3 flex gap-2" onClick={(e) => e.stopPropagation()}>
-                      <button onClick={(e) => handleEditClick(e, p)} className="text-blue-600 hover:text-blue-800 font-semibold px-3 py-1 bg-blue-50 rounded hover:bg-blue-100 transition-colors">Edit</button>
-                      {isAdmin && (
-                        <button onClick={(e) => handleDeleteProduct(e, p.product_id)} className="text-red-500 hover:text-red-700 font-semibold px-3 py-1 bg-red-50 rounded hover:bg-red-100 transition-colors">Delete</button>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })
-            )}
-          </tbody>
-        </table>
-      </div>
+                    <div className="flex items-center gap-3">
+                      <span className="text-lg font-bold">{mat}</span>
+                      <span className="text-xs bg-white/20 text-white px-2 py-0.5 rounded-full font-medium">
+                        {totalProductsInMat} products · {catKeys.length} categories
+                      </span>
+                    </div>
+                    <span className="text-xl font-light">{isMaterialOpen ? "▲" : "▼"}</span>
+                  </button>
 
-      {/* LEDGER MODAL */}
+                  {isMaterialOpen && (
+                    <div className="divide-y divide-gray-100">
+                      {catKeys.map(cat => {
+                        const catKey = mat + "||" + cat;
+                        const isCatOpen = openCategories[catKey] !== false; // default open
+                        const catProducts = catalog[mat][cat];
+
+                        return (
+                          <div key={cat}>
+                            {/* Category header */}
+                            <button
+                              onClick={() => toggleCategory(catKey)}
+                              className="w-full flex items-center justify-between px-6 py-3 bg-blue-50 hover:bg-blue-100 transition-colors text-left"
+                            >
+                              <div className="flex items-center gap-2">
+                                <span className="text-sm font-bold text-blue-800">{cat}</span>
+                                <span className="text-xs bg-blue-200 text-blue-800 px-2 py-0.5 rounded-full">
+                                  {catProducts.length} item{catProducts.length !== 1 ? "s" : ""}
+                                </span>
+                              </div>
+                              <span className="text-blue-400 text-sm">{isCatOpen ? "▲" : "▼"}</span>
+                            </button>
+
+                            {/* Products in this category */}
+                            {isCatOpen && (
+                              <div className="overflow-x-auto">
+                                <table className="w-full text-sm">
+                                  <thead className="bg-gray-50 text-gray-500 text-xs uppercase tracking-wide">
+                                    <tr>
+                                      <th className="px-6 py-2 text-left font-semibold">Product ID</th>
+                                      <th className="px-4 py-2 text-left font-semibold">Product Name</th>
+                                      <th className="px-4 py-2 text-center font-semibold">Office</th>
+                                      <th className="px-4 py-2 text-center font-semibold">Godown</th>
+                                      <th className="px-4 py-2 text-center font-semibold">Warehouse</th>
+                                      <th className="px-4 py-2 text-center font-semibold">Total</th>
+                                      <th className="px-4 py-2 text-center font-semibold">Action</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {catProducts
+                                      .sort((a, b) => a.product_id.localeCompare(b.product_id))
+                                      .map((p, idx) => {
+                                        const total = totalStock(p.id);
+                                        const isLow = p.low_stock_alert && total <= p.low_stock_alert;
+                                        return (
+                                          <tr
+                                            key={p.id}
+                                            onClick={() => openLedger(p)}
+                                            className={`border-t border-gray-100 cursor-pointer hover:bg-blue-50 transition-colors ${idx % 2 === 1 ? "bg-gray-50/50" : "bg-white"}`}
+                                          >
+                                            <td className="px-6 py-3 font-mono text-xs text-gray-600">{p.product_id}</td>
+                                            <td className="px-4 py-3 font-medium text-gray-800">
+                                              {p.product_name}
+                                              {stockBadge(p)}
+                                            </td>
+                                            <td className="px-4 py-3 text-center tabular-nums">{stockByLocation(p.id, "Office")}</td>
+                                            <td className="px-4 py-3 text-center tabular-nums">{stockByLocation(p.id, "Godown")}</td>
+                                            <td className="px-4 py-3 text-center tabular-nums">{stockByLocation(p.id, "Warehouse")}</td>
+                                            <td className={`px-4 py-3 text-center font-bold tabular-nums ${isLow ? "text-red-600" : "text-gray-800"}`}>
+                                              {total}
+                                            </td>
+                                            <td className="px-4 py-3 text-center">
+                                              <div className="flex gap-1 justify-center">
+                                                <button
+                                                  onClick={(e) => handleEditClick(e, p)}
+                                                  className="bg-orange-100 hover:bg-orange-200 text-orange-700 text-xs px-2 py-1 rounded font-semibold transition-colors"
+                                                >
+                                                  Edit
+                                                </button>
+                                                {isAdmin && (
+                                                  <button
+                                                    onClick={(e) => handleDeleteProduct(e, p.product_id)}
+                                                    className="bg-red-100 hover:bg-red-200 text-red-700 text-xs px-2 py-1 rounded font-semibold transition-colors"
+                                                  >
+                                                    Del
+                                                  </button>
+                                                )}
+                                              </div>
+                                            </td>
+                                          </tr>
+                                        );
+                                      })}
+                                  </tbody>
+                                </table>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            })
+          )}
+        </div>
+      )}
+
+      {/* ═══════════════════════════════
+          TABLE VIEW — original flat list
+          ═══════════════════════════════ */}
+      {viewMode === "table" && (
+        <div className="bg-white shadow rounded overflow-hidden">
+          <table className="w-full">
+            <thead className="bg-gray-100 border-b">
+              <tr className="text-left text-gray-700">
+                <th className="p-3 w-10 text-gray-400 text-xs uppercase">Order</th>
+                <th className="p-3">Product ID</th>
+                <th className="p-3">Product Name</th>
+                <th className="p-3">Office</th>
+                <th className="p-3">Godown</th>
+                <th className="p-3">Warehouse</th>
+                <th className="p-3">Low Alert</th>
+                <th className="p-3">High Alert</th>
+                <th className="p-3">Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.length === 0 ? (
+                <tr><td colSpan="9" className="p-4 text-gray-500 text-center">No products found</td></tr>
+              ) : (
+                filtered.map((p, index) => {
+                  const isDraggedRow = isDragging && dragIndexRef.current === index;
+                  const isDropTarget = dragOverIndex === index && dragIndexRef.current !== index;
+                  return (
+                    <tr
+                      key={p.id}
+                      data-drag-index={index}
+                      draggable
+                      onDragStart={(e) => handleDragStart(e, index)}
+                      onDragOver={(e) => handleDragOver(e, index)}
+                      onDrop={(e) => handleDrop(e, index)}
+                      onDragEnd={handleDragEnd}
+                      onTouchStart={(e) => handleTouchStart(e, index)}
+                      onTouchEnd={(e) => handleTouchEnd(e, index)}
+                      onClick={() => openLedger(p)}
+                      className={`border-b cursor-pointer transition-colors
+                        ${isDraggedRow ? "opacity-40" : ""}
+                        ${isDropTarget ? "border-t-2 border-blue-400" : ""}
+                        hover:bg-blue-50`}
+                    >
+                      <td className="p-3 text-gray-400 select-none cursor-grab active:cursor-grabbing text-center">⠿</td>
+                      <td className="p-3 font-mono text-sm text-gray-600">{p.product_id}</td>
+                      <td className="p-3 font-medium">
+                        {p.product_name}
+                        {stockBadge(p)}
+                      </td>
+                      <td className="p-3 tabular-nums">{stockByLocation(p.id, "Office")}</td>
+                      <td className="p-3 tabular-nums">{stockByLocation(p.id, "Godown")}</td>
+                      <td className="p-3 tabular-nums">{stockByLocation(p.id, "Warehouse")}</td>
+                      <td className="p-3 text-orange-600 font-semibold">{p.low_stock_alert}</td>
+                      <td className="p-3 text-blue-600 font-semibold">{p.high_stock_alert || 0}</td>
+                      <td className="p-3">
+                        <div className="flex gap-2">
+                          <button
+                            onClick={(e) => handleEditClick(e, p)}
+                            className="bg-yellow-400 hover:bg-yellow-500 text-white text-xs font-bold px-3 py-1.5 rounded transition-colors"
+                          >
+                            Edit
+                          </button>
+                          {isAdmin && (
+                            <button
+                              onClick={(e) => handleDeleteProduct(e, p.product_id)}
+                              className="bg-red-500 hover:bg-red-600 text-white text-xs font-bold px-3 py-1.5 rounded transition-colors"
+                            >
+                              Delete
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* ═══════════════════════════════
+          LEDGER MODAL (unchanged)
+          ═══════════════════════════════ */}
       {selectedProduct && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl shadow-2xl w-full max-w-4xl max-h-[85vh] flex flex-col">
-            {/* Modal Header */}
-            <div className="flex items-center justify-between p-5 border-b">
+        <div className="fixed inset-0 bg-black/50 flex items-start justify-center z-50 pt-16 px-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[80vh] flex flex-col">
+            <div className="flex items-center justify-between px-6 py-4 border-b">
               <div>
-                <h2 className="text-xl font-bold text-gray-800">\ud83d\udcd2 Ledger \u2014 {selectedProduct.product_name}</h2>
-                <p className="text-sm text-gray-500 mt-0.5">ID: {selectedProduct.product_id}</p>
+                <h2 className="text-xl font-bold text-gray-800">{selectedProduct.product_name}</h2>
+                <p className="text-sm text-gray-500 font-mono mt-0.5">{selectedProduct.product_id}</p>
               </div>
-              <button onClick={() => setSelectedProduct(null)} className="text-gray-400 hover:text-gray-700 text-2xl font-bold leading-none">\u00d7</button>
+              <div className="flex items-center gap-4">
+                <div className="text-right">
+                  <p className="text-xs text-gray-400 uppercase tracking-wide">Current Stock</p>
+                  <div className="flex gap-3 text-sm font-semibold text-gray-700">
+                    {locations.map(loc => (
+                      <span key={loc.id} className="bg-gray-100 px-2 py-1 rounded">
+                        {loc.name}: <span className="text-blue-700">{stockByLocation(selectedProduct.id, loc.name)}</span>
+                      </span>
+                    ))}
+                  </div>
+                </div>
+                <button
+                  onClick={() => setSelectedProduct(null)}
+                  className="text-gray-400 hover:text-gray-700 text-2xl font-light transition-colors"
+                >
+                  ✕
+                </button>
+              </div>
             </div>
-
-            {/* Modal Body */}
-            <div className="overflow-auto flex-1 p-4">
+            <div className="overflow-y-auto flex-1">
               {ledgerLoading ? (
-                <div className="text-center py-12 text-gray-400">Loading transactions...</div>
+                <div className="p-8 text-center text-gray-400">Loading ledger...</div>
               ) : ledger.length === 0 ? (
-                <div className="text-center py-12 text-gray-400">No transactions found for this product.</div>
+                <div className="p-8 text-center text-gray-400">No transactions yet for this product.</div>
               ) : (
                 <table className="w-full text-sm">
-                  <thead className="bg-gray-50 sticky top-0">
-                    <tr className="text-left text-gray-600 border-b">
-                      <th className="p-3">Date / Time</th>
-                      <th className="p-3">Type</th>
-                      <th className="p-3">Location</th>
-                      <th className="p-3">Qty</th>
-                      <th className="p-3">Balance</th>
-                      <th className="p-3">Party</th>
-                      <th className="p-3">By</th>
+                  <thead className="bg-gray-50 sticky top-0 border-b">
+                    <tr className="text-left text-gray-500 text-xs uppercase tracking-wide">
+                      <th className="px-4 py-3">Date / Time</th>
+                      <th className="px-4 py-3">Type</th>
+                      <th className="px-4 py-3">Location</th>
+                      <th className="px-4 py-3 text-right">Qty</th>
+                      <th className="px-4 py-3 text-right">Balance</th>
+                      <th className="px-4 py-3">Party</th>
+                      <th className="px-4 py-3">By</th>
                     </tr>
                   </thead>
                   <tbody>
                     {ledger.map((t, i) => (
-                      <tr key={t.id || i} className="border-b hover:bg-gray-50">
-                        <td className="p-3 text-gray-500 whitespace-nowrap">{formatTimeDisplay(t.created_at)}</td>
-                        <td className="p-3">
-                          <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${t.transaction_type === "inward" ? "bg-green-100 text-green-700" : "bg-red-100 text-red-600"}`}>
-                            {t.transaction_type === "inward" ? "\u25b2 In" : "\u25bc Out"}
+                      <tr key={t.id} className={`border-b ${i % 2 === 0 ? "bg-white" : "bg-gray-50/50"}`}>
+                        <td className="px-4 py-2.5 text-gray-500 text-xs font-mono whitespace-nowrap">
+                          {t.created_at?.replace('T', ' ').split('.')[0]}
+                        </td>
+                        <td className="px-4 py-2.5">
+                          <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${t.transaction_type === "inward" ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"}`}>
+                            {t.transaction_type === "inward" ? "▲ IN" : "▼ OUT"}
                           </span>
                         </td>
-                        <td className="p-3 text-gray-700">{t.location_name}</td>
-                        <td className={`p-3 font-semibold ${t.transaction_type === "inward" ? "text-green-600" : "text-red-500"}`}>
+                        <td className="px-4 py-2.5 text-gray-600">{t.location_name}</td>
+                        <td className={`px-4 py-2.5 text-right font-semibold tabular-nums ${t.transaction_type === "inward" ? "text-green-700" : "text-red-600"}`}>
                           {t.transaction_type === "inward" ? "+" : "-"}{t.quantity}
                         </td>
-                        <td className="p-3 font-bold text-gray-800">{t.balance}</td>
-                        <td className="p-3 text-gray-600">{t.party || "\u2014"}</td>
-                        <td className="p-3 text-gray-400 text-xs">{t.created_by_email || "\u2014"}</td>
+                        <td className="px-4 py-2.5 text-right font-bold tabular-nums text-gray-800">{t.balance}</td>
+                        <td className="px-4 py-2.5 text-gray-600 text-xs">{t.party || "—"}</td>
+                        <td className="px-4 py-2.5 text-gray-400 text-xs">{t.created_by_email || "—"}</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               )}
-            </div>
-
-            {/* \u2705 Modal Footer \u2014 Latest Tally Date */}
-            <div className="border-t px-5 py-3 bg-gray-50 rounded-b-xl flex items-center justify-between flex-wrap gap-2">
-              {latestTally ? (
-                <span className="text-sm text-indigo-700 flex items-center gap-1.5">
-                  <span>\u2705</span>
-                  <span>Last tallied on <strong>{formatTallyDisplay(latestTally.tallied_at)}</strong> by {latestTally.tallied_by}</span>
-                </span>
-              ) : (
-                <span className="text-sm text-gray-400">No tally recorded yet.</span>
-              )}
-              <button
-                onClick={() => setSelectedProduct(null)}
-                className="text-sm text-gray-500 hover:text-gray-700 font-medium px-4 py-1.5 bg-white border rounded-lg hover:bg-gray-100 transition-colors"
-              >
-                Close
-              </button>
             </div>
           </div>
         </div>
