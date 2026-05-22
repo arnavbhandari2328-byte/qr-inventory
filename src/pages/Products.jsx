@@ -34,20 +34,30 @@ function inferMaterial(productName) {
 
 function inferCategory(productName) {
   const n = productName.toUpperCase();
-  if (n.includes("SCH 160") || n.includes("SCH-160") || n.includes("SCH160")) return "SCH 160";
-  if (n.includes("SCH 80") || n.includes("SCH-80") || n.includes("SCH80")) return "SCH 80";
-  if (n.includes("SCH 40") || n.includes("SCH-40") || n.includes("SCH40")) return "SCH 40";
-  if (n.includes("SCH 20") || n.includes("SCH-20") || n.includes("SCH20")) return "SCH 20";
-  if (n.includes("SCH 10") || n.includes("SCH-10") || n.includes("SCH10")) return "SCH 10";
+
+  // ── Seamless must be checked BEFORE SCH schedules ──────────────────────────
+  // e.g. "SS 316 SEAMLESS PIPE SCH-40 150 NB" should land in Seamless, not SCH 40
   if (n.includes("SEAMLESS")) return "Seamless";
+
+  if (n.includes("SCH 160") || n.includes("SCH-160") || n.includes("SCH160")) return "SCH 160";
+  if (n.includes("SCH 80")  || n.includes("SCH-80")  || n.includes("SCH80"))  return "SCH 80";
+  if (n.includes("SCH 40")  || n.includes("SCH-40")  || n.includes("SCH40"))  return "SCH 40";
+  if (n.includes("SCH 20")  || n.includes("SCH-20")  || n.includes("SCH20"))  return "SCH 20";
+  if (n.includes("SCH 10")  || n.includes("SCH-10")  || n.includes("SCH10"))  return "SCH 10";
+
   if (n.includes("POLISH") || n.includes("POLISHED")) return "Polish Pipe";
-  if (n.includes("SQUARE")) return "Square Pipe";
+
+  // ── Square Rod (was Square Pipe) ────────────────────────────────────────────
+  if (n.includes("SQUARE")) return "Square Rod";
+
   // Fix: also catch "RECTANGE" (common typo in product names)
   if (n.includes("RECTANGLE") || n.includes("RECTANGULAR") || n.includes("RECTANGE")) return "Rectangular Pipe";
+
   if (n.includes("ROUND BAR") || n.includes("ROUND ROD") || n.includes("BRIGHT ROD") || n.includes("BRIGHT BAR")) return "Round Bar";
   if (n.includes("FLAT BAR") || n.includes("FLAT ROD")) return "Flat Bar";
   if (n.includes("ANGLE")) return "Angle";
   if (n.includes("CHANNEL")) return "Channel";
+
   // Fix: catch "NO.4 MAT" and similar sheet/mat finishes before generic PIPE check
   if (
     n.includes("SHEET") || n.includes("PLATE") ||
@@ -55,6 +65,7 @@ function inferCategory(productName) {
     n.includes("NO.4") || n.includes("NO.2") || n.includes("NO.8") ||
     n.includes("2B FINISH") || n.includes("BA FINISH") || n.includes("HAIRLINE")
   ) return "Sheet / Plate";
+
   if (n.includes("COIL") || n.includes("STRIP")) return "Coil / Strip";
   if (n.includes("ERW")) return "ERW";
   if (n.includes("PIPE")) return "Pipe (General)";
