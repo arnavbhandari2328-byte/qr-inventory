@@ -35,7 +35,6 @@ function inferMaterial(productName) {
 function inferCategory(productName) {
   const n = productName.toUpperCase();
 
-  // ── Seamless must be checked BEFORE SCH schedules ──────────────────────────
   if (n.includes("SEAMLESS")) return "Seamless";
 
   if (n.includes("SCH 160") || n.includes("SCH-160") || n.includes("SCH160")) return "SCH 160";
@@ -45,7 +44,6 @@ function inferCategory(productName) {
   if (n.includes("SCH 10")  || n.includes("SCH-10")  || n.includes("SCH10"))  return "SCH 10";
   if (n.includes("SCH 5")   || n.includes("SCH-5")   || n.includes("SCH05") || n.includes("SCH-05")) return "SCH 5";
 
-  // SWG schedules
   const swgMatch = n.match(/(\d+)\s*SWG/);
   if (swgMatch) return `SWG ${swgMatch[1]}`;
 
@@ -80,29 +78,70 @@ function buildCatalog(products) {
   return catalog;
 }
 
-// ─── Smart size-aware sort for catalog products ───────────────────────────────
-// Extracts the NB / mm / inch size from the product name and sorts numerically.
-// Fractions like "1/2" and "11/2" are converted to decimals for correct ordering.
-// Within the same NB size, falls back to product_id alphabetical.
-function extractSizeKey(productName) {
-  const n = productName.toUpperCase();
+// ─── Inch fraction lookup table ───────────────────────────────────────────────
+// Product names use inch notation like: 1/4", 1/2", 3/4", 1", 11/4", 11/2", 2", etc.
+// "11/4" means 1+1/4 = 1.25, "11/2" means 1+1/2 = 1.5, "21/2" means 2+1/2 = 2.5
+// Standard pipe NB sizes in inches for reference:
+//   1/8" → 0.125,  1/4" → 0.25,  3/8" → 0.375,  1/2" → 0.5,  3/4" → 0.75
+//   1" → 1,  11/4" → 1.25,  11/2" → 1.5,  2" → 2,  21/2" → 2.5
+//   3" → 3,  4" → 4,  5" → 5,  6" → 6,  8" → 8,  10" → 10,  12" → 12
 
-  // NB sizes: "15 NB", "100 NB", "1/2 NB", "11/2 NB"
-  const nbMatch = n.match(/(\d+(?:\/\d+)?)\s*NB/);
-  if (nbMatch) {
-    const raw = nbMatch[1];
-    if (raw.includes("/")) {
-      const parts = raw.split("/");
-      return parseFloat(parts[0]) / parseFloat(parts[1]);
+// Converts a raw string like "11/2", "1/4", "3/4", "21/2" to a decimal inch value.
+function parseInchFraction(raw) {
+  // Pattern: optional whole part + fraction  e.g. "11/2" -> whole=1, num=1, den=2
+  //          or pure fraction                e.g. "1/2"  -> whole=0, num=1, den=2
+  //          or whole only                   e.g. "6"    -> 6
+  const withFraction = raw.match(/^(\d*)(\d)\/( \d+)$/);
+  // Better: split at the slash
+  if (raw.includes("/")) {
+    const slashIdx = raw.indexOf("/");
+    const denomStr = raw.slice(slashIdx + 1);          // e.g. "2"
+    const numerStr = raw.slice(slashIdx - 1, slashIdx); // last digit before slash = numerator
+    const wholeStr = raw.slice(0, slashIdx - 1);        // everything before that digit
+    const whole = wholeStr ? parseInt(wholeStr, 10) : 0;
+    const numer = parseInt(numerStr, 10);
+    const denom = parseInt(denomStr, 10);
+    if (!isNaN(whole) && !isNaN(numer) && !isNaN(denom) && denom !== 0) {
+      return whole + numer / denom;
     }
-    return parseFloat(raw);
+  }
+  const plain = parseFloat(raw);
+  return isNaN(plain) ? 0 : plain;
+}
+
+// ─── Smart size extractor ─────────────────────────────────────────────────
+// Handles all of these product name formats:
+//   "SS 304 PIPE SCH-10 1/2""       -> 0.5
+//   "SS 304 PIPE SCH-40 11/2""      -> 1.5
+//   "SS 304 PIPE SCH-40 3""         -> 3
+//   "SS 304 PIPE ERW 15 NB"         -> 15  (NB mm values left as-is, they're already numeric)
+//   "40 X 40 SQUARE"                -> 40  (mm square)
+function extractSizeKey(productName) {
+  // Normalise: collapse whitespace, keep special chars
+  const n = productName.trim();
+
+  // ——— 1. Inch notation with " symbol: e.g. 1/4", 11/2", 3"
+  //   Regex: one or more digits optionally followed by /digits, then optional space, then "
+  const inchMatch = n.match(/(\d+(?:\/\d+)?)\s*"/i);
+  if (inchMatch) {
+    return parseInchFraction(inchMatch[1]);
   }
 
-  // mm sizes: "40 X 40", "50X50", "25MM"
-  const mmMatch = n.match(/(\d+(?:\.\d+)?)\s*(?:X|\s|MM)/);
+  // ——— 2. NB notation: e.g. 15 NB, 100 NB
+  //   Only integer NB (mm) values; no fractions expected for NB
+  const nbMatch = n.match(/(\d+(?:\.\d+)?)\s*NB/i);
+  if (nbMatch) {
+    return parseFloat(nbMatch[1]);
+  }
+
+  // ——— 3. mm square/rectangular: e.g. "40 X 40", "25 X 50", "25MM"
+  const mmMatch = n.match(/(\d+(?:\.\d+)?)\s*(?:X\s|MM)/i);
   if (mmMatch) return parseFloat(mmMatch[1]);
 
-  // SWG / SCH numeric — already grouped by category, fallback to 0
+  // ——— 4. Fallback: first standalone number in name
+  const anyNum = n.match(/(\d+(?:\.\d+)?)/);
+  if (anyNum) return parseFloat(anyNum[1]);
+
   return 0;
 }
 
@@ -111,6 +150,7 @@ function sortProductsBySize(products) {
     const sizeA = extractSizeKey(a.product_name);
     const sizeB = extractSizeKey(b.product_name);
     if (sizeA !== sizeB) return sizeA - sizeB;
+    // same size: fall back to product_id
     return a.product_id.localeCompare(b.product_id);
   });
 }
@@ -150,7 +190,6 @@ export default function Products() {
   const [latestTally, setLatestTally] = useState(null);
   const [tallyLoading, setTallyLoading] = useState(false);
 
-  // Accordion open state: { [material]: bool } and { [material+cat]: bool }
   const [openMaterials, setOpenMaterials] = useState({});
   const [openCategories, setOpenCategories] = useState({});
 
@@ -610,7 +649,6 @@ export default function Products() {
          p.product_id?.toLowerCase().includes(search.toLowerCase())
   );
 
-  // Build catalog from ALL products (filtered by search if active)
   const catalogSource = search ? filtered : products;
   const catalog = buildCatalog(catalogSource);
   const materialKeys = Object.keys(catalog).sort();
@@ -621,7 +659,6 @@ export default function Products() {
   const toggleCategory = (key) =>
     setOpenCategories(prev => ({ ...prev, [key]: !prev[key] }));
 
-  // Stock alert badge
   const stockBadge = (product) => {
     const total = totalStock(product.id);
     const low = product.low_stock_alert;
@@ -637,7 +674,6 @@ export default function Products() {
       <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
         <h1 className="text-3xl font-bold">Products</h1>
         <div className="flex gap-2 items-center flex-wrap">
-          {/* View toggle */}
           <div className="flex rounded-lg overflow-hidden border border-gray-300 text-sm font-semibold">
             <button
               onClick={() => setViewMode("catalog")}
@@ -666,7 +702,6 @@ export default function Products() {
         </div>
       </div>
 
-      {/* Last tally info bar */}
       {latestTally && (
         <div className="mb-4 px-4 py-2 bg-indigo-50 border border-indigo-200 rounded-xl text-sm text-indigo-700 flex items-center gap-2">
           <span>✅</span>
@@ -742,22 +777,19 @@ export default function Products() {
         )}
       </div>
 
-      {/* ═══════════════════════════════════════════════
-          CATALOG VIEW — Material → Category → Products
-          ═══════════════════════════════════════════════ */}
+      {/* CATALOG VIEW */}
       {viewMode === "catalog" && (
         <div className="space-y-3">
           {materialKeys.length === 0 ? (
             <div className="bg-white rounded-xl shadow p-8 text-center text-gray-400">No products found</div>
           ) : (
             materialKeys.map(mat => {
-              const isMaterialOpen = openMaterials[mat] !== false; // default open
+              const isMaterialOpen = openMaterials[mat] !== false;
               const catKeys = sortCategoryKeys(Object.keys(catalog[mat]));
               const totalProductsInMat = catKeys.reduce((s, c) => s + catalog[mat][c].length, 0);
 
               return (
                 <div key={mat} className="bg-white rounded-xl shadow overflow-hidden border border-gray-100">
-                  {/* Material header */}
                   <button
                     onClick={() => toggleMaterial(mat)}
                     className="w-full flex items-center justify-between px-5 py-4 bg-gradient-to-r from-blue-700 to-blue-800 text-white hover:from-blue-800 hover:to-blue-900 transition-all"
@@ -775,12 +807,11 @@ export default function Products() {
                     <div className="divide-y divide-gray-100">
                       {catKeys.map(cat => {
                         const catKey = mat + "||" + cat;
-                        const isCatOpen = openCategories[catKey] !== false; // default open
+                        const isCatOpen = openCategories[catKey] !== false;
                         const catProducts = sortProductsBySize(catalog[mat][cat]);
 
                         return (
                           <div key={cat}>
-                            {/* Category header */}
                             <button
                               onClick={() => toggleCategory(catKey)}
                               className="w-full flex items-center justify-between px-6 py-3 bg-blue-50 hover:bg-blue-100 transition-colors text-left"
@@ -794,7 +825,6 @@ export default function Products() {
                               <span className="text-blue-400 text-sm">{isCatOpen ? "▲" : "▼"}</span>
                             </button>
 
-                            {/* Products in this category — sorted by size asc */}
                             {isCatOpen && (
                               <div className="overflow-x-auto">
                                 <table className="w-full text-sm">
@@ -867,9 +897,7 @@ export default function Products() {
         </div>
       )}
 
-      {/* ═══════════════════════════════
-          TABLE VIEW — original flat list
-          ═══════════════════════════════ */}
+      {/* TABLE VIEW */}
       {viewMode === "table" && (
         <div className="bg-white shadow rounded overflow-hidden">
           <table className="w-full">
@@ -948,14 +976,11 @@ export default function Products() {
         </div>
       )}
 
-      {/* ═══════════════════════════════
-          LEDGER MODAL — improved UI
-          ═══════════════════════════════ */}
+      {/* LEDGER MODAL */}
       {selectedProduct && (
         <div className="fixed inset-0 bg-black/60 flex items-start justify-center z-50 pt-10 px-4 pb-4">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-5xl max-h-[88vh] flex flex-col">
 
-            {/* ── Modal Header ── */}
             <div className="px-7 py-5 border-b bg-gradient-to-r from-blue-700 to-blue-800 rounded-t-2xl text-white">
               <div className="flex items-start justify-between gap-4">
                 <div className="flex-1 min-w-0">
@@ -971,10 +996,8 @@ export default function Products() {
               </div>
             </div>
 
-            {/* ── Stock Summary Cards ── */}
             <div className="px-7 py-4 bg-gray-50 border-b">
               <div className="flex flex-wrap gap-3 items-center justify-between">
-                {/* Location stock pills */}
                 <div className="flex flex-wrap gap-3">
                   {locations.map(loc => (
                     <div key={loc.id} className="flex flex-col items-center bg-white border border-gray-200 rounded-xl px-5 py-3 shadow-sm min-w-[90px]">
@@ -988,7 +1011,6 @@ export default function Products() {
                   </div>
                 </div>
 
-                {/* Last tally badge */}
                 <div className={`flex items-center gap-2 rounded-xl px-4 py-3 border text-sm font-medium ${
                   latestTally ? "bg-indigo-50 border-indigo-200 text-indigo-700" : "bg-gray-100 border-gray-200 text-gray-400"
                 }`}>
@@ -1008,7 +1030,6 @@ export default function Products() {
               </div>
             </div>
 
-            {/* ── Ledger Table ── */}
             <div className="overflow-y-auto flex-1">
               {ledgerLoading ? (
                 <div className="p-10 text-center text-gray-400 text-base">
@@ -1062,7 +1083,6 @@ export default function Products() {
               )}
             </div>
 
-            {/* ── Modal Footer ── */}
             <div className="px-7 py-4 border-t bg-gray-50 rounded-b-2xl flex items-center justify-between">
               <span className="text-sm text-gray-400">{ledger.length} transaction{ledger.length !== 1 ? "s" : ""} recorded</span>
               <button
