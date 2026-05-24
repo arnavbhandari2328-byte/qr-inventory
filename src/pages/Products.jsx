@@ -36,7 +36,6 @@ function inferCategory(productName) {
   const n = productName.toUpperCase();
 
   // ── Seamless must be checked BEFORE SCH schedules ──────────────────────────
-  // e.g. "SS 316 SEAMLESS PIPE SCH-40 150 NB" should land in Seamless, not SCH 40
   if (n.includes("SEAMLESS")) return "Seamless";
 
   if (n.includes("SCH 160") || n.includes("SCH-160") || n.includes("SCH160")) return "SCH 160";
@@ -44,28 +43,25 @@ function inferCategory(productName) {
   if (n.includes("SCH 40")  || n.includes("SCH-40")  || n.includes("SCH40"))  return "SCH 40";
   if (n.includes("SCH 20")  || n.includes("SCH-20")  || n.includes("SCH20"))  return "SCH 20";
   if (n.includes("SCH 10")  || n.includes("SCH-10")  || n.includes("SCH10"))  return "SCH 10";
+  if (n.includes("SCH 5")   || n.includes("SCH-5")   || n.includes("SCH05") || n.includes("SCH-05")) return "SCH 5";
+
+  // SWG schedules
+  const swgMatch = n.match(/(\d+)\s*SWG/);
+  if (swgMatch) return `SWG ${swgMatch[1]}`;
 
   if (n.includes("POLISH") || n.includes("POLISHED")) return "Polish Pipe";
-
-  // ── Square Rod (was Square Pipe) ────────────────────────────────────────────
   if (n.includes("SQUARE")) return "Square Rod";
-
-  // Fix: also catch "RECTANGE" (common typo in product names)
   if (n.includes("RECTANGLE") || n.includes("RECTANGULAR") || n.includes("RECTANGE")) return "Rectangular Pipe";
-
   if (n.includes("ROUND BAR") || n.includes("ROUND ROD") || n.includes("BRIGHT ROD") || n.includes("BRIGHT BAR")) return "Round Bar";
   if (n.includes("FLAT BAR") || n.includes("FLAT ROD")) return "Flat Bar";
   if (n.includes("ANGLE")) return "Angle";
   if (n.includes("CHANNEL")) return "Channel";
-
-  // Fix: catch "NO.4 MAT" and similar sheet/mat finishes before generic PIPE check
   if (
     n.includes("SHEET") || n.includes("PLATE") ||
     n.includes(" MAT ") || n.includes(" MAT$") || n.endsWith(" MAT") ||
     n.includes("NO.4") || n.includes("NO.2") || n.includes("NO.8") ||
     n.includes("2B FINISH") || n.includes("BA FINISH") || n.includes("HAIRLINE")
   ) return "Sheet / Plate";
-
   if (n.includes("COIL") || n.includes("STRIP")) return "Coil / Strip";
   if (n.includes("ERW")) return "ERW";
   if (n.includes("PIPE")) return "Pipe (General)";
@@ -82,6 +78,62 @@ function buildCatalog(products) {
     catalog[mat][cat].push(p);
   });
   return catalog;
+}
+
+// ─── Smart size-aware sort for catalog products ───────────────────────────────
+// Extracts the NB / mm / inch size from the product name and sorts numerically.
+// Fractions like "1/2" and "11/2" are converted to decimals for correct ordering.
+// Within the same NB size, falls back to product_id alphabetical.
+function extractSizeKey(productName) {
+  const n = productName.toUpperCase();
+
+  // NB sizes: "15 NB", "100 NB", "1/2 NB", "11/2 NB"
+  const nbMatch = n.match(/(\d+(?:\/\d+)?)\s*NB/);
+  if (nbMatch) {
+    const raw = nbMatch[1];
+    if (raw.includes("/")) {
+      const parts = raw.split("/");
+      return parseFloat(parts[0]) / parseFloat(parts[1]);
+    }
+    return parseFloat(raw);
+  }
+
+  // mm sizes: "40 X 40", "50X50", "25MM"
+  const mmMatch = n.match(/(\d+(?:\.\d+)?)\s*(?:X|\s|MM)/);
+  if (mmMatch) return parseFloat(mmMatch[1]);
+
+  // SWG / SCH numeric — already grouped by category, fallback to 0
+  return 0;
+}
+
+function sortProductsBySize(products) {
+  return [...products].sort((a, b) => {
+    const sizeA = extractSizeKey(a.product_name);
+    const sizeB = extractSizeKey(b.product_name);
+    if (sizeA !== sizeB) return sizeA - sizeB;
+    return a.product_id.localeCompare(b.product_id);
+  });
+}
+
+// ─── Category display order ───────────────────────────────────────────────────
+const CATEGORY_ORDER = [
+  "SCH 5", "SCH 10", "SCH 20", "SCH 40", "SCH 80", "SCH 160",
+  "Seamless",
+  "SWG 20", "SWG 18", "SWG 16", "SWG 14", "SWG 12", "SWG 10",
+  "ERW", "Polish Pipe", "Square Rod", "Rectangular Pipe",
+  "Round Bar", "Flat Bar", "Angle", "Channel",
+  "Sheet / Plate", "Coil / Strip", "Pipe (General)", "General",
+];
+
+function sortCategoryKeys(keys) {
+  return [...keys].sort((a, b) => {
+    const ia = CATEGORY_ORDER.indexOf(a);
+    const ib = CATEGORY_ORDER.indexOf(b);
+    if (ia === -1 && ib === -1) return a.localeCompare(b);
+    if (ia === -1) return 1;
+    if (ib === -1) return -1;
+    return ia - ib;
+  });
 }
 
 // ─── Main Component ──────────────────────────────────────────────────────────
@@ -700,7 +752,7 @@ export default function Products() {
           ) : (
             materialKeys.map(mat => {
               const isMaterialOpen = openMaterials[mat] !== false; // default open
-              const catKeys = Object.keys(catalog[mat]).sort();
+              const catKeys = sortCategoryKeys(Object.keys(catalog[mat]));
               const totalProductsInMat = catKeys.reduce((s, c) => s + catalog[mat][c].length, 0);
 
               return (
@@ -724,7 +776,7 @@ export default function Products() {
                       {catKeys.map(cat => {
                         const catKey = mat + "||" + cat;
                         const isCatOpen = openCategories[catKey] !== false; // default open
-                        const catProducts = catalog[mat][cat];
+                        const catProducts = sortProductsBySize(catalog[mat][cat]);
 
                         return (
                           <div key={cat}>
@@ -742,7 +794,7 @@ export default function Products() {
                               <span className="text-blue-400 text-sm">{isCatOpen ? "▲" : "▼"}</span>
                             </button>
 
-                            {/* Products in this category */}
+                            {/* Products in this category — sorted by size asc */}
                             {isCatOpen && (
                               <div className="overflow-x-auto">
                                 <table className="w-full text-sm">
@@ -758,49 +810,47 @@ export default function Products() {
                                     </tr>
                                   </thead>
                                   <tbody>
-                                    {catProducts
-                                      .sort((a, b) => a.product_id.localeCompare(b.product_id))
-                                      .map((p, idx) => {
-                                        const total = totalStock(p.id);
-                                        const isLow = p.low_stock_alert && total <= p.low_stock_alert;
-                                        return (
-                                          <tr
-                                            key={p.id}
-                                            onClick={() => openLedger(p)}
-                                            className={`border-t border-gray-100 cursor-pointer hover:bg-blue-50 transition-colors ${idx % 2 === 1 ? "bg-gray-50/50" : "bg-white"}`}
-                                          >
-                                            <td className="px-6 py-3 font-mono text-xs text-gray-600">{p.product_id}</td>
-                                            <td className="px-4 py-3 font-medium text-gray-800">
-                                              {p.product_name}
-                                              {stockBadge(p)}
-                                            </td>
-                                            <td className="px-4 py-3 text-center tabular-nums">{stockByLocation(p.id, "Office")}</td>
-                                            <td className="px-4 py-3 text-center tabular-nums">{stockByLocation(p.id, "Godown")}</td>
-                                            <td className="px-4 py-3 text-center tabular-nums">{stockByLocation(p.id, "Warehouse")}</td>
-                                            <td className={`px-4 py-3 text-center font-bold tabular-nums ${isLow ? "text-red-600" : "text-gray-800"}`}>
-                                              {total}
-                                            </td>
-                                            <td className="px-4 py-3 text-center">
-                                              <div className="flex gap-1 justify-center">
+                                    {catProducts.map((p, idx) => {
+                                      const total = totalStock(p.id);
+                                      const isLow = p.low_stock_alert && total <= p.low_stock_alert;
+                                      return (
+                                        <tr
+                                          key={p.id}
+                                          onClick={() => openLedger(p)}
+                                          className={`border-t border-gray-100 cursor-pointer hover:bg-blue-50 transition-colors ${idx % 2 === 1 ? "bg-gray-50/50" : "bg-white"}`}
+                                        >
+                                          <td className="px-6 py-3 font-mono text-xs text-gray-600">{p.product_id}</td>
+                                          <td className="px-4 py-3 font-medium text-gray-800">
+                                            {p.product_name}
+                                            {stockBadge(p)}
+                                          </td>
+                                          <td className="px-4 py-3 text-center tabular-nums">{stockByLocation(p.id, "Office")}</td>
+                                          <td className="px-4 py-3 text-center tabular-nums">{stockByLocation(p.id, "Godown")}</td>
+                                          <td className="px-4 py-3 text-center tabular-nums">{stockByLocation(p.id, "Warehouse")}</td>
+                                          <td className={`px-4 py-3 text-center font-bold tabular-nums ${isLow ? "text-red-600" : "text-gray-800"}`}>
+                                            {total}
+                                          </td>
+                                          <td className="px-4 py-3 text-center">
+                                            <div className="flex gap-1 justify-center">
+                                              <button
+                                                onClick={(e) => handleEditClick(e, p)}
+                                                className="bg-orange-100 hover:bg-orange-200 text-orange-700 text-xs px-2 py-1 rounded font-semibold transition-colors"
+                                              >
+                                                Edit
+                                              </button>
+                                              {isAdmin && (
                                                 <button
-                                                  onClick={(e) => handleEditClick(e, p)}
-                                                  className="bg-orange-100 hover:bg-orange-200 text-orange-700 text-xs px-2 py-1 rounded font-semibold transition-colors"
+                                                  onClick={(e) => handleDeleteProduct(e, p.product_id)}
+                                                  className="bg-red-100 hover:bg-red-200 text-red-700 text-xs px-2 py-1 rounded font-semibold transition-colors"
                                                 >
-                                                  Edit
+                                                  Del
                                                 </button>
-                                                {isAdmin && (
-                                                  <button
-                                                    onClick={(e) => handleDeleteProduct(e, p.product_id)}
-                                                    className="bg-red-100 hover:bg-red-200 text-red-700 text-xs px-2 py-1 rounded font-semibold transition-colors"
-                                                  >
-                                                    Del
-                                                  </button>
-                                                )}
-                                              </div>
-                                            </td>
-                                          </tr>
-                                        );
-                                      })}
+                                              )}
+                                            </div>
+                                          </td>
+                                        </tr>
+                                      );
+                                    })}
                                   </tbody>
                                 </table>
                               </div>
