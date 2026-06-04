@@ -44,7 +44,7 @@ export default function Dashboard() {
     fetchDashboardData();
   }, []);
 
-  // ✅ Auto-refresh when user switches back to this tab
+  // Auto-refresh when user switches back to this tab
   useEffect(() => {
     const handleVisibility = () => {
       if (document.visibilityState === "visible") fetchDashboardData();
@@ -65,22 +65,18 @@ export default function Dashboard() {
         .order("created_at", { ascending: false })
         .limit(5);
 
-      // ✅ FIX: Use stock_summary view (same as Products page) so tally-adjusted
-      // stock is used everywhere — raw transaction sum was causing stock mismatches.
       const { data: stockSummaryData } = await supabase
         .from("stock_summary")
         .select("*");
 
-      // Build stockMap: { uuid → total stock across all locations } from stock_summary
+      // Build stockMap: { uuid → total stock across all locations }
       const stockMap = {};
-      const productIdMap = {}; // uuid → product_id string (from products table join below)
-
       (stockSummaryData || []).forEach(row => {
         const qty = row.current_stock ?? row.total_stock ?? 0;
         stockMap[row.product_id] = (stockMap[row.product_id] || 0) + qty;
       });
 
-      // Build productInfo map from productsData
+      // Build productInfo map
       const productInfo = {};
       (productsData || []).forEach(p => {
         productInfo[p.id] = {
@@ -89,15 +85,13 @@ export default function Dashboard() {
         };
       });
 
-      // Compute category totals and categoryProductsMap from stock_summary-based stockMap
+      // Compute category totals
       let totalStock = 0;
       let polish = 0, seamless = 0, nb = 0, sheets = 0, nonPolish = 0, other = 0;
-      const productCategory = {};
       const categoryProductsMap = {};
 
       Object.entries(stockMap).forEach(([uuid, stock]) => {
         totalStock += stock;
-
         const info = productInfo[uuid] || {};
         const pId = (info.product_id || "").toUpperCase();
         const pName = (info.product_name || "").toUpperCase();
@@ -117,7 +111,6 @@ export default function Dashboard() {
           other += stock; cat = "Others";
         }
 
-        productCategory[uuid] = cat;
         if (!categoryProductsMap[cat]) categoryProductsMap[cat] = [];
         categoryProductsMap[cat].push({
           id: uuid,
@@ -127,30 +120,81 @@ export default function Dashboard() {
         });
       });
 
-      // Sort each category by product_id
       Object.keys(categoryProductsMap).forEach(cat => {
         categoryProductsMap[cat].sort((a, b) => a.product_id.localeCompare(b.product_id));
       });
 
-      // Daily activity still uses raw transactions (for movement chart only — not stock values)
-      const { data: allTrans } = await supabase
+      // ─── Last 7 calendar days (IST) ──────────────────────────────────────────
+      // Build the last 7 dates from TODAY backwards, in IST timezone.
+      // Each date is labelled like "04 Jun", "03 Jun", etc.
+      const last7Days = [];
+      for (let i = 6; i >= 0; i--) {
+        const d = new Date();
+        d.setDate(d.getDate() - i);
+        const label = d.toLocaleDateString("en-IN", {
+          timeZone: "Asia/Kolkata",
+          day: "2-digit",
+          month: "short"
+        });
+        last7Days.push(label); // e.g. ["29 May", "30 May", ..., "04 Jun"]
+      }
+
+      // Compute the start of 7 days ago at midnight IST, convert to UTC ISO for Supabase query
+      const sevenDaysAgoIST = new Date();
+      sevenDaysAgoIST.setDate(sevenDaysAgoIST.getDate() - 6);
+      // Set to midnight IST = subtract IST offset (UTC+5:30) then set to 00:00
+      const istOffsetMs = 5.5 * 60 * 60 * 1000;
+      const midnightLocal = new Date(
+        new Date(sevenDaysAgoIST.toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" }))
+          .getTime() + istOffsetMs // shift to IST midnight → then treat as UTC
+      );
+      // Actually, simpler: just subtract 6 full days and use ISO string directly
+      const cutoffDate = new Date();
+      cutoffDate.setDate(cutoffDate.getDate() - 6);
+      cutoffDate.setHours(0, 0, 0, 0);
+      // Convert local midnight to IST midnight: subtract local-tz offset and add IST offset
+      const cutoffISO = new Date(
+        cutoffDate.getTime()
+        - cutoffDate.getTimezoneOffset() * 60000  // remove local tz bias → get UTC midnight
+        + istOffsetMs                              // apply IST: this is too aggressive.
+        // Simpler: just compute IST date string and use .gte() filter
+      );
+      // Most reliable: just fetch last 7 days worth of data using a plain ISO cutoff
+      // Since Supabase stores created_at in UTC, we subtract 6 days from now (UTC)
+      const cutoffUTC = new Date();
+      cutoffUTC.setUTCDate(cutoffUTC.getUTCDate() - 6);
+      cutoffUTC.setUTCHours(0, 0, 0, 0);
+
+      const { data: recentActivity } = await supabase
         .from("transactions")
         .select("transaction_type, quantity, created_at")
-        .limit(10000);
+        .gte("created_at", cutoffUTC.toISOString())
+        .order("created_at", { ascending: true });
 
+      // Group by IST date label
       const dailyMap = {};
-      (allTrans || []).forEach(t => {
-        if (t.created_at) {
-          const date = new Date(t.created_at).toLocaleDateString("en-IN", { day: "2-digit", month: "short" });
-          if (!dailyMap[date]) dailyMap[date] = { name: date, inward: 0, outward: 0 };
-          if (t.transaction_type === "inward") dailyMap[date].inward += Number(t.quantity);
-          else dailyMap[date].outward += Number(t.quantity);
+      last7Days.forEach(label => {
+        dailyMap[label] = { name: label, inward: 0, outward: 0 };
+      });
+
+      (recentActivity || []).forEach(t => {
+        if (!t.created_at) return;
+        const label = new Date(t.created_at).toLocaleDateString("en-IN", {
+          timeZone: "Asia/Kolkata",
+          day: "2-digit",
+          month: "short"
+        });
+        if (dailyMap[label]) {
+          if (t.transaction_type === "inward") dailyMap[label].inward += Number(t.quantity);
+          else dailyMap[label].outward += Number(t.quantity);
         }
       });
 
-      const activityData = Object.values(dailyMap).slice(-7);
+      // Preserve ordered array of the last 7 days (including days with 0 activity)
+      const activityData = last7Days.map(label => dailyMap[label]);
+      // ─────────────────────────────────────────────────────────────────────────
 
-      // Low/High alerts use stock_summary-based stockMap
+      // Low/High alerts
       const lowList = [], highList = [];
       (productsData || []).forEach(p => {
         const currentStock = stockMap[p.id] || 0;
@@ -312,7 +356,7 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* PIE CHART — 6 categories, clickable */}
+        {/* PIE CHART */}
         <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 flex flex-col items-center">
           <h2 className="text-xl font-bold text-gray-800 mb-1 self-start uppercase tracking-tight">Stock Distribution</h2>
           <p className="text-xs text-gray-400 self-start mb-4">Click any slice to view products</p>
