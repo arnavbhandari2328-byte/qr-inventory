@@ -111,7 +111,7 @@ function sortCategoryKeys(keys) {
 
 export default function WarehouseStock() {
   const [products, setProducts]         = useState([]);
-  // stockSummary[productId][locationName] = net qty  (warehouse locations only)
+  // stockSummary[productId][locationId] = net qty  (warehouse locations only)
   const [stockSummary, setStockSummary] = useState({});
   // Only non-Office locations shown in warehouse view
   const [locations, setLocations]       = useState([]);
@@ -178,11 +178,10 @@ export default function WarehouseStock() {
       const lid = t.location_id;
       if (!pid || !lid) return;
       if (!summary[pid]) summary[pid] = {};
-      if (!summary[pid][lid] === undefined) summary[pid][lid] = 0;
       if (summary[pid][lid] === undefined) summary[pid][lid] = 0;
       const qty = Number(t.quantity || 0);
       const type = (t.transaction_type || "").toLowerCase();
-      summary[pid][lid] = (summary[pid][lid] || 0) + (type === "inward" ? qty : -qty);
+      summary[pid][lid] += type === "inward" ? qty : -qty;
     });
     setStockSummary(summary);
   }

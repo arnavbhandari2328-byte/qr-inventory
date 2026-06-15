@@ -420,7 +420,7 @@ export default function OfficeStock() {
                   <input
                     type="number" min="0"
                     value={newItem.low_stock_alert}
-                    onChange={e => setNewItem(n => ({ ...n, low_stock_alert: e.target.value })}
+                    onChange={e => setNewItem(n => ({ ...n, low_stock_alert: e.target.value }))}
                     placeholder="0"
                     className="w-full border border-gray-300 rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-blue-400"
                   />
