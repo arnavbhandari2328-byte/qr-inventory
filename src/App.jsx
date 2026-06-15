@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { BrowserRouter as Router, Routes, Route, Link, useLocation } from "react-router-dom";
+import { BrowserRouter as Router, Routes, Route, Link, useLocation, Navigate } from "react-router-dom";
 import { supabase } from "./supabase.js";
 
 import Dashboard from "./pages/Dashboard.jsx";
@@ -13,22 +13,37 @@ import WarehouseStock from "./pages/WarehouseStock.jsx";
 import OfficeStock from "./pages/OfficeStock.jsx";
 import LookupPrint from "./pages/LookupPrint.jsx";
 
-const NAV_ITEMS = [
-  { to: "/", label: "Dashboard", icon: "📊" },
-  { to: "/products", label: "Products", icon: "📦" },
-  { to: "/transactions", label: "Transactions", icon: "🔄" },
-  { to: "/warehouse", label: "Warehouse", icon: "🏭" },
-  { to: "/office", label: "Office Stock", icon: "🏢" },
-  { to: "/lookup", label: "Lookup & Print", icon: "🔍" },
+// Emails that only get warehouse-level access (no Office Stock, Products management, etc.)
+const WAREHOUSE_ONLY_EMAILS = [
+  "pursingh@nivee.com",         // primary
+  "pursingh@niveemetals.com",   // alternate — add whichever he uses
 ];
+
+const ALL_NAV_ITEMS = [
+  { to: "/",           label: "Dashboard",    icon: "📊", warehouseAllowed: true  },
+  { to: "/products",   label: "Products",     icon: "📦", warehouseAllowed: false },
+  { to: "/transactions",label: "Transactions", icon: "🔄", warehouseAllowed: true  },
+  { to: "/warehouse",  label: "Warehouse",    icon: "🏭", warehouseAllowed: true  },
+  { to: "/office",     label: "Office Stock", icon: "🏢", warehouseAllowed: false },
+  { to: "/lookup",     label: "Lookup & Print",icon: "🔍", warehouseAllowed: true  },
+];
+
+function isWarehouseOnly(email) {
+  if (!email) return false;
+  return WAREHOUSE_ONLY_EMAILS.map(e => e.toLowerCase()).includes(email.toLowerCase());
+}
 
 function NavBar({ session, onSignOut }) {
   const location = useLocation();
   if (!session || window.location.href.includes("update-password")) return null;
+
+  const restricted = isWarehouseOnly(session.user.email);
+  const navItems = ALL_NAV_ITEMS.filter(item => !restricted || item.warehouseAllowed);
+
   return (
     <nav className="bg-gray-900 text-white px-4 py-3 flex justify-between items-center no-print sticky top-0 z-40 shadow-lg">
       <div className="flex gap-1 overflow-x-auto scrollbar-hide">
-        {NAV_ITEMS.map(({ to, label, icon }) => {
+        {navItems.map(({ to, label, icon }) => {
           const active = location.pathname === to;
           return (
             <Link
@@ -50,85 +65,82 @@ function NavBar({ session, onSignOut }) {
         <span className="text-xs text-gray-400 hidden lg:block truncate max-w-[160px]">{session.user.email}</span>
         <button
           onClick={onSignOut}
-          className="bg-red-600 px-3 py-1.5 rounded-lg text-xs font-semibold hover:bg-red-700 transition-colors whitespace-nowrap"
+          className="bg-red-600 px-3 py-1.5 rounded-lg text-xs font-semibold hover:bg-red-700 transition-colors"
         >
-          Logout
+          Sign Out
         </button>
       </div>
     </nav>
   );
 }
 
+// Guard: redirect warehouse-only users away from restricted routes
+function RouteGuard({ session, children, restricted }) {
+  if (restricted && isWarehouseOnly(session?.user?.email)) {
+    return <Navigate to="/warehouse" replace />;
+  }
+  return children;
+}
+
+function AppContent({ session, onSignOut }) {
+  return (
+    <>
+      <NavBar session={session} onSignOut={onSignOut} />
+      <Routes>
+        <Route path="/login" element={<Login />} />
+        <Route path="/update-password" element={<UpdatePassword />} />
+        {session ? (
+          <>
+            <Route path="/" element={<Dashboard />} />
+            <Route path="/products" element={
+              <RouteGuard session={session} restricted>
+                <Products />
+              </RouteGuard>
+            } />
+            <Route path="/transactions" element={<Transactions />} />
+            <Route path="/scan" element={<Scan />} />
+            <Route path="/qr-print" element={<QRPrint />} />
+            <Route path="/warehouse" element={<WarehouseStock />} />
+            <Route path="/office" element={
+              <RouteGuard session={session} restricted>
+                <OfficeStock />
+              </RouteGuard>
+            } />
+            <Route path="/lookup" element={<LookupPrint />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </>
+        ) : (
+          <Route path="*" element={<Navigate to="/login" replace />} />
+        )}
+      </Routes>
+    </>
+  );
+}
+
 export default function App() {
   const [session, setSession] = useState(null);
-  const [isAuthorized, setIsAuthorized] = useState(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => checkUser(session));
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-      if (event === "PASSWORD_RECOVERY") {
-        setSession(session); setIsAuthorized(true); setLoading(false);
-      } else {
-        checkUser(session);
-      }
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
+      setLoading(false);
+    });
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session);
     });
     return () => subscription.unsubscribe();
   }, []);
 
-  async function checkUser(currentSession) {
-    if (!currentSession) {
-      setSession(null); setIsAuthorized(false); setLoading(false); return;
-    }
-    try {
-      const { data } = await supabase
-        .from("authorized_employees")
-        .select("email")
-        .eq("email", currentSession.user.email)
-        .single();
-      if (data) {
-        setSession(currentSession); setIsAuthorized(true);
-      } else {
-        await supabase.auth.signOut();
-        setSession(null); setIsAuthorized(false);
-        alert("Access Denied: You are not authorized.");
-      }
-    } catch {
-      setSession(null); setIsAuthorized(false);
-    } finally {
-      setLoading(false);
-    }
-  }
+  const handleSignOut = async () => {
+    await supabase.auth.signOut();
+  };
 
-  if (loading) return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-900 text-white font-bold">
-      Verifying Identity...
-    </div>
-  );
-
-  if (!session && !window.location.href.includes("update-password")) return <Login />;
+  if (loading) return <div className="min-h-screen flex items-center justify-center text-gray-500 font-bold">Loading...</div>;
 
   return (
     <Router>
-      <div className="min-h-screen bg-gray-100">
-        {session && isAuthorized && (
-          <NavBar session={session} onSignOut={() => supabase.auth.signOut()} />
-        )}
-        <div className="p-0 md:p-6">
-          <Routes>
-            <Route path="/" element={<Dashboard />} />
-            <Route path="/products" element={<Products />} />
-            <Route path="/transactions" element={<Transactions />} />
-            <Route path="/scan" element={<Scan />} />
-            <Route path="/scan/:productId" element={<Scan />} />
-            <Route path="/qrprint" element={<QRPrint />} />
-            <Route path="/warehouse" element={<WarehouseStock />} />
-            <Route path="/office" element={<OfficeStock />} />
-            <Route path="/lookup" element={<LookupPrint />} />
-            <Route path="/update-password" element={<UpdatePassword />} />
-          </Routes>
-        </div>
-      </div>
+      <AppContent session={session} onSignOut={handleSignOut} />
     </Router>
   );
 }

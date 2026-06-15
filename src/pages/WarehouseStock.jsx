@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { supabase } from "../supabase";
 
-// ── shared helpers (same as Products.jsx) ────────────────────────────────────
+// ── shared helpers ────────────────────────────────────────────────────────────
 function inferMaterial(name) {
   const n = name.toUpperCase();
   if (n.includes("316L")) return "SS 316L";
@@ -117,8 +117,7 @@ export default function WarehouseStock() {
   const [openMaterials, setOpenMaterials]   = useState({});
   const [openCategories, setOpenCategories] = useState({});
 
-  // slide-in add stock panel
-  const [panelOpen, setPanelOpen]   = useState(false);
+  const [panelOpen, setPanelOpen]       = useState(false);
   const [panelProduct, setPanelProduct] = useState(null);
   const [form, setForm] = useState({
     location_id: "", type: "inward", qty: "", rate: "", party: "", date: ""
@@ -145,13 +144,6 @@ export default function WarehouseStock() {
 
   const totalStock = (pid) => Object.values(stockSummary[pid] || {}).reduce((s, v) => s + v, 0);
   const stockByLoc = (pid, loc) => stockSummary[pid]?.[loc] ?? 0;
-
-  async function toggleHero(e, product) {
-    e.stopPropagation();
-    const next = !product.is_hero;
-    await supabase.from("products").update({ is_hero: next }).eq("id", product.id);
-    setProducts(prev => prev.map(p => p.id === product.id ? { ...p, is_hero: next } : p));
-  }
 
   function openPanel(product) {
     setPanelProduct(product);
@@ -195,7 +187,6 @@ export default function WarehouseStock() {
 
   const catalog = buildCatalog(filtered);
   const materialKeys = Object.keys(catalog).sort();
-
   const toggleMaterial = (mat) => setOpenMaterials(prev => ({ ...prev, [mat]: !prev[mat] }));
   const toggleCategory = (key) => setOpenCategories(prev => ({ ...prev, [key]: !prev[key] }));
 
@@ -217,7 +208,6 @@ export default function WarehouseStock() {
 
   return (
     <div className="p-6">
-      {/* HEADER */}
       <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
         <div>
           <h1 className="text-3xl font-bold">🏭 Warehouse Stock</h1>
@@ -225,7 +215,6 @@ export default function WarehouseStock() {
         </div>
       </div>
 
-      {/* SEARCH */}
       <div className="mb-5">
         <input
           placeholder="Search by product ID or name..."
@@ -235,7 +224,6 @@ export default function WarehouseStock() {
         />
       </div>
 
-      {/* CATALOG TREE */}
       <div className="space-y-3">
         {materialKeys.length === 0 ? (
           <div className="bg-white rounded-xl shadow p-8 text-center text-gray-400">No products found</div>
@@ -289,7 +277,6 @@ export default function WarehouseStock() {
                                     <th key={l.id} className="px-4 py-2 text-center font-semibold">{l.name}</th>
                                   ))}
                                   <th className="px-4 py-2 text-center font-semibold">Total</th>
-                                  <th className="px-4 py-2 text-center font-semibold">⭐ Hero</th>
                                   <th className="px-4 py-2 text-center font-semibold">Action</th>
                                 </tr>
                               </thead>
@@ -313,15 +300,6 @@ export default function WarehouseStock() {
                                     ))}
                                     <td className={`px-4 py-3 text-center font-bold tabular-nums text-lg ${stockColor(p)}`}>
                                       {totalStock(p.id)}
-                                    </td>
-                                    <td className="px-4 py-3 text-center">
-                                      <button
-                                        onClick={(e) => toggleHero(e, p)}
-                                        title={p.is_hero ? "Remove from hero" : "Pin as hero"}
-                                        className={`text-xl transition-transform hover:scale-125 ${p.is_hero ? "opacity-100" : "opacity-30 grayscale"}`}
-                                      >
-                                        ⭐
-                                      </button>
                                     </td>
                                     <td className="px-4 py-3 text-center">
                                       <button
@@ -357,104 +335,40 @@ export default function WarehouseStock() {
               <p className="text-blue-200 text-sm mt-1 truncate">{panelProduct?.product_name}</p>
               <p className="text-blue-300 font-mono text-xs mt-0.5">{panelProduct?.product_id}</p>
             </div>
-
             <div className="flex-1 overflow-y-auto p-6 space-y-4">
-              {/* IN / OUT toggle */}
               <div>
                 <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Type</label>
                 <div className="flex rounded-xl overflow-hidden border border-gray-300">
-                  <button
-                    onClick={() => setForm(f => ({ ...f, type: "inward" }))}
-                    className={`flex-1 py-2.5 text-sm font-bold transition-colors ${
-                      form.type === "inward" ? "bg-green-600 text-white" : "bg-white text-gray-500 hover:bg-gray-50"
-                    }`}
-                  >
-                    🟢 IN
-                  </button>
-                  <button
-                    onClick={() => setForm(f => ({ ...f, type: "outward" }))}
-                    className={`flex-1 py-2.5 text-sm font-bold transition-colors ${
-                      form.type === "outward" ? "bg-red-500 text-white" : "bg-white text-gray-500 hover:bg-gray-50"
-                    }`}
-                  >
-                    🔴 OUT
-                  </button>
+                  <button onClick={() => setForm(f => ({ ...f, type: "inward" }))} className={`flex-1 py-2.5 text-sm font-bold transition-colors ${form.type === "inward" ? "bg-green-600 text-white" : "bg-white text-gray-500 hover:bg-gray-50"}`}>🟢 IN</button>
+                  <button onClick={() => setForm(f => ({ ...f, type: "outward" }))} className={`flex-1 py-2.5 text-sm font-bold transition-colors ${form.type === "outward" ? "bg-red-500 text-white" : "bg-white text-gray-500 hover:bg-gray-50"}`}>🔴 OUT</button>
                 </div>
               </div>
-
-              {/* Location */}
               <div>
                 <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Location</label>
-                <select
-                  value={form.location_id}
-                  onChange={e => setForm(f => ({ ...f, location_id: e.target.value }))}
-                  className="w-full border border-gray-300 rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white"
-                >
+                <select value={form.location_id} onChange={e => setForm(f => ({ ...f, location_id: e.target.value }))} className="w-full border border-gray-300 rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white">
                   {locations.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
                 </select>
               </div>
-
-              {/* Qty */}
               <div>
                 <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Quantity</label>
-                <input
-                  type="number" min="0"
-                  value={form.qty}
-                  onChange={e => setForm(f => ({ ...f, qty: e.target.value }))}
-                  placeholder="e.g. 120"
-                  className="w-full border border-gray-300 rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-blue-400"
-                />
+                <input type="number" min="0" value={form.qty} onChange={e => setForm(f => ({ ...f, qty: e.target.value }))} placeholder="e.g. 120" className="w-full border border-gray-300 rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-blue-400" />
               </div>
-
-              {/* Rate */}
               <div>
                 <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Rate (₹) <span className="text-gray-400 normal-case font-normal">optional</span></label>
-                <input
-                  type="number" min="0"
-                  value={form.rate}
-                  onChange={e => setForm(f => ({ ...f, rate: e.target.value }))}
-                  placeholder="e.g. 150"
-                  className="w-full border border-gray-300 rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-blue-400"
-                />
+                <input type="number" min="0" value={form.rate} onChange={e => setForm(f => ({ ...f, rate: e.target.value }))} placeholder="e.g. 150" className="w-full border border-gray-300 rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-blue-400" />
               </div>
-
-              {/* Date */}
               <div>
                 <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Date</label>
-                <input
-                  type="date"
-                  value={form.date}
-                  onChange={e => setForm(f => ({ ...f, date: e.target.value }))}
-                  className="w-full border border-gray-300 rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-blue-400"
-                />
+                <input type="date" value={form.date} onChange={e => setForm(f => ({ ...f, date: e.target.value }))} className="w-full border border-gray-300 rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-blue-400" />
               </div>
-
-              {/* Party */}
               <div>
                 <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Party / Remark <span className="text-gray-400 normal-case font-normal">optional</span></label>
-                <input
-                  value={form.party}
-                  onChange={e => setForm(f => ({ ...f, party: e.target.value }))}
-                  placeholder="Supplier name, note..."
-                  className="w-full border border-gray-300 rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-blue-400"
-                />
+                <input value={form.party} onChange={e => setForm(f => ({ ...f, party: e.target.value }))} placeholder="Supplier name, note..." className="w-full border border-gray-300 rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-blue-400" />
               </div>
             </div>
-
             <div className="px-6 py-4 border-t bg-gray-50 flex gap-3">
-              <button
-                onClick={handleAddStock}
-                disabled={saving}
-                className="flex-1 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-bold py-3 rounded-xl transition-colors"
-              >
-                {saving ? "Saving..." : "✅ Save"}
-              </button>
-              <button
-                onClick={() => setPanelOpen(false)}
-                className="flex-1 bg-gray-200 hover:bg-gray-300 text-gray-700 font-bold py-3 rounded-xl transition-colors"
-              >
-                Cancel
-              </button>
+              <button onClick={handleAddStock} disabled={saving} className="flex-1 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-bold py-3 rounded-xl transition-colors">{saving ? "Saving..." : "✅ Save"}</button>
+              <button onClick={() => setPanelOpen(false)} className="flex-1 bg-gray-200 hover:bg-gray-300 text-gray-700 font-bold py-3 rounded-xl transition-colors">Cancel</button>
             </div>
           </div>
         </div>
