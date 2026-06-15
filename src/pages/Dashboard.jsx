@@ -161,6 +161,11 @@ export default function Dashboard() {
         stockMap[row.product_id] = (stockMap[row.product_id] || 0) + qty;
       });
 
+      // Ensure ALL products appear even if they have zero transactions
+      (productsData || []).forEach(p => {
+        if (!(p.id in stockMap)) stockMap[p.id] = 0;
+      });
+
       const productInfo = {};
       (productsData || []).forEach(p => {
         productInfo[p.id] = { product_id: p.product_id, product_name: p.product_name };
