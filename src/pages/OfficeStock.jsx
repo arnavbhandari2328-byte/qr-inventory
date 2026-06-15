@@ -38,7 +38,12 @@ function inferCategory(name) {
   if (n.includes("FLAT BAR") || n.includes("FLAT ROD")) return "Flat Bar";
   if (n.includes("ANGLE")) return "Angle";
   if (n.includes("CHANNEL")) return "Channel";
-  if (n.includes("SHEET") || n.includes("PLATE") || n.includes("NO.4") || n.includes("NO.2") || n.includes("NO.8") || n.includes("2B FINISH") || n.includes("BA FINISH") || n.includes("HAIRLINE")) return "Sheet / Plate";
+  if (
+    n.includes("SHEET") || n.includes("PLATE") ||
+    n.includes(" MAT ") || n.includes(" MAT$") || n.endsWith(" MAT") ||
+    n.includes("NO.4") || n.includes("NO.2") || n.includes("NO.8") ||
+    n.includes("2B FINISH") || n.includes("BA FINISH") || n.includes("HAIRLINE")
+  ) return "Sheet / Plate";
   if (n.includes("COIL") || n.includes("STRIP")) return "Coil / Strip";
   if (n.includes("ERW")) return "ERW";
   if (n.includes("PIPE")) return "Pipe (General)";
@@ -136,7 +141,7 @@ export default function OfficeStock() {
 
   // new item form
   const [showAddItem, setShowAddItem]   = useState(false);
-  const [newItem, setNewItem]           = useState({ name: "", unit: "Pcs", low_stock_alert: "" });
+  const [newItem, setNewItem]           = useState({ name: "", unit: "Pcs", low_stock_alert: "", location: "" });
   const [addingItem, setAddingItem]     = useState(false);
 
   // stock panel
@@ -145,7 +150,29 @@ export default function OfficeStock() {
   const [form, setForm]                 = useState({ type: "inward", qty: "", rate: "", party: "", date: "" });
   const [saving, setSaving]             = useState(false);
 
-  useEffect(() => { loadAll(); }, []);
+  useEffect(() => {
+    loadAll();
+
+    // ── realtime: refresh whenever office_transactions change ──────────────
+    const channel = supabase
+      .channel("office-transactions-changes")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "office_transactions" },
+        () => { loadTransactions(); }
+      )
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
+  }, []);
+
+  async function loadTransactions() {
+    const { data: txns } = await supabase
+      .from("office_transactions")
+      .select("*")
+      .order("created_at");
+    setTransactions(txns || []);
+  }
 
   async function loadAll() {
     const [{ data: its }, { data: txns }] = await Promise.all([
@@ -161,14 +188,31 @@ export default function OfficeStock() {
     setAddingItem(true);
     try {
       const cat = inferCategory(newItem.name);
-      const { error } = await supabase.from("office_items").insert([{
+      const { data: inserted, error } = await supabase.from("office_items").insert([{
         name: newItem.name.trim(),
         category: cat,
         unit: newItem.unit || "Pcs",
         low_stock_alert: Number(newItem.low_stock_alert || 0),
-      }]);
+        location: newItem.location.trim() || null,
+      }]).select("*").single();
       if (error) throw error;
-      setNewItem({ name: "", unit: "Pcs", low_stock_alert: "" });
+
+      // If opening stock qty is given, record a transaction right away
+      if (newItem.openingQty && Number(newItem.openingQty) > 0) {
+        const { data: { user } } = await supabase.auth.getUser();
+        const { error: txErr } = await supabase.from("office_transactions").insert([{
+          item_id: inserted.id,
+          transaction_type: "inward",
+          quantity: Number(newItem.openingQty),
+          rate: Number(newItem.openingRate || 0),
+          party: "Opening Stock",
+          created_by_email: user?.email || "",
+          created_at: new Date().toISOString(),
+        }]);
+        if (txErr) throw txErr;
+      }
+
+      setNewItem({ name: "", unit: "Pcs", low_stock_alert: "", location: "", openingQty: "", openingRate: "" });
       setShowAddItem(false);
       loadAll();
     } catch (err) {
@@ -216,7 +260,8 @@ export default function OfficeStock() {
       }]);
       if (error) throw error;
       setPanelOpen(false);
-      loadAll();
+      // Eagerly update local transactions so the UI reflects instantly
+      await loadTransactions();
     } catch (err) {
       alert("Error: " + err.message);
     } finally {
@@ -270,6 +315,18 @@ export default function OfficeStock() {
                   </p>
                 )}
               </div>
+
+              {/* Location field */}
+              <div>
+                <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Location <span className="text-gray-400 normal-case font-normal">optional</span></label>
+                <input
+                  value={newItem.location}
+                  onChange={e => setNewItem(n => ({ ...n, location: e.target.value }))}
+                  placeholder="e.g. Shelf A3, Rack 2..."
+                  className="w-full border border-gray-300 rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-blue-400"
+                />
+              </div>
+
               <div className="flex gap-3">
                 <div className="flex-1">
                   <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Unit</label>
@@ -289,6 +346,33 @@ export default function OfficeStock() {
                     placeholder="0"
                     className="w-full border border-gray-300 rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-blue-400"
                   />
+                </div>
+              </div>
+
+              {/* Opening stock */}
+              <div className="border border-dashed border-gray-300 rounded-xl p-4 space-y-3 bg-gray-50">
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Opening Stock <span className="text-gray-400 normal-case font-normal">optional</span></p>
+                <div className="flex gap-3">
+                  <div className="flex-1">
+                    <label className="block text-xs text-gray-500 mb-1">Qty</label>
+                    <input
+                      type="number" min="0"
+                      value={newItem.openingQty || ""}
+                      onChange={e => setNewItem(n => ({ ...n, openingQty: e.target.value }))}
+                      placeholder="0"
+                      className="w-full border border-gray-300 rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white"
+                    />
+                  </div>
+                  <div className="flex-1">
+                    <label className="block text-xs text-gray-500 mb-1">Rate (₹)</label>
+                    <input
+                      type="number" min="0"
+                      value={newItem.openingRate || ""}
+                      onChange={e => setNewItem(n => ({ ...n, openingRate: e.target.value }))}
+                      placeholder="0"
+                      className="w-full border border-gray-300 rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white"
+                    />
+                  </div>
                 </div>
               </div>
             </div>
@@ -375,6 +459,7 @@ export default function OfficeStock() {
                               <thead className="bg-gray-50 text-gray-500 text-xs uppercase tracking-wide">
                                 <tr>
                                   <th className="px-6 py-2 text-left font-semibold">Item Name</th>
+                                  <th className="px-4 py-2 text-left font-semibold">Location</th>
                                   <th className="px-4 py-2 text-center font-semibold">Qty</th>
                                   <th className="px-4 py-2 text-center font-semibold">Unit</th>
                                   <th className="px-4 py-2 text-center font-semibold">Status</th>
@@ -395,6 +480,9 @@ export default function OfficeStock() {
                                       <td className="px-6 py-3">
                                         <div className="font-medium text-gray-800">{item.name}</div>
                                         {low && <span className="text-xs bg-red-100 text-red-700 font-semibold px-2 py-0.5 rounded-full ml-0">Low Stock</span>}
+                                      </td>
+                                      <td className="px-4 py-3 text-gray-500 text-xs">
+                                        {item.location || <span className="text-gray-300">—</span>}
                                       </td>
                                       <td className={`px-4 py-3 text-center font-bold tabular-nums text-lg ${
                                         qty === 0 ? "text-red-500" : low ? "text-orange-500" : "text-green-600"
@@ -456,6 +544,9 @@ export default function OfficeStock() {
             <div className="px-6 py-5 bg-gradient-to-r from-blue-700 to-blue-800 text-white">
               <h2 className="text-lg font-bold">+ Add Stock Movement</h2>
               <p className="text-blue-200 text-sm mt-1 truncate">{panelItem?.name}</p>
+              {panelItem?.location && (
+                <p className="text-blue-300 text-xs mt-0.5">📍 {panelItem.location}</p>
+              )}
             </div>
 
             <div className="flex-1 overflow-y-auto p-6 space-y-4">
