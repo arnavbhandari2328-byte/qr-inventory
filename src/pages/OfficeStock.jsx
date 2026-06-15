@@ -4,6 +4,44 @@ import { supabase } from "../supabase";
 // Office location UUID — fetched once on mount
 let OFFICE_LOCATION_ID = null;
 
+// ── Products that ALWAYS appear on the Office page (even at 0 qty) ────────────
+const OFFICE_ASSIGNED_PRODUCT_IDS = new Set([
+  "NM-BV-S/E-IMP-CF8-1PC-1/4\"",
+  "NM-BV-S/E-IMP-CF8-1PC-3/8\"",
+  "NM-BV-S/E-IMP-CF8-1PC-1/2\"",
+  "NM-BV-S/E-IMP-CF8-1PC-3/4\"",
+  "NM-BV-S/E-IMP-CF8-1\"",
+  "NM-BV-S/E-IMP-CF8-1-1/4\"",
+  "NM-BV-S/E-IMP-CF8-1-1/2\"",
+  "NM-BV-S/E-IMP-CF8-1PC-2\"",
+  "NM-BV-S/E-IMP-CF8-1PC-2-1/2\"",
+  "NM-BV-S/E-IMP-CF8-1PC-3\"",
+  "NM-BV-S/E-IMP-CF8-1PC-4\"",
+  "NM-BV-S/E-IND-CF8-1PC-1/4\"",
+  "NM-BV-S/E-IND-CF8-1PC-3/8\"",
+  "NM-BV-S/E-IND-CF8-1PC-1/2\"",
+  "NM-BV-S/E-IND-CF8-1PC-3/4\"",
+  "NM-BV-S/E-IND-CF8-1PC-1\"",
+  "NM-BV-S/E-IND-CF8-1PC-1-1/4\"",
+  "NM-BV-S/E-IND-CF8-1PC-1-1/2\"",
+  "NM-BV-S/E-IND-CF8-1PC-2\"",
+  "NM-BV-S/E-IND-CF8-1PC-2-1/2\"",
+  "NM-BV-S/E-IND-CF8-1PC-3\"",
+  "NM-BV-S/E-IND-CF8-1PC-4\"",
+  "NM-BV-S/E-NF-CF8-1PC-1/4\"",
+  "NM-BV-S/E-NF-CF8-1PC-3/8\"",
+  "NM-BV-S/E-NF-CF8-1PC-1/2\"",
+  "NM-BV-S/E-NF-CF8-1PC-3/4\"",
+  "NM-BV-S/E-NF-CF8-1PC-1\"",
+  "NM-BV-S/E-NF-CF8-1PC-1-1/4\"",
+  "NM-BV-S/E-NF-CF8-1PC-1-1/2\"",
+  "NM-BV-S/E-NF-CF8-1PC-2\"",
+  "NM-BV-S/E-NF-CF8-1PC-2-1/2\"",
+  "NM-BV-S/E-NF-CF8-1PC-3\"",
+  "NM-BV-S/E-NF-CF8-1PC-4\"",
+]);
+// ─────────────────────────────────────────────────────────────────────────────
+
 // ── same catalog helpers as Products / WarehouseStock ─────────────────────────
 function inferMaterial(name) {
   const n = name.toUpperCase();
@@ -189,36 +227,50 @@ export default function OfficeStock() {
     const locId = await getOfficeLocationId();
     setOfficeLocationId(locId);
 
-    if (!locId) {
-      setProducts([]);
-      setTransactions([]);
-      return;
+    // ── Step 1: load transactions for the office location ──
+    let txnsData = [];
+    if (locId) {
+      const { data: txns } = await supabase
+        .from("transactions")
+        .select("*")
+        .eq("location_id", locId)
+        .order("created_at");
+      txnsData = txns || [];
     }
-
-    // Load transactions for Office location only
-    const { data: txns } = await supabase
-      .from("transactions")
-      .select("*")
-      .eq("location_id", locId)
-      .order("created_at");
-
-    const txnsData = txns || [];
     setTransactions(txnsData);
 
-    // Get unique product_ids that have office transactions
-    const productIds = [...new Set(txnsData.map(t => t.product_id).filter(Boolean))];
+    // ── Step 2: collect product IDs from transactions ──
+    const txnProductIds = new Set(txnsData.map(t => t.product_id).filter(Boolean));
 
-    if (productIds.length === 0) {
-      setProducts([]);
-      return;
-    }
-
-    const { data: prods } = await supabase
+    // ── Step 3: also fetch ALL assigned office products by product_id string ──
+    // This ensures products in OFFICE_ASSIGNED_PRODUCT_IDS always appear
+    // even if they currently have 0 qty (no net transactions).
+    const { data: assignedProds } = await supabase
       .from("products")
       .select("*")
-      .in("id", productIds);
+      .in("product_id", [...OFFICE_ASSIGNED_PRODUCT_IDS]);
 
-    setProducts(prods || []);
+    const assignedMap = {};
+    (assignedProds || []).forEach(p => { assignedMap[p.id] = p; });
+
+    // ── Step 4: fetch products from transaction product IDs (if any extras) ──
+    const extraIds = [...txnProductIds].filter(id => !assignedMap[id]);
+    let extraProds = [];
+    if (extraIds.length > 0) {
+      const { data: ep } = await supabase
+        .from("products")
+        .select("*")
+        .in("id", extraIds);
+      extraProds = ep || [];
+    }
+
+    // ── Step 5: merge — assigned products first, then any extras from txns ──
+    const merged = [
+      ...Object.values(assignedMap),
+      ...extraProds,
+    ];
+
+    setProducts(merged);
   }
 
   async function handleAddItem() {
@@ -368,7 +420,7 @@ export default function OfficeStock() {
                   <input
                     type="number" min="0"
                     value={newItem.low_stock_alert}
-                    onChange={e => setNewItem(n => ({ ...n, low_stock_alert: e.target.value }))}
+                    onChange={e => setNewItem(n => ({ ...n, low_stock_alert: e.target.value })}
                     placeholder="0"
                     className="w-full border border-gray-300 rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-blue-400"
                   />

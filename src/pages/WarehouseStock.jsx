@@ -111,6 +111,7 @@ function sortCategoryKeys(keys) {
 
 export default function WarehouseStock() {
   const [products, setProducts]         = useState([]);
+  // stockSummary[productId][locationName] = net qty  (warehouse locations only)
   const [stockSummary, setStockSummary] = useState({});
   // Only non-Office locations shown in warehouse view
   const [locations, setLocations]       = useState([]);
@@ -147,7 +148,7 @@ export default function WarehouseStock() {
     // Step 2: fetch transactions ONLY for warehouse/godown locations
     const { data: txns } = await supabase
       .from("transactions")
-      .select("*")
+      .select("product_id, location_id, transaction_type, quantity")
       .in("location_id", warehouseLocIds);
 
     const txnsData = txns || [];
@@ -169,26 +170,29 @@ export default function WarehouseStock() {
 
     setProducts(prod || []);
 
-    // Step 5: build stock summary from transactions (per product, per location name)
-    const locIdToName = {};
-    warehouseLocations.forEach(l => { locIdToName[l.id] = l.name; });
-
-    const summary = {};
+    // Step 5: build stock summary — keyed by product UUID, then by location UUID
+    // We key by location_id (UUID) not name to avoid any name-mismatch bugs.
+    const summary = {}; // summary[productId][locationId] = net qty
     txnsData.forEach(t => {
       const pid = t.product_id;
-      const locName = locIdToName[t.location_id];
-      if (!pid || !locName) return;
+      const lid = t.location_id;
+      if (!pid || !lid) return;
       if (!summary[pid]) summary[pid] = {};
-      if (!summary[pid][locName]) summary[pid][locName] = 0;
+      if (!summary[pid][lid] === undefined) summary[pid][lid] = 0;
+      if (summary[pid][lid] === undefined) summary[pid][lid] = 0;
       const qty = Number(t.quantity || 0);
       const type = (t.transaction_type || "").toLowerCase();
-      summary[pid][locName] += type === "inward" ? qty : -qty;
+      summary[pid][lid] = (summary[pid][lid] || 0) + (type === "inward" ? qty : -qty);
     });
     setStockSummary(summary);
   }
 
-  const totalStock = (pid) => Object.values(stockSummary[pid] || {}).reduce((s, v) => s + v, 0);
-  const stockByLoc = (pid, loc) => stockSummary[pid]?.[loc] ?? 0;
+  // Total warehouse stock for a product = sum across all warehouse location IDs
+  const totalStock = (pid) =>
+    Object.values(stockSummary[pid] || {}).reduce((s, v) => s + v, 0);
+
+  // Stock for one specific warehouse location (by location UUID)
+  const stockByLoc = (pid, locId) => stockSummary[pid]?.[locId] ?? 0;
 
   function openPanel(product) {
     setPanelProduct(product);
@@ -338,9 +342,10 @@ export default function WarehouseStock() {
                                       </div>
                                       <div className="font-mono text-xs text-gray-400 mt-0.5">{p.product_id}</div>
                                     </td>
+                                    {/* Use location UUID (l.id) as key into stockSummary — no name-mismatch bugs */}
                                     {locations.map(l => (
                                       <td key={l.id} className="px-4 py-3 text-center tabular-nums text-gray-700">
-                                        {stockByLoc(p.id, l.name)}
+                                        {stockByLoc(p.id, l.id)}
                                       </td>
                                     ))}
                                     <td className={`px-4 py-3 text-center font-bold tabular-nums text-lg ${stockColor(p)}`}>
