@@ -201,10 +201,11 @@ export default function OfficeStock() {
     if (!newItem.name.trim()) { alert("Enter an item name."); return; }
     setAddingItem(true);
     try {
-      // Add as a product with a generated ID
+      // Generate a readable product_id from the name
       const productId = newItem.name.trim().toUpperCase().replace(/\s+/g, "-");
+
       const { data: inserted, error } = await supabase.from("products").insert([{
-        id: productId,
+        product_id: productId,
         product_name: newItem.name.trim(),
         unit: newItem.unit || "Pcs",
         low_stock_alert: Number(newItem.low_stock_alert || 0),
