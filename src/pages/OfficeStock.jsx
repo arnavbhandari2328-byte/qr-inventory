@@ -1,6 +1,9 @@
 import { useEffect, useState } from "react";
 import { supabase } from "../supabase";
 
+// Office location UUID — fetched once on mount
+let OFFICE_LOCATION_ID = null;
+
 // ── same catalog helpers as Products / WarehouseStock ─────────────────────────
 function inferMaterial(name) {
   const n = name.toUpperCase();
@@ -115,13 +118,13 @@ function sortCategoryKeys(keys) {
 }
 // ── end helpers ───────────────────────────────────────────────────────────────
 
-// Compute office stock qty for a product from the main transactions table
-function calcOfficeStock(productId, transactions) {
+// Compute office stock qty using location_id
+function calcOfficeStock(productId, transactions, officeLocationId) {
   return transactions
-    .filter(t => t.product_id === productId && t.location && t.location.toLowerCase() === "office")
+    .filter(t => t.product_id === productId && t.location_id === officeLocationId)
     .reduce((sum, t) => {
       const qty = Number(t.quantity || 0);
-      const type = (t.transaction_type || t.type || "").toLowerCase();
+      const type = (t.transaction_type || "").toLowerCase();
       return sum + (type === "inward" ? qty : -qty);
     }, 0);
 }
@@ -129,6 +132,7 @@ function calcOfficeStock(productId, transactions) {
 export default function OfficeStock() {
   const [products, setProducts]         = useState([]);
   const [transactions, setTransactions] = useState([]);
+  const [officeLocationId, setOfficeLocationId] = useState(null);
   const [search, setSearch]             = useState("");
   const [openMaterials, setOpenMaterials]   = useState({});
   const [openCategories, setOpenCategories] = useState({});
@@ -147,7 +151,6 @@ export default function OfficeStock() {
   useEffect(() => {
     loadAll();
 
-    // realtime: refresh whenever transactions change
     const channel = supabase
       .channel("office-transactions-realtime")
       .on(
@@ -160,21 +163,43 @@ export default function OfficeStock() {
     return () => { supabase.removeChannel(channel); };
   }, []);
 
-  async function loadTransactions() {
+  async function getOfficeLocationId() {
+    if (OFFICE_LOCATION_ID) return OFFICE_LOCATION_ID;
+    const { data } = await supabase
+      .from("locations")
+      .select("id")
+      .ilike("name", "office")
+      .single();
+    OFFICE_LOCATION_ID = data?.id || null;
+    return OFFICE_LOCATION_ID;
+  }
+
+  async function loadTransactions(locId) {
+    const id = locId || officeLocationId || await getOfficeLocationId();
+    if (!id) return;
     const { data: txns } = await supabase
       .from("transactions")
       .select("*")
-      .ilike("location", "office")
+      .eq("location_id", id)
       .order("created_at");
     setTransactions(txns || []);
   }
 
   async function loadAll() {
-    // Load ALL transactions with location = Office
+    const locId = await getOfficeLocationId();
+    setOfficeLocationId(locId);
+
+    if (!locId) {
+      setProducts([]);
+      setTransactions([]);
+      return;
+    }
+
+    // Load transactions for Office location only
     const { data: txns } = await supabase
       .from("transactions")
       .select("*")
-      .ilike("location", "office")
+      .eq("location_id", locId)
       .order("created_at");
 
     const txnsData = txns || [];
@@ -188,7 +213,6 @@ export default function OfficeStock() {
       return;
     }
 
-    // Fetch product details for those IDs
     const { data: prods } = await supabase
       .from("products")
       .select("*")
@@ -199,9 +223,10 @@ export default function OfficeStock() {
 
   async function handleAddItem() {
     if (!newItem.name.trim()) { alert("Enter an item name."); return; }
+    const locId = officeLocationId || await getOfficeLocationId();
+    if (!locId) { alert("Office location not found in the database."); return; }
     setAddingItem(true);
     try {
-      // Generate a readable product_id from the name
       const productId = newItem.name.trim().toUpperCase().replace(/\s+/g, "-");
 
       const { data: inserted, error } = await supabase.from("products").insert([{
@@ -213,16 +238,15 @@ export default function OfficeStock() {
 
       if (error) throw error;
 
-      // If opening stock qty is given, record a transaction with location = Office
       if (newItem.openingQty && Number(newItem.openingQty) > 0) {
         const { data: { user } } = await supabase.auth.getUser();
         const { error: txErr } = await supabase.from("transactions").insert([{
           product_id: inserted.id,
+          location_id: locId,
           transaction_type: "inward",
           quantity: Number(newItem.openingQty),
           rate: Number(newItem.openingRate || 0),
-          party_name: "Opening Stock",
-          location: "Office",
+          party: "Opening Stock",
           created_by_email: user?.email || "",
           created_at: new Date().toISOString(),
         }]);
@@ -241,8 +265,9 @@ export default function OfficeStock() {
 
   async function handleDeleteProduct(e, product) {
     e.stopPropagation();
+    const locId = officeLocationId || await getOfficeLocationId();
     if (!window.confirm(`Remove "${product.product_name}" from Office Stock view? (This removes its office transactions)`)) return;
-    await supabase.from("transactions").delete().eq("product_id", product.id).ilike("location", "office");
+    await supabase.from("transactions").delete().eq("product_id", product.id).eq("location_id", locId);
     loadAll();
   }
 
@@ -255,17 +280,19 @@ export default function OfficeStock() {
 
   async function handleAddStock() {
     if (!form.qty) { alert("Enter a quantity."); return; }
+    const locId = officeLocationId || await getOfficeLocationId();
+    if (!locId) { alert("Office location not found."); return; }
     setSaving(true);
     try {
       const { data: { user } } = await supabase.auth.getUser();
       const ts = form.date ? new Date(form.date + "T12:00:00+05:30").toISOString() : new Date().toISOString();
       const { error } = await supabase.from("transactions").insert([{
         product_id: panelItem.id,
+        location_id: locId,
         transaction_type: form.type,
         quantity: Number(form.qty),
         rate: Number(form.rate || 0),
-        party_name: form.party || "",
-        location: "Office",
+        party: form.party || "",
         created_by_email: user?.email || "",
         created_at: ts,
       }]);
@@ -348,7 +375,6 @@ export default function OfficeStock() {
                 </div>
               </div>
 
-              {/* Opening stock */}
               <div className="border border-dashed border-gray-300 rounded-xl p-4 space-y-3 bg-gray-50">
                 <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Opening Stock <span className="text-gray-400 normal-case font-normal">optional</span></p>
                 <div className="flex gap-3">
@@ -466,7 +492,7 @@ export default function OfficeStock() {
                               </thead>
                               <tbody>
                                 {catItems.map((item, idx) => {
-                                  const qty = calcOfficeStock(item.id, transactions);
+                                  const qty = calcOfficeStock(item.id, transactions, officeLocationId);
                                   const low = item.low_stock_alert && qty <= item.low_stock_alert;
                                   return (
                                     <tr

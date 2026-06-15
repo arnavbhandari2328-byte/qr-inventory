@@ -112,6 +112,7 @@ function sortCategoryKeys(keys) {
 export default function WarehouseStock() {
   const [products, setProducts]         = useState([]);
   const [stockSummary, setStockSummary] = useState({});
+  // Only non-Office locations shown in warehouse view
   const [locations, setLocations]       = useState([]);
   const [search, setSearch]             = useState("");
   const [openMaterials, setOpenMaterials]   = useState({});
@@ -129,13 +130,21 @@ export default function WarehouseStock() {
   async function loadAll() {
     const [{ data: prod }, { data: loc }, { data: stock }] = await Promise.all([
       supabase.from("products").select("*"),
-      supabase.from("locations").select("*"),
+      // Exclude the Office location from the warehouse view
+      supabase.from("locations").select("*").not("name", "ilike", "office"),
       supabase.from("stock_summary").select("*"),
     ]);
+
     setProducts(prod || []);
+
+    const warehouseLocNames = new Set((loc || []).map(l => l.name));
     setLocations(loc || []);
+
+    // Build summary using ONLY non-Office location rows
     const summary = {};
     (stock || []).forEach(row => {
+      // Skip Office rows so they never show in warehouse totals
+      if (!warehouseLocNames.has(row.location_name)) return;
       if (!summary[row.product_id]) summary[row.product_id] = {};
       summary[row.product_id][row.location_name] = row.current_stock ?? row.total_stock ?? 0;
     });
@@ -211,7 +220,7 @@ export default function WarehouseStock() {
       <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
         <div>
           <h1 className="text-3xl font-bold">🏭 Warehouse Stock</h1>
-          <p className="text-gray-500 text-sm mt-1">Live stock across all locations — click any product to log stock IN/OUT</p>
+          <p className="text-gray-500 text-sm mt-1">Live stock across Warehouse &amp; Godown — click any product to log stock IN/OUT</p>
         </div>
       </div>
 
@@ -245,7 +254,7 @@ export default function WarehouseStock() {
                   </span>
                 </div>
                 <span className="text-xl font-light">{isMaterialOpen ? "▲" : "▼"}</span>
-              </button>
+            </button>
 
               {isMaterialOpen && (
                 <div className="divide-y divide-gray-100">
