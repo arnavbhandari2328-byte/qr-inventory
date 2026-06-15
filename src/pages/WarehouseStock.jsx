@@ -145,7 +145,22 @@ export default function WarehouseStock() {
       return;
     }
 
-    // Step 2: fetch transactions ONLY for warehouse/godown locations
+    // Step 2: fetch ALL products (not just those with warehouse transactions)
+    // This ensures products that only have office stock still appear in the
+    // warehouse page so users can record their first inward entry.
+    const { data: prod } = await supabase
+      .from("products")
+      .select("*");
+
+    const allProducts = prod || [];
+    setProducts(allProducts);
+
+    if (allProducts.length === 0) {
+      setStockSummary({});
+      return;
+    }
+
+    // Step 3: fetch transactions ONLY for warehouse/godown locations
     const { data: txns } = await supabase
       .from("transactions")
       .select("product_id, location_id, transaction_type, quantity")
@@ -153,26 +168,8 @@ export default function WarehouseStock() {
 
     const txnsData = txns || [];
 
-    // Step 3: find product IDs that have at least one warehouse transaction
-    const warehouseProductIds = [...new Set(txnsData.map(t => t.product_id).filter(Boolean))];
-
-    if (warehouseProductIds.length === 0) {
-      setProducts([]);
-      setStockSummary({});
-      return;
-    }
-
-    // Step 4: fetch only those products
-    const { data: prod } = await supabase
-      .from("products")
-      .select("*")
-      .in("id", warehouseProductIds);
-
-    setProducts(prod || []);
-
-    // Step 5: build stock summary — keyed by product UUID, then by location UUID
-    // We key by location_id (UUID) not name to avoid any name-mismatch bugs.
-    const summary = {}; // summary[productId][locationId] = net qty
+    // Step 4: build stock summary — keyed by product UUID, then by location UUID
+    const summary = {};
     txnsData.forEach(t => {
       const pid = t.product_id;
       const lid = t.location_id;
@@ -341,7 +338,6 @@ export default function WarehouseStock() {
                                       </div>
                                       <div className="font-mono text-xs text-gray-400 mt-0.5">{p.product_id}</div>
                                     </td>
-                                    {/* Use location UUID (l.id) as key into stockSummary — no name-mismatch bugs */}
                                     {locations.map(l => (
                                       <td key={l.id} className="px-4 py-3 text-center tabular-nums text-gray-700">
                                         {stockByLoc(p.id, l.id)}
