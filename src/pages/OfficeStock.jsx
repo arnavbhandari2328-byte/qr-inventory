@@ -76,18 +76,19 @@ function extractSizeKey(name) {
 
 function sortItemsBySize(items) {
   return [...items].sort((a, b) => {
-    const sa = extractSizeKey(a.name);
-    const sb = extractSizeKey(b.name);
+    const sa = extractSizeKey(a.product_name || a.name || "");
+    const sb = extractSizeKey(b.product_name || b.name || "");
     if (sa !== sb) return sa - sb;
-    return a.name.localeCompare(b.name);
+    return (a.product_name || a.name || "").localeCompare(b.product_name || b.name || "");
   });
 }
 
 function buildCatalog(items) {
   const catalog = {};
   items.forEach(item => {
-    const mat = inferMaterial(item.name);
-    const cat = inferCategory(item.name);
+    const itemName = item.product_name || item.name || "";
+    const mat = inferMaterial(itemName);
+    const cat = inferCategory(itemName);
     if (!catalog[mat]) catalog[mat] = {};
     if (!catalog[mat][cat]) catalog[mat][cat] = [];
     catalog[mat][cat].push(item);
@@ -114,26 +115,19 @@ function sortCategoryKeys(keys) {
 }
 // ── end helpers ───────────────────────────────────────────────────────────────
 
-function isDeadStock(item, transactions) {
-  const itemTxns = transactions.filter(t => t.item_id === item.id);
-  if (itemTxns.length === 0) {
-    const created = new Date(item.created_at);
-    const diffDays = (Date.now() - created.getTime()) / 86400000;
-    return diffDays > 30;
-  }
-  const lastTxn = itemTxns.reduce((a, b) => new Date(a.created_at) > new Date(b.created_at) ? a : b);
-  const diffDays = (Date.now() - new Date(lastTxn.created_at).getTime()) / 86400000;
-  return diffDays > 30;
-}
-
-function calcStock(item, transactions) {
+// Compute office stock qty for a product from the main transactions table
+function calcOfficeStock(productId, transactions) {
   return transactions
-    .filter(t => t.item_id === item.id)
-    .reduce((sum, t) => sum + (t.transaction_type === "inward" ? Number(t.quantity) : -Number(t.quantity)), 0);
+    .filter(t => t.product_id === productId && t.location && t.location.toLowerCase() === "office")
+    .reduce((sum, t) => {
+      const qty = Number(t.quantity || 0);
+      const type = (t.transaction_type || t.type || "").toLowerCase();
+      return sum + (type === "inward" ? qty : -qty);
+    }, 0);
 }
 
 export default function OfficeStock() {
-  const [items, setItems]               = useState([]);
+  const [products, setProducts]         = useState([]);
   const [transactions, setTransactions] = useState([]);
   const [search, setSearch]             = useState("");
   const [openMaterials, setOpenMaterials]   = useState({});
@@ -141,7 +135,7 @@ export default function OfficeStock() {
 
   // new item form
   const [showAddItem, setShowAddItem]   = useState(false);
-  const [newItem, setNewItem]           = useState({ name: "", unit: "Pcs", low_stock_alert: "", location: "" });
+  const [newItem, setNewItem]           = useState({ name: "", unit: "Pcs", low_stock_alert: "", openingQty: "", openingRate: "" });
   const [addingItem, setAddingItem]     = useState(false);
 
   // stock panel
@@ -153,12 +147,12 @@ export default function OfficeStock() {
   useEffect(() => {
     loadAll();
 
-    // ── realtime: refresh whenever office_transactions change ──────────────
+    // realtime: refresh whenever transactions change
     const channel = supabase
-      .channel("office-transactions-changes")
+      .channel("office-transactions-realtime")
       .on(
         "postgres_changes",
-        { event: "*", schema: "public", table: "office_transactions" },
+        { event: "*", schema: "public", table: "transactions" },
         () => { loadTransactions(); }
       )
       .subscribe();
@@ -168,51 +162,73 @@ export default function OfficeStock() {
 
   async function loadTransactions() {
     const { data: txns } = await supabase
-      .from("office_transactions")
+      .from("transactions")
       .select("*")
+      .ilike("location", "office")
       .order("created_at");
     setTransactions(txns || []);
   }
 
   async function loadAll() {
-    const [{ data: its }, { data: txns }] = await Promise.all([
-      supabase.from("office_items").select("*").order("created_at"),
-      supabase.from("office_transactions").select("*").order("created_at"),
-    ]);
-    setItems(its || []);
-    setTransactions(txns || []);
+    // Load ALL transactions with location = Office
+    const { data: txns } = await supabase
+      .from("transactions")
+      .select("*")
+      .ilike("location", "office")
+      .order("created_at");
+
+    const txnsData = txns || [];
+    setTransactions(txnsData);
+
+    // Get unique product_ids that have office transactions
+    const productIds = [...new Set(txnsData.map(t => t.product_id).filter(Boolean))];
+
+    if (productIds.length === 0) {
+      setProducts([]);
+      return;
+    }
+
+    // Fetch product details for those IDs
+    const { data: prods } = await supabase
+      .from("products")
+      .select("*")
+      .in("id", productIds);
+
+    setProducts(prods || []);
   }
 
   async function handleAddItem() {
     if (!newItem.name.trim()) { alert("Enter an item name."); return; }
     setAddingItem(true);
     try {
-      const cat = inferCategory(newItem.name);
-      const { data: inserted, error } = await supabase.from("office_items").insert([{
-        name: newItem.name.trim(),
-        category: cat,
+      // Add as a product with a generated ID
+      const productId = newItem.name.trim().toUpperCase().replace(/\s+/g, "-");
+      const { data: inserted, error } = await supabase.from("products").insert([{
+        id: productId,
+        product_name: newItem.name.trim(),
         unit: newItem.unit || "Pcs",
         low_stock_alert: Number(newItem.low_stock_alert || 0),
-        location: newItem.location.trim() || null,
       }]).select("*").single();
+
       if (error) throw error;
 
-      // If opening stock qty is given, record a transaction right away
+      // If opening stock qty is given, record a transaction with location = Office
       if (newItem.openingQty && Number(newItem.openingQty) > 0) {
         const { data: { user } } = await supabase.auth.getUser();
-        const { error: txErr } = await supabase.from("office_transactions").insert([{
-          item_id: inserted.id,
+        const { error: txErr } = await supabase.from("transactions").insert([{
+          product_id: inserted.id,
           transaction_type: "inward",
           quantity: Number(newItem.openingQty),
           rate: Number(newItem.openingRate || 0),
-          party: "Opening Stock",
+          party_name: "Opening Stock",
+          location: "Office",
           created_by_email: user?.email || "",
           created_at: new Date().toISOString(),
         }]);
         if (txErr) throw txErr;
       }
 
-      setNewItem({ name: "", unit: "Pcs", low_stock_alert: "", location: "", openingQty: "", openingRate: "" });
+      setNewItem({ name: "", unit: "Pcs", low_stock_alert: "", openingQty: "", openingRate: "" });
       setShowAddItem(false);
       loadAll();
     } catch (err) {
@@ -222,17 +238,10 @@ export default function OfficeStock() {
     }
   }
 
-  async function toggleHero(e, item) {
+  async function handleDeleteProduct(e, product) {
     e.stopPropagation();
-    const next = !item.is_hero;
-    await supabase.from("office_items").update({ is_hero: next }).eq("id", item.id);
-    setItems(prev => prev.map(i => i.id === item.id ? { ...i, is_hero: next } : i));
-  }
-
-  async function handleDeleteItem(e, item) {
-    e.stopPropagation();
-    if (!window.confirm(`Delete "${item.name}"? All its transactions will be removed.`)) return;
-    await supabase.from("office_items").delete().eq("id", item.id);
+    if (!window.confirm(`Remove "${product.product_name}" from Office Stock view? (This removes its office transactions)`)) return;
+    await supabase.from("transactions").delete().eq("product_id", product.id).ilike("location", "office");
     loadAll();
   }
 
@@ -249,19 +258,19 @@ export default function OfficeStock() {
     try {
       const { data: { user } } = await supabase.auth.getUser();
       const ts = form.date ? new Date(form.date + "T12:00:00+05:30").toISOString() : new Date().toISOString();
-      const { error } = await supabase.from("office_transactions").insert([{
-        item_id: panelItem.id,
+      const { error } = await supabase.from("transactions").insert([{
+        product_id: panelItem.id,
         transaction_type: form.type,
         quantity: Number(form.qty),
         rate: Number(form.rate || 0),
-        party: form.party || "",
+        party_name: form.party || "",
+        location: "Office",
         created_by_email: user?.email || "",
         created_at: ts,
       }]);
       if (error) throw error;
       setPanelOpen(false);
-      // Eagerly update local transactions so the UI reflects instantly
-      await loadTransactions();
+      await loadAll();
     } catch (err) {
       alert("Error: " + err.message);
     } finally {
@@ -269,11 +278,11 @@ export default function OfficeStock() {
     }
   }
 
-  const filtered = search
-    ? items.filter(i => i.name.toLowerCase().includes(search.toLowerCase()))
-    : items;
+  const filteredProducts = search
+    ? products.filter(p => (p.product_name || "").toLowerCase().includes(search.toLowerCase()))
+    : products;
 
-  const catalog = buildCatalog(filtered);
+  const catalog = buildCatalog(filteredProducts);
   const materialKeys = Object.keys(catalog).sort();
 
   const toggleMaterial = (mat) => setOpenMaterials(prev => ({ ...prev, [mat]: !prev[mat] }));
@@ -285,7 +294,7 @@ export default function OfficeStock() {
       <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
         <div>
           <h1 className="text-3xl font-bold">🏢 Office Stock</h1>
-          <p className="text-gray-500 text-sm mt-1">Free-form items — auto-categorized by name</p>
+          <p className="text-gray-500 text-sm mt-1">Products with Office location transactions</p>
         </div>
         <button
           onClick={() => setShowAddItem(true)}
@@ -314,17 +323,6 @@ export default function OfficeStock() {
                     Auto-category: <span className="font-semibold text-blue-600">{inferMaterial(newItem.name)} → {inferCategory(newItem.name)}</span>
                   </p>
                 )}
-              </div>
-
-              {/* Location field */}
-              <div>
-                <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Location <span className="text-gray-400 normal-case font-normal">optional</span></label>
-                <input
-                  value={newItem.location}
-                  onChange={e => setNewItem(n => ({ ...n, location: e.target.value }))}
-                  placeholder="e.g. Shelf A3, Rack 2..."
-                  className="w-full border border-gray-300 rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-blue-400"
-                />
               </div>
 
               <div className="flex gap-3">
@@ -411,7 +409,7 @@ export default function OfficeStock() {
           <div className="bg-white rounded-xl shadow p-12 text-center">
             <div className="text-4xl mb-3">📭</div>
             <p className="text-gray-400 text-lg font-medium">No office items yet</p>
-            <p className="text-gray-400 text-sm mt-1">Click "+ Add New Item" to get started</p>
+            <p className="text-gray-400 text-sm mt-1">Add a transaction with location "Office" or click "+ Add New Item"</p>
           </div>
         ) : materialKeys.map(mat => {
           const isMaterialOpen = openMaterials[mat] !== false;
@@ -459,18 +457,15 @@ export default function OfficeStock() {
                               <thead className="bg-gray-50 text-gray-500 text-xs uppercase tracking-wide">
                                 <tr>
                                   <th className="px-6 py-2 text-left font-semibold">Item Name</th>
-                                  <th className="px-4 py-2 text-left font-semibold">Location</th>
-                                  <th className="px-4 py-2 text-center font-semibold">Qty</th>
+                                  <th className="px-4 py-2 text-center font-semibold">Office Qty</th>
                                   <th className="px-4 py-2 text-center font-semibold">Unit</th>
                                   <th className="px-4 py-2 text-center font-semibold">Status</th>
-                                  <th className="px-4 py-2 text-center font-semibold">⭐ Hero</th>
                                   <th className="px-4 py-2 text-center font-semibold">Action</th>
                                 </tr>
                               </thead>
                               <tbody>
                                 {catItems.map((item, idx) => {
-                                  const qty = calcStock(item, transactions);
-                                  const dead = isDeadStock(item, transactions);
+                                  const qty = calcOfficeStock(item.id, transactions);
                                   const low = item.low_stock_alert && qty <= item.low_stock_alert;
                                   return (
                                     <tr
@@ -478,30 +473,21 @@ export default function OfficeStock() {
                                       className={`border-t border-gray-100 ${idx % 2 === 1 ? "bg-gray-50/50" : "bg-white"} hover:bg-blue-50/30 transition-colors`}
                                     >
                                       <td className="px-6 py-3">
-                                        <div className="font-medium text-gray-800">{item.name}</div>
-                                        {low && <span className="text-xs bg-red-100 text-red-700 font-semibold px-2 py-0.5 rounded-full ml-0">Low Stock</span>}
-                                      </td>
-                                      <td className="px-4 py-3 text-gray-500 text-xs">
-                                        {item.location || <span className="text-gray-300">—</span>}
+                                        <div className="font-medium text-gray-800">{item.product_name || item.name}</div>
+                                        {low && <span className="text-xs bg-red-100 text-red-700 font-semibold px-2 py-0.5 rounded-full">Low Stock</span>}
                                       </td>
                                       <td className={`px-4 py-3 text-center font-bold tabular-nums text-lg ${
                                         qty === 0 ? "text-red-500" : low ? "text-orange-500" : "text-green-600"
                                       }`}>{qty}</td>
-                                      <td className="px-4 py-3 text-center text-gray-500">{item.unit}</td>
+                                      <td className="px-4 py-3 text-center text-gray-500">{item.unit || "Pcs"}</td>
                                       <td className="px-4 py-3 text-center">
-                                        {dead ? (
-                                          <span className="text-xs bg-gray-200 text-gray-500 font-semibold px-2 py-0.5 rounded-full">🚫 Dead Stock</span>
+                                        {qty === 0 ? (
+                                          <span className="text-xs bg-red-100 text-red-600 font-semibold px-2 py-0.5 rounded-full">Out of Stock</span>
+                                        ) : low ? (
+                                          <span className="text-xs bg-orange-100 text-orange-700 font-semibold px-2 py-0.5 rounded-full">⚠ Low</span>
                                         ) : (
-                                          <span className="text-xs bg-green-100 text-green-700 font-semibold px-2 py-0.5 rounded-full">✅ Active</span>
+                                          <span className="text-xs bg-green-100 text-green-700 font-semibold px-2 py-0.5 rounded-full">✅ In Stock</span>
                                         )}
-                                      </td>
-                                      <td className="px-4 py-3 text-center">
-                                        <button
-                                          onClick={(e) => toggleHero(e, item)}
-                                          className={`text-xl transition-transform hover:scale-125 ${item.is_hero ? "opacity-100" : "opacity-30 grayscale"}`}
-                                        >
-                                          ⭐
-                                        </button>
                                       </td>
                                       <td className="px-4 py-3">
                                         <div className="flex gap-1 justify-center">
@@ -512,7 +498,7 @@ export default function OfficeStock() {
                                             + Stock
                                           </button>
                                           <button
-                                            onClick={(e) => handleDeleteItem(e, item)}
+                                            onClick={(e) => handleDeleteProduct(e, item)}
                                             className="bg-red-100 hover:bg-red-200 text-red-700 text-xs font-bold px-2 py-1.5 rounded-lg transition-colors"
                                           >
                                             Del
@@ -543,10 +529,8 @@ export default function OfficeStock() {
           <div className="w-full max-w-md bg-white shadow-2xl flex flex-col">
             <div className="px-6 py-5 bg-gradient-to-r from-blue-700 to-blue-800 text-white">
               <h2 className="text-lg font-bold">+ Add Stock Movement</h2>
-              <p className="text-blue-200 text-sm mt-1 truncate">{panelItem?.name}</p>
-              {panelItem?.location && (
-                <p className="text-blue-300 text-xs mt-0.5">📍 {panelItem.location}</p>
-              )}
+              <p className="text-blue-200 text-sm mt-1 truncate">{panelItem?.product_name || panelItem?.name}</p>
+              <p className="text-blue-300 text-xs mt-0.5">📍 Office</p>
             </div>
 
             <div className="flex-1 overflow-y-auto p-6 space-y-4">
