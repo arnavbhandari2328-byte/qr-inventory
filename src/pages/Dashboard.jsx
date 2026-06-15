@@ -32,6 +32,13 @@ export default function Dashboard() {
   const [aiResponse, setAiResponse] = useState("");
   const [isAsking, setIsAsking] = useState(false);
 
+  // ── Ledger state ────────────────────────────────────────────────────────────
+  const [ledgerProduct, setLedgerProduct] = useState(null);
+  const [ledger, setLedger] = useState([]);
+  const [ledgerLoading, setLedgerLoading] = useState(false);
+  const [locations, setLocations] = useState([]);
+  const [stockSummary, setStockSummary] = useState({});
+
   const COLORS = ["#F59E0B", "#3B82F6", "#10B981", "#EC4899", "#F97316", "#8B5CF6"];
   const CATEGORY_COLORS = {
     "Seamless Pipe":   "#F59E0B",
@@ -42,7 +49,11 @@ export default function Dashboard() {
     "Others":          "#8B5CF6"
   };
 
-  useEffect(() => { fetchDashboardData(); }, []);
+  useEffect(() => {
+    fetchDashboardData();
+    loadLocations();
+    loadStockSummary();
+  }, []);
   useEffect(() => { fetchDashboardData(); }, [deadDays]);
 
   useEffect(() => {
@@ -52,6 +63,56 @@ export default function Dashboard() {
     document.addEventListener("visibilitychange", handleVisibility);
     return () => document.removeEventListener("visibilitychange", handleVisibility);
   }, [deadDays]);
+
+  const loadLocations = async () => {
+    const { data } = await supabase.from("locations").select("*");
+    setLocations(data || []);
+  };
+
+  const loadStockSummary = async () => {
+    const { data } = await supabase.from("stock_summary").select("*");
+    const summary = {};
+    (data || []).forEach(row => {
+      if (!summary[row.product_id]) summary[row.product_id] = {};
+      const qty = row.current_stock ?? row.total_stock ?? 0;
+      summary[row.product_id][row.location_name] = qty;
+    });
+    setStockSummary(summary);
+  };
+
+  const stockByLocation = (productId, locationName) =>
+    stockSummary[productId]?.[locationName] ?? 0;
+
+  const totalStockForProduct = (productId) =>
+    Object.values(stockSummary[productId] || {}).reduce((s, v) => s + v, 0);
+
+  // ── Open ledger modal ────────────────────────────────────────────────────────
+  const openLedger = async (product) => {
+    setLedgerProduct(product);
+    setLedger([]);
+    setLedgerLoading(true);
+    try {
+      const { data: productTrans, error } = await supabase
+        .from("transactions")
+        .select("*, locations(name)")
+        .eq("product_id", product.id)
+        .order("created_at", { ascending: true });
+      if (error) throw error;
+
+      let balance = 0;
+      const calculated = (productTrans || []).map(t => {
+        if (t.transaction_type === "inward") balance += Number(t.quantity);
+        else balance -= Number(t.quantity);
+        return { ...t, location_name: t.locations?.name || "", balance };
+      });
+      setLedger(calculated);
+      await loadStockSummary();
+    } catch (err) {
+      console.error("Failed to load ledger:", err.message);
+    } finally {
+      setLedgerLoading(false);
+    }
+  };
 
   const fetchDashboardData = async () => {
     try {
@@ -380,7 +441,7 @@ export default function Dashboard() {
           <div className="px-6 py-4 bg-gradient-to-r from-yellow-400 to-orange-400 flex items-center justify-between">
             <div>
               <h2 className="text-lg font-black text-white uppercase tracking-tight">🏆 Hero Products</h2>
-              <p className="text-yellow-100 text-xs mt-0.5">Top 10 products by total outward sales</p>
+              <p className="text-yellow-100 text-xs mt-0.5">Top 10 products by total outward sales · Click any row to view ledger</p>
             </div>
             <button onClick={() => setModalType('hero')} className="bg-white/20 hover:bg-white/30 text-white text-xs font-bold px-3 py-1.5 rounded-lg transition-colors">View All</button>
           </div>
@@ -396,14 +457,18 @@ export default function Dashboard() {
               </thead>
               <tbody>
                 {stats.heroProducts.map((p, i) => (
-                  <tr key={p.id} className="border-t border-gray-100 hover:bg-yellow-50/40 transition-colors">
+                  <tr
+                    key={p.id}
+                    onClick={() => openLedger(p)}
+                    className="border-t border-gray-100 hover:bg-yellow-50 cursor-pointer transition-colors group"
+                  >
                     <td className="px-5 py-3">
                       <span className={`font-black text-sm ${i === 0 ? 'text-yellow-500' : i === 1 ? 'text-gray-400' : i === 2 ? 'text-orange-400' : 'text-gray-300'}`}>
                         {i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `#${i + 1}`}
                       </span>
                     </td>
                     <td className="px-5 py-3">
-                      <div className="font-medium text-gray-800 text-sm">{p.product_name}</div>
+                      <div className="font-medium text-gray-800 text-sm group-hover:text-orange-600 transition-colors">{p.product_name}</div>
                       <div className="font-mono text-xs text-gray-400">{p.product_id}</div>
                     </td>
                     <td className="px-5 py-3 text-right">
@@ -429,7 +494,7 @@ export default function Dashboard() {
         <div className="px-6 py-4 bg-gradient-to-r from-gray-600 to-gray-700 flex items-center justify-between flex-wrap gap-3">
           <div>
             <h2 className="text-lg font-black text-white uppercase tracking-tight">💤 Dead Stock</h2>
-            <p className="text-gray-300 text-xs mt-0.5">Products with stock but zero outward in the selected period</p>
+            <p className="text-gray-300 text-xs mt-0.5">Products with stock but zero outward in the selected period · Click any row to view ledger</p>
           </div>
           <div className="flex items-center gap-2">
             <span className="text-gray-300 text-xs font-semibold">No movement in:</span>
@@ -438,14 +503,22 @@ export default function Dashboard() {
                 key={d}
                 onClick={() => setDeadDays(d)}
                 className={`px-3 py-1 rounded-lg text-xs font-bold transition-colors ${
-                  deadDays === d ? 'bg-white text-gray-800' : 'bg-white/20 text-white hover:bg-white/30'
+                  deadDays === d
+                    ? "bg-white text-gray-800"
+                    : "bg-white/20 text-white hover:bg-white/30"
                 }`}
-              >{d}d</button>
+              >
+                {d}d
+              </button>
             ))}
           </div>
         </div>
+
         {stats.deadStockProducts.length === 0 ? (
-          <div className="p-8 text-center text-gray-400 text-sm">✅ No dead stock found in the last {deadDays} days!</div>
+          <div className="p-10 text-center text-gray-400">
+            <div className="text-3xl mb-2">✅</div>
+            <p className="font-semibold">No dead stock in the last {deadDays} days!</p>
+          </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -453,19 +526,25 @@ export default function Dashboard() {
                 <tr>
                   <th className="px-5 py-3 text-left text-xs font-bold text-gray-500 uppercase">Product</th>
                   <th className="px-5 py-3 text-right text-xs font-bold text-gray-500 uppercase">Current Stock</th>
+                  <th className="px-5 py-3 text-right text-xs font-bold text-gray-500 uppercase">Low Alert</th>
                 </tr>
               </thead>
               <tbody>
                 {stats.deadStockProducts.map((p) => (
-                  <tr key={p.id} className="border-t border-gray-100 hover:bg-gray-50 transition-colors">
+                  <tr
+                    key={p.id}
+                    onClick={() => openLedger(p)}
+                    className="border-t border-gray-100 hover:bg-gray-50 cursor-pointer transition-colors group"
+                  >
                     <td className="px-5 py-3">
-                      <div className="font-medium text-gray-800">{p.product_name}</div>
+                      <div className="font-medium text-gray-800 group-hover:text-gray-600 transition-colors">{p.product_name}</div>
                       <div className="font-mono text-xs text-gray-400">{p.product_id}</div>
                     </td>
                     <td className="px-5 py-3 text-right">
-                      <span className="bg-gray-100 text-gray-600 font-bold text-xs px-3 py-1 rounded-full tabular-nums">
-                        {p.currentStock} units
-                      </span>
+                      <span className="font-black text-gray-700 tabular-nums">{p.currentStock}</span>
+                    </td>
+                    <td className="px-5 py-3 text-right">
+                      <span className="font-semibold text-orange-500 tabular-nums">{p.low_stock_alert || "—"}</span>
                     </td>
                   </tr>
                 ))}
@@ -475,101 +554,238 @@ export default function Dashboard() {
         )}
       </div>
 
-      {/* CATEGORY DRILL-DOWN MODAL */}
+      {/* ── PIE CATEGORY MODAL ──────────────────────────────────────────────── */}
       {selectedCategory && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4 backdrop-blur-sm">
-          <div className="bg-white w-full max-w-3xl max-h-[85vh] overflow-hidden rounded-[2rem] shadow-2xl flex flex-col border border-gray-100">
-            <div className="p-6 text-white flex justify-between items-center" style={{ backgroundColor: categoryColor }}>
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 px-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[80vh] flex flex-col overflow-hidden">
+            <div className="px-6 py-4 flex items-center justify-between" style={{ background: categoryColor }}>
               <div>
-                <h2 className="text-2xl font-black uppercase tracking-tighter italic">{selectedCategory}</h2>
-                <p className="text-sm font-medium opacity-80 mt-1">{categoryProducts.length} products</p>
+                <h2 className="text-lg font-black text-white">{selectedCategory}</h2>
+                <p className="text-white/70 text-xs mt-0.5">{categoryProducts.length} products</p>
               </div>
-              <button onClick={() => setSelectedCategory(null)} className="bg-white text-gray-900 px-4 py-2 rounded-xl text-xs font-bold shadow-lg">Close</button>
+              <button onClick={() => setSelectedCategory(null)} className="text-white/80 hover:text-white text-3xl font-light leading-none">✕</button>
             </div>
-            <div className="p-6 overflow-y-auto">
-              {categoryProducts.length === 0 ? (
-                <p className="text-center text-gray-400 py-8">No products found in this category.</p>
+            <div className="overflow-y-auto flex-1">
+              <table className="w-full text-sm">
+                <thead className="bg-gray-50 sticky top-0">
+                  <tr>
+                    <th className="px-5 py-3 text-left text-xs font-bold text-gray-500 uppercase">Product ID</th>
+                    <th className="px-5 py-3 text-left text-xs font-bold text-gray-500 uppercase">Product Name</th>
+                    <th className="px-5 py-3 text-right text-xs font-bold text-gray-500 uppercase">Stock</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {categoryProducts.map((p, i) => (
+                    <tr key={p.id} className={`border-t border-gray-100 ${i % 2 === 0 ? "bg-white" : "bg-gray-50/40"}`}>
+                      <td className="px-5 py-3 font-mono text-xs text-gray-500">{p.product_id}</td>
+                      <td className="px-5 py-3 font-medium text-gray-800">{p.product_name}</td>
+                      <td className="px-5 py-3 text-right font-bold text-gray-700 tabular-nums">{p.currentStock}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="px-6 py-3 border-t bg-gray-50 flex justify-end">
+              <button onClick={() => setSelectedCategory(null)} className="bg-gray-700 hover:bg-gray-800 text-white font-semibold px-5 py-2 rounded-xl text-sm transition-colors">Close</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── ALERT MODALS (low / high) ───────────────────────────────────────── */}
+      {(modalType === 'low' || modalType === 'high') && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 px-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[80vh] flex flex-col overflow-hidden">
+            <div className={`px-6 py-4 flex items-center justify-between ${modalType === 'low' ? 'bg-red-600' : 'bg-orange-500'}`}>
+              <div>
+                <h2 className="text-lg font-black text-white">{modalType === 'low' ? '🔴 Low Stock Alerts' : '🟠 High Stock Alerts'}</h2>
+                <p className="text-white/70 text-xs mt-0.5">
+                  {modalType === 'low' ? stats.lowAlertProducts.length : stats.highAlertProducts.length} products
+                </p>
+              </div>
+              <button onClick={() => setModalType(null)} className="text-white/80 hover:text-white text-3xl font-light leading-none">✕</button>
+            </div>
+            <div className="overflow-y-auto flex-1">
+              <table className="w-full text-sm">
+                <thead className="bg-gray-50 sticky top-0">
+                  <tr>
+                    <th className="px-5 py-3 text-left text-xs font-bold text-gray-500 uppercase">Product</th>
+                    <th className="px-5 py-3 text-right text-xs font-bold text-gray-500 uppercase">Stock</th>
+                    <th className="px-5 py-3 text-right text-xs font-bold text-gray-500 uppercase">Alert Level</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(modalType === 'low' ? stats.lowAlertProducts : stats.highAlertProducts).map((p, i) => (
+                    <tr key={p.id} className={`border-t border-gray-100 ${i % 2 === 0 ? "bg-white" : "bg-gray-50/40"}`}>
+                      <td className="px-5 py-3">
+                        <div className="font-medium text-gray-800">{p.product_name}</div>
+                        <div className="font-mono text-xs text-gray-400">{p.product_id}</div>
+                      </td>
+                      <td className={`px-5 py-3 text-right font-bold tabular-nums ${modalType === 'low' ? 'text-red-600' : 'text-orange-600'}`}>
+                        {p.currentStock}
+                      </td>
+                      <td className="px-5 py-3 text-right text-gray-500 tabular-nums">
+                        {modalType === 'low' ? p.low_stock_alert : p.high_stock_alert}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="px-6 py-3 border-t bg-gray-50 flex justify-end">
+              <button onClick={() => setModalType(null)} className="bg-gray-700 hover:bg-gray-800 text-white font-semibold px-5 py-2 rounded-xl text-sm transition-colors">Close</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── HERO / DEAD STOCK LIST MODALS ───────────────────────────────────── */}
+      {(modalType === 'hero' || modalType === 'dead') && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 px-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[80vh] flex flex-col overflow-hidden">
+            <div className={`px-6 py-4 flex items-center justify-between ${modalType === 'hero' ? 'bg-gradient-to-r from-yellow-400 to-orange-400' : 'bg-gradient-to-r from-gray-600 to-gray-700'}`}>
+              <div>
+                <h2 className="text-lg font-black text-white">{modalType === 'hero' ? '🏆 All Hero Products' : '💤 All Dead Stock'}</h2>
+                <p className="text-white/70 text-xs mt-0.5">
+                  {(modalType === 'hero' ? stats.heroProducts : stats.deadStockProducts).length} products · Click any row to view ledger
+                </p>
+              </div>
+              <button onClick={() => setModalType(null)} className="text-white/80 hover:text-white text-3xl font-light leading-none">✕</button>
+            </div>
+            <div className="overflow-y-auto flex-1">
+              <table className="w-full text-sm">
+                <thead className="bg-gray-50 sticky top-0">
+                  <tr>
+                    <th className="px-5 py-3 text-left text-xs font-bold text-gray-500 uppercase">Product</th>
+                    <th className="px-5 py-3 text-right text-xs font-bold text-gray-500 uppercase">
+                      {modalType === 'hero' ? 'Total Outward' : 'Current Stock'}
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(modalType === 'hero' ? stats.heroProducts : stats.deadStockProducts).map((p, i) => (
+                    <tr
+                      key={p.id}
+                      onClick={() => { setModalType(null); openLedger(p); }}
+                      className={`border-t border-gray-100 cursor-pointer hover:bg-blue-50 transition-colors group ${i % 2 === 0 ? "bg-white" : "bg-gray-50/40"}`}
+                    >
+                      <td className="px-5 py-3">
+                        <div className="font-medium text-gray-800 group-hover:text-blue-600 transition-colors">{p.product_name}</div>
+                        <div className="font-mono text-xs text-gray-400">{p.product_id}</div>
+                      </td>
+                      <td className="px-5 py-3 text-right font-bold tabular-nums text-gray-700">
+                        {modalType === 'hero' ? (p.totalOutward || 0).toLocaleString() : p.currentStock}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="px-6 py-3 border-t bg-gray-50 flex justify-end">
+              <button onClick={() => setModalType(null)} className="bg-gray-700 hover:bg-gray-800 text-white font-semibold px-5 py-2 rounded-xl text-sm transition-colors">Close</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── LEDGER MODAL ────────────────────────────────────────────────────── */}
+      {ledgerProduct && (
+        <div className="fixed inset-0 bg-black/60 flex items-start justify-center z-[60] pt-10 px-4 pb-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-5xl max-h-[88vh] flex flex-col">
+
+            <div className="px-7 py-5 border-b bg-gradient-to-r from-blue-700 to-blue-800 rounded-t-2xl text-white">
+              <div className="flex items-start justify-between gap-4">
+                <div className="flex-1 min-w-0">
+                  <h2 className="text-xl font-bold leading-tight truncate">{ledgerProduct.product_name}</h2>
+                  <p className="text-blue-200 font-mono text-sm mt-1">{ledgerProduct.product_id}</p>
+                </div>
+                <button
+                  onClick={() => setLedgerProduct(null)}
+                  className="text-blue-200 hover:text-white text-3xl font-light transition-colors leading-none mt-0.5 shrink-0"
+                >
+                  ✕
+                </button>
+              </div>
+            </div>
+
+            {/* Stock by location */}
+            <div className="px-7 py-4 bg-gray-50 border-b">
+              <div className="flex flex-wrap gap-3 items-center">
+                {locations.map(loc => (
+                  <div key={loc.id} className="flex flex-col items-center bg-white border border-gray-200 rounded-xl px-5 py-3 shadow-sm min-w-[90px]">
+                    <span className="text-xs text-gray-400 uppercase tracking-wide font-semibold mb-1">{loc.name}</span>
+                    <span className="text-2xl font-extrabold text-blue-700 tabular-nums">{stockByLocation(ledgerProduct.id, loc.name)}</span>
+                  </div>
+                ))}
+                <div className="flex flex-col items-center bg-blue-700 border border-blue-700 rounded-xl px-5 py-3 shadow-sm min-w-[90px]">
+                  <span className="text-xs text-blue-200 uppercase tracking-wide font-semibold mb-1">Total</span>
+                  <span className="text-2xl font-extrabold text-white tabular-nums">{totalStockForProduct(ledgerProduct.id)}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Transactions */}
+            <div className="overflow-y-auto flex-1">
+              {ledgerLoading ? (
+                <div className="p-10 text-center text-gray-400 text-base">
+                  <div className="text-3xl mb-3">⏳</div>
+                  Loading transactions...
+                </div>
+              ) : ledger.length === 0 ? (
+                <div className="p-10 text-center text-gray-400 text-base">
+                  <div className="text-3xl mb-3">📭</div>
+                  No transactions yet for this product.
+                </div>
               ) : (
-                <table className="w-full text-left">
-                  <thead className="bg-gray-50 sticky top-0">
-                    <tr>
-                      <th className="p-4 text-xs font-bold text-gray-500 uppercase">Product ID</th>
-                      <th className="p-4 text-xs font-bold text-gray-500 uppercase">Name</th>
-                      <th className="p-4 text-xs font-bold text-gray-500 uppercase">Current Stock</th>
+                <table className="w-full text-sm">
+                  <thead className="bg-gray-50 sticky top-0 border-b shadow-sm">
+                    <tr className="text-left text-gray-500 text-xs uppercase tracking-wide">
+                      <th className="px-5 py-3 font-semibold">Date / Time</th>
+                      <th className="px-4 py-3 font-semibold">Type</th>
+                      <th className="px-4 py-3 font-semibold">Location</th>
+                      <th className="px-4 py-3 text-right font-semibold">Qty</th>
+                      <th className="px-4 py-3 text-right font-semibold">Balance</th>
+                      <th className="px-4 py-3 font-semibold">Party</th>
+                      <th className="px-4 py-3 font-semibold">By</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {categoryProducts.map(p => (
-                      <tr key={p.id} className="hover:bg-gray-50 border-b last:border-0 transition-colors">
-                        <td className="p-4 font-bold text-[#0a2a5e] text-sm uppercase">{p.product_id}</td>
-                        <td className="p-4 text-xs text-gray-500 font-medium">{p.product_name}</td>
-                        <td className="p-4">
-                          <span className="px-3 py-1 rounded-full text-xs font-black text-white" style={{ backgroundColor: categoryColor }}>
-                            {p.currentStock} Units
+                    {ledger.map((t, i) => (
+                      <tr key={t.id} className={`border-b hover:bg-blue-50/40 transition-colors ${i % 2 === 0 ? "bg-white" : "bg-gray-50/40"}`}>
+                        <td className="px-5 py-3 text-gray-600 text-sm font-mono whitespace-nowrap">
+                          {new Date(t.created_at).toLocaleString("en-IN", {
+                            timeZone: "Asia/Kolkata",
+                            day: "2-digit", month: "short", year: "numeric",
+                            hour: "2-digit", minute: "2-digit", hour12: true
+                          })}
+                        </td>
+                        <td className="px-4 py-3">
+                          <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${t.transaction_type === "inward" ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"}`}>
+                            {t.transaction_type === "inward" ? "▲ IN" : "▼ OUT"}
                           </span>
                         </td>
+                        <td className="px-4 py-3 text-gray-700 font-medium">{t.location_name}</td>
+                        <td className={`px-4 py-3 text-right font-bold text-base tabular-nums ${t.transaction_type === "inward" ? "text-green-700" : "text-red-600"}`}>
+                          {t.transaction_type === "inward" ? "+" : "-"}{t.quantity}
+                        </td>
+                        <td className="px-4 py-3 text-right font-extrabold text-base tabular-nums text-gray-800">{t.balance}</td>
+                        <td className="px-4 py-3 text-gray-600 text-sm">{t.party || "—"}</td>
+                        <td className="px-4 py-3 text-gray-400 text-xs">{t.created_by_email || "—"}</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               )}
             </div>
-          </div>
-        </div>
-      )}
 
-      {/* LOW / HIGH / HERO / DEAD MODAL */}
-      {modalType && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4 backdrop-blur-sm">
-          <div className="bg-white w-full max-w-3xl max-h-[85vh] overflow-hidden rounded-[2rem] shadow-2xl flex flex-col border border-gray-100">
-            <div className={`p-6 text-white flex justify-between items-center ${
-              modalType === 'low' ? 'bg-red-600' :
-              modalType === 'high' ? 'bg-orange-500' :
-              modalType === 'hero' ? 'bg-gradient-to-r from-yellow-400 to-orange-400' :
-              'bg-gradient-to-r from-gray-600 to-gray-700'
-            }`}>
-              <h2 className="text-2xl font-black uppercase tracking-tighter italic">
-                {modalType === 'low' ? 'Critical Low Stock' :
-                 modalType === 'high' ? 'Surplus Stock Alert' :
-                 modalType === 'hero' ? '🏆 Hero Products' :
-                 '💤 Dead Stock'}
-              </h2>
-              <button onClick={() => setModalType(null)} className="bg-white text-gray-900 px-4 py-2 rounded-xl text-xs font-bold shadow-lg">Close</button>
-            </div>
-            <div className="p-6 overflow-y-auto">
-              <table className="w-full text-left">
-                <thead className="bg-gray-50">
-                  <tr>
-                    <th className="p-4 text-xs font-bold text-gray-500 uppercase">Product ID</th>
-                    <th className="p-4 text-xs font-bold text-gray-500 uppercase">Name</th>
-                    <th className="p-4 text-xs font-bold text-gray-500 uppercase">
-                      {modalType === 'hero' ? 'Total Outward' : 'Stock'}
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {(modalType === 'low' ? stats.lowAlertProducts :
-                    modalType === 'high' ? stats.highAlertProducts :
-                    modalType === 'hero' ? stats.heroProducts :
-                    stats.deadStockProducts
-                  ).map(p => (
-                    <tr key={p.id} className="hover:bg-gray-50 border-b last:border-0 transition-colors">
-                      <td className="p-4 font-bold text-[#0a2a5e] text-sm uppercase">{p.product_id}</td>
-                      <td className="p-4 text-xs text-gray-500 font-medium">{p.product_name}</td>
-                      <td className="p-4">
-                        <span className={`px-3 py-1 rounded-full text-xs font-black ${
-                          modalType === 'low' ? 'bg-red-100 text-red-700' :
-                          modalType === 'high' ? 'bg-orange-100 text-orange-700' :
-                          modalType === 'hero' ? 'bg-yellow-100 text-yellow-700' :
-                          'bg-gray-100 text-gray-600'
-                        }`}>
-                          {modalType === 'hero' ? `${p.totalOutward?.toLocaleString()} sold` : `${p.currentStock} Units`}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <div className="px-7 py-4 border-t bg-gray-50 rounded-b-2xl flex items-center justify-between">
+              <span className="text-sm text-gray-400">{ledger.length} transaction{ledger.length !== 1 ? "s" : ""} recorded</span>
+              <button
+                onClick={() => setLedgerProduct(null)}
+                className="bg-gray-700 hover:bg-gray-800 text-white font-semibold px-6 py-2.5 rounded-xl transition-colors text-sm"
+              >
+                Close
+              </button>
             </div>
           </div>
         </div>
