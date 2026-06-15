@@ -145,22 +145,7 @@ export default function WarehouseStock() {
       return;
     }
 
-    // Step 2: fetch ALL products (not just those with warehouse transactions)
-    // This ensures products that only have office stock still appear in the
-    // warehouse page so users can record their first inward entry.
-    const { data: prod } = await supabase
-      .from("products")
-      .select("*");
-
-    const allProducts = prod || [];
-    setProducts(allProducts);
-
-    if (allProducts.length === 0) {
-      setStockSummary({});
-      return;
-    }
-
-    // Step 3: fetch transactions ONLY for warehouse/godown locations
+    // Step 2: fetch transactions ONLY for warehouse/godown locations
     const { data: txns } = await supabase
       .from("transactions")
       .select("product_id, location_id, transaction_type, quantity")
@@ -168,7 +153,7 @@ export default function WarehouseStock() {
 
     const txnsData = txns || [];
 
-    // Step 4: build stock summary — keyed by product UUID, then by location UUID
+    // Step 3: build stock summary — keyed by product UUID, then by location UUID
     const summary = {};
     txnsData.forEach(t => {
       const pid = t.product_id;
@@ -181,6 +166,24 @@ export default function WarehouseStock() {
       summary[pid][lid] += type === "inward" ? qty : -qty;
     });
     setStockSummary(summary);
+
+    // Step 4: only keep products that have at least 1 unit in warehouse
+    // (total across all warehouse locations must be > 0)
+    const productIdsWithWarehouseStock = Object.keys(summary).filter(pid =>
+      Object.values(summary[pid]).reduce((s, v) => s + v, 0) > 0
+    );
+
+    if (productIdsWithWarehouseStock.length === 0) {
+      setProducts([]);
+      return;
+    }
+
+    const { data: prod } = await supabase
+      .from("products")
+      .select("*")
+      .in("id", productIdsWithWarehouseStock);
+
+    setProducts(prod || []);
   }
 
   // Total warehouse stock for a product = sum across all warehouse location IDs
