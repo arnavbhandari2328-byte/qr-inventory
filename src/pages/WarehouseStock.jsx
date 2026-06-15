@@ -128,25 +128,61 @@ export default function WarehouseStock() {
   useEffect(() => { loadAll(); }, []);
 
   async function loadAll() {
-    const [{ data: prod }, { data: loc }, { data: stock }] = await Promise.all([
-      supabase.from("products").select("*"),
-      // Exclude the Office location from the warehouse view
-      supabase.from("locations").select("*").not("name", "ilike", "office"),
-      supabase.from("stock_summary").select("*"),
-    ]);
+    // Step 1: fetch all non-office locations
+    const { data: loc } = await supabase
+      .from("locations")
+      .select("*")
+      .not("name", "ilike", "office");
+
+    const warehouseLocations = loc || [];
+    const warehouseLocIds = warehouseLocations.map(l => l.id);
+    setLocations(warehouseLocations);
+
+    if (warehouseLocIds.length === 0) {
+      setProducts([]);
+      setStockSummary({});
+      return;
+    }
+
+    // Step 2: fetch transactions ONLY for warehouse/godown locations
+    const { data: txns } = await supabase
+      .from("transactions")
+      .select("*")
+      .in("location_id", warehouseLocIds);
+
+    const txnsData = txns || [];
+
+    // Step 3: find product IDs that have at least one warehouse transaction
+    const warehouseProductIds = [...new Set(txnsData.map(t => t.product_id).filter(Boolean))];
+
+    if (warehouseProductIds.length === 0) {
+      setProducts([]);
+      setStockSummary({});
+      return;
+    }
+
+    // Step 4: fetch only those products
+    const { data: prod } = await supabase
+      .from("products")
+      .select("*")
+      .in("id", warehouseProductIds);
 
     setProducts(prod || []);
 
-    const warehouseLocNames = new Set((loc || []).map(l => l.name));
-    setLocations(loc || []);
+    // Step 5: build stock summary from transactions (per product, per location name)
+    const locIdToName = {};
+    warehouseLocations.forEach(l => { locIdToName[l.id] = l.name; });
 
-    // Build summary using ONLY non-Office location rows
     const summary = {};
-    (stock || []).forEach(row => {
-      // Skip Office rows so they never show in warehouse totals
-      if (!warehouseLocNames.has(row.location_name)) return;
-      if (!summary[row.product_id]) summary[row.product_id] = {};
-      summary[row.product_id][row.location_name] = row.current_stock ?? row.total_stock ?? 0;
+    txnsData.forEach(t => {
+      const pid = t.product_id;
+      const locName = locIdToName[t.location_id];
+      if (!pid || !locName) return;
+      if (!summary[pid]) summary[pid] = {};
+      if (!summary[pid][locName]) summary[pid][locName] = 0;
+      const qty = Number(t.quantity || 0);
+      const type = (t.transaction_type || "").toLowerCase();
+      summary[pid][locName] += type === "inward" ? qty : -qty;
     });
     setStockSummary(summary);
   }
