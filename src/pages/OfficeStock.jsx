@@ -135,7 +135,6 @@ function calcOfficeStock(productId, transactions, officeLocationId) {
 }
 
 // ── Bulk Upload parsers ───────────────────────────────────────────────────────
-// Normalise a row object (keys already lowercased + underscored)
 function normaliseRow(headers, cols, i) {
   const idx = (col) => headers.indexOf(col);
   const nameIdx = idx("product_name") !== -1 ? idx("product_name") : idx("name");
@@ -338,7 +337,10 @@ export default function OfficeStock() {
       try {
         const { data: existing } = await supabase.from("products").select("id").eq("product_id", row.product_id).maybeSingle();
         if (existing) {
+          // ✅ FIX: also update unit and product_name when product already exists
           await supabase.from("products").update({
+            product_name:     row.name.trim(),
+            unit:             row.unit || "Pcs",
             low_stock_alert:  row.low_stock_alert  || 0,
             high_stock_alert: row.high_stock_alert || 0,
           }).eq("id", existing.id);
@@ -541,7 +543,7 @@ export default function OfficeStock() {
               <div className="bg-green-50 border border-green-200 rounded-xl p-4 text-sm">
                 <p className="font-bold text-green-700 mb-1">✅ Upload Complete</p>
                 <p className="text-green-800">New items added: <strong>{bulkResult.added}</strong></p>
-                <p className="text-green-800">Existing items (alerts updated): <strong>{bulkResult.skipped}</strong></p>
+                <p className="text-green-800">Existing items (unit + alerts updated): <strong>{bulkResult.skipped}</strong></p>
                 {bulkResult.errors.length > 0 && (
                   <div className="mt-2">
                     <p className="text-red-700 font-semibold">Errors ({bulkResult.errors.length}):</p>
