@@ -149,6 +149,8 @@ function normaliseRow(headers, cols, i) {
     unit: idx("unit") !== -1 ? (String(cols[idx("unit")] || "Pcs").trim() || "Pcs") : "Pcs",
     low_stock_alert:  idx("low_stock")  !== -1 ? Number(cols[idx("low_stock")]  || 0) : 0,
     high_stock_alert: idx("high_stock") !== -1 ? Number(cols[idx("high_stock")] || 0) : 0,
+    opening_qty:  idx("opening_qty")  !== -1 ? Number(cols[idx("opening_qty")]  || 0) : 0,
+    opening_rate: idx("opening_rate") !== -1 ? Number(cols[idx("opening_rate")] || 0) : 0,
   };
 }
 
@@ -329,45 +331,71 @@ export default function OfficeStock() {
 
   async function handleBulkUpload() {
     if (bulkRows.length === 0) return;
+    const locId = officeLocationId || await getOfficeLocationId();
+    if (!locId) { alert("Office location not found in the database."); return; }
     setBulkUploading(true);
     setBulkResult(null);
     setBulkError("");
-    let added = 0, skipped = 0, errors = [];
+
+    const { data: { user } } = await supabase.auth.getUser();
+    let added = 0, updated = 0, txnCreated = 0, errors = [];
+
     for (const row of bulkRows) {
       try {
+        let productDbId = null;
         const { data: existing } = await supabase.from("products").select("id").eq("product_id", row.product_id).maybeSingle();
+
         if (existing) {
-          // ✅ FIX: also update unit and product_name when product already exists
+          // Update product metadata
           await supabase.from("products").update({
             product_name:     row.name.trim(),
             unit:             row.unit || "Pcs",
             low_stock_alert:  row.low_stock_alert  || 0,
             high_stock_alert: row.high_stock_alert || 0,
           }).eq("id", existing.id);
-          skipped++;
+          productDbId = existing.id;
+          updated++;
         } else {
-          const { error: insErr } = await supabase.from("products").insert([{
+          const { data: inserted, error: insErr } = await supabase.from("products").insert([{
             product_id:       row.product_id,
             product_name:     row.name.trim(),
             unit:             row.unit || "Pcs",
             low_stock_alert:  row.low_stock_alert  || 0,
             high_stock_alert: row.high_stock_alert || 0,
-          }]);
+          }]).select("id").single();
           if (insErr) throw insErr;
+          productDbId = inserted.id;
           added++;
+        }
+
+        // ✅ Create opening stock inward transaction if opening_qty > 0
+        if (productDbId && row.opening_qty > 0) {
+          const { error: txErr } = await supabase.from("transactions").insert([{
+            product_id:       productDbId,
+            location_id:      locId,
+            transaction_type: "inward",
+            quantity:         row.opening_qty,
+            rate:             row.opening_rate || 0,
+            party:            "Opening Stock",
+            created_by_email: user?.email || "",
+            created_at:       new Date().toISOString(),
+          }]);
+          if (txErr) throw txErr;
+          txnCreated++;
         }
       } catch (err) {
         errors.push(`"${row.name}": ${err.message}`);
       }
     }
+
     setBulkUploading(false);
-    setBulkResult({ added, skipped, errors });
+    setBulkResult({ added, updated, txnCreated, errors });
     setBulkRows([]);
     await loadAll();
   }
 
   function downloadSampleCSV() {
-    const csv = "product_id,product_name,unit,low_stock,high_stock\nNM-BV-S/E-IMP-CF8-1PC-1/2,NM BV S/E IMP CF8 1PC 1/2,Pcs,5,100\nNM-BV-S/E-IND-CF8N-2PC-3/4,NM BV S/E IND CF8N 2PC 3/4,Pcs,2,50";
+    const csv = "product_id,product_name,unit,low_stock,high_stock,opening_qty,opening_rate\nNM-BV-S/E-IMP-CF8-1PC-1/2,NM BV S/E IMP CF8 1PC 1/2,Pcs,5,100,10,250\nNM-BV-S/E-IND-CF8N-2PC-3/4,NM BV S/E IND CF8N 2PC 3/4,Pcs,2,50,5,300";
     const blob = new Blob([csv], { type: "text/csv" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
@@ -377,9 +405,9 @@ export default function OfficeStock() {
 
   function downloadSampleExcel() {
     const ws = XLSX.utils.aoa_to_sheet([
-      ["product_id", "product_name", "unit", "low_stock", "high_stock"],
-      ["NM-BV-S/E-IMP-CF8-1PC-1/2", "NM BV S/E IMP CF8 1PC 1/2", "Pcs", 5, 100],
-      ["NM-BV-S/E-IND-CF8N-2PC-3/4", "NM BV S/E IND CF8N 2PC 3/4", "Pcs", 2, 50],
+      ["product_id", "product_name", "unit", "low_stock", "high_stock", "opening_qty", "opening_rate"],
+      ["NM-BV-S/E-IMP-CF8-1PC-1/2", "NM BV S/E IMP CF8 1PC 1/2", "Pcs", 5, 100, 10, 250],
+      ["NM-BV-S/E-IND-CF8N-2PC-3/4", "NM BV S/E IND CF8N 2PC 3/4", "Pcs", 2, 50, 5, 300],
     ]);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Bulk Upload");
@@ -473,13 +501,15 @@ export default function OfficeStock() {
 
             <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 mb-4 text-sm text-blue-800">
               <p className="font-semibold mb-1">Required columns (CSV or Excel):</p>
-              <code className="text-xs block bg-blue-100 rounded p-2">product_id, product_name, unit, low_stock, high_stock</code>
+              <code className="text-xs block bg-blue-100 rounded p-2">product_id, product_name, unit, low_stock, high_stock, opening_qty, opening_rate</code>
               <ul className="mt-2 space-y-1 text-xs list-disc pl-4">
                 <li><strong>product_id</strong> – required. Exact product ID.</li>
                 <li><strong>product_name</strong> – required. Human-readable name.</li>
                 <li><strong>unit</strong> – optional (default: Pcs)</li>
                 <li><strong>low_stock</strong> – optional. Alert below this qty.</li>
                 <li><strong>high_stock</strong> – optional. Alert above this qty.</li>
+                <li><strong>opening_qty</strong> – optional. Sets opening stock (creates inward transaction).</li>
+                <li><strong>opening_rate</strong> – optional. Rate (₹) for opening stock.</li>
               </ul>
               <div className="flex gap-3 mt-2 flex-wrap">
                 <button onClick={downloadSampleCSV} className="text-blue-600 underline text-xs font-semibold">⬇ Download Sample CSV</button>
@@ -512,8 +542,10 @@ export default function OfficeStock() {
                         <th className="px-3 py-2 text-left">Product ID</th>
                         <th className="px-3 py-2 text-left">Product Name</th>
                         <th className="px-3 py-2 text-center">Unit</th>
-                        <th className="px-3 py-2 text-center">Low Stock</th>
-                        <th className="px-3 py-2 text-center">High Stock</th>
+                        <th className="px-3 py-2 text-center">Low</th>
+                        <th className="px-3 py-2 text-center">High</th>
+                        <th className="px-3 py-2 text-center">Opening Qty</th>
+                        <th className="px-3 py-2 text-center">Rate ₹</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -524,6 +556,8 @@ export default function OfficeStock() {
                           <td className="px-3 py-1.5 text-center text-gray-500">{r.unit}</td>
                           <td className="px-3 py-1.5 text-center text-orange-600">{r.low_stock_alert || "–"}</td>
                           <td className="px-3 py-1.5 text-center text-blue-600">{r.high_stock_alert || "–"}</td>
+                          <td className="px-3 py-1.5 text-center font-bold text-green-700">{r.opening_qty > 0 ? r.opening_qty : "–"}</td>
+                          <td className="px-3 py-1.5 text-center text-gray-500">{r.opening_rate > 0 ? `₹${r.opening_rate}` : "–"}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -543,7 +577,8 @@ export default function OfficeStock() {
               <div className="bg-green-50 border border-green-200 rounded-xl p-4 text-sm">
                 <p className="font-bold text-green-700 mb-1">✅ Upload Complete</p>
                 <p className="text-green-800">New items added: <strong>{bulkResult.added}</strong></p>
-                <p className="text-green-800">Existing items (unit + alerts updated): <strong>{bulkResult.skipped}</strong></p>
+                <p className="text-green-800">Existing items updated: <strong>{bulkResult.updated}</strong></p>
+                <p className="text-green-800">Opening stock transactions created: <strong>{bulkResult.txnCreated}</strong></p>
                 {bulkResult.errors.length > 0 && (
                   <div className="mt-2">
                     <p className="text-red-700 font-semibold">Errors ({bulkResult.errors.length}):</p>
