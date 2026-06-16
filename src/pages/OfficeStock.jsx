@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { supabase } from "../supabase";
+import * as XLSX from "xlsx";
 
 // Office location UUID — fetched once on mount
 let OFFICE_LOCATION_ID = null;
@@ -133,34 +134,46 @@ function calcOfficeStock(productId, transactions, officeLocationId) {
     }, 0);
 }
 
-// ── CSV Bulk Upload parser ────────────────────────────────────────────────────
-// Expected columns: product_id, product_name, unit, low_stock, high_stock
+// ── Bulk Upload parsers ───────────────────────────────────────────────────────
+// Normalise a row object (keys already lowercased + underscored)
+function normaliseRow(headers, cols, i) {
+  const idx = (col) => headers.indexOf(col);
+  const nameIdx = idx("product_name") !== -1 ? idx("product_name") : idx("name");
+  if (nameIdx === -1) throw new Error("File must have a 'product_name' column.");
+  const pidIdx = idx("product_id");
+  const name = String(cols[nameIdx] || "").trim();
+  if (!name) throw new Error(`Row ${i + 2}: product_name is empty.`);
+  const autoId = name.toUpperCase().replace(/\s+/g, "-");
+  return {
+    product_id: pidIdx !== -1 && cols[pidIdx] ? String(cols[pidIdx]).trim() : autoId,
+    name,
+    unit: idx("unit") !== -1 ? (String(cols[idx("unit")] || "Pcs").trim() || "Pcs") : "Pcs",
+    low_stock_alert:  idx("low_stock")  !== -1 ? Number(cols[idx("low_stock")]  || 0) : 0,
+    high_stock_alert: idx("high_stock") !== -1 ? Number(cols[idx("high_stock")] || 0) : 0,
+  };
+}
+
+// CSV parser
 function parseBulkCSV(text) {
   const lines = text.trim().split(/\r?\n/).filter(Boolean);
   if (lines.length < 2) throw new Error("CSV must have a header row and at least one data row.");
-  const headers = lines[0].split(",").map(h => h.trim().toLowerCase().replace(/\s+/g, "_"));
-  const idx = (col) => headers.indexOf(col);
-
-  // Support both "product_name" and legacy "name"
-  const nameIdx = idx("product_name") !== -1 ? idx("product_name") : idx("name");
-  if (nameIdx === -1) throw new Error("CSV must have a 'product_name' column.");
-
-  // product_id column — optional, will auto-generate if missing
-  const pidIdx = idx("product_id");
-
+  const headers = lines[0].split(",").map(h => h.trim().toLowerCase().replace(/\s+/g, "_").replace(/^"|"$/g, ""));
   return lines.slice(1).map((line, i) => {
     const cols = line.split(",").map(c => c.trim().replace(/^"|"$/g, ""));
-    const name = cols[nameIdx] || "";
-    if (!name) throw new Error(`Row ${i + 2}: product_name is empty.`);
-    const autoId = name.trim().toUpperCase().replace(/\s+/g, "-");
-    return {
-      product_id: pidIdx !== -1 && cols[pidIdx] ? cols[pidIdx].trim() : autoId,
-      name,
-      unit: idx("unit") !== -1 ? (cols[idx("unit")] || "Pcs") : "Pcs",
-      low_stock_alert:  idx("low_stock")  !== -1 ? Number(cols[idx("low_stock")]  || 0) : 0,
-      high_stock_alert: idx("high_stock") !== -1 ? Number(cols[idx("high_stock")] || 0) : 0,
-    };
+    return normaliseRow(headers, cols, i);
   });
+}
+
+// Excel parser (uses xlsx library)
+function parseBulkExcel(arrayBuffer) {
+  const workbook = XLSX.read(arrayBuffer, { type: "array" });
+  const sheet = workbook.Sheets[workbook.SheetNames[0]];
+  const jsonRows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
+  if (jsonRows.length < 2) throw new Error("Excel must have a header row and at least one data row.");
+  const headers = jsonRows[0].map(h => String(h).trim().toLowerCase().replace(/\s+/g, "_"));
+  return jsonRows.slice(1)
+    .filter(row => row.some(c => String(c).trim() !== ""))
+    .map((cols, i) => normaliseRow(headers, cols.map(c => String(c)), i));
 }
 
 export default function OfficeStock() {
@@ -223,7 +236,6 @@ export default function OfficeStock() {
     }
     setTransactions(txnsData);
 
-    // ── Fetch ALL ball valve products from DB (covers 0-qty items too) ──────
     const { data: ballValveProds } = await supabase
       .from("products")
       .select("*")
@@ -232,7 +244,6 @@ export default function OfficeStock() {
     const productMap = {};
     (ballValveProds || []).forEach(p => { productMap[p.id] = p; });
 
-    // ── Also include any products that have office transactions ──────────────
     const txnProductIds = new Set(txnsData.map(t => t.product_id).filter(Boolean));
     const extraIds = [...txnProductIds].filter(id => !productMap[id]);
     if (extraIds.length > 0) {
@@ -288,16 +299,32 @@ export default function OfficeStock() {
     setBulkResult(null);
     const file = e.target.files[0];
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (ev) => {
-      try {
-        const rows = parseBulkCSV(ev.target.result);
-        setBulkRows(rows);
-      } catch (err) {
-        setBulkError(err.message);
-      }
-    };
-    reader.readAsText(file);
+
+    const isExcel = /\.(xlsx|xls)$/i.test(file.name);
+
+    if (isExcel) {
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        try {
+          const rows = parseBulkExcel(ev.target.result);
+          setBulkRows(rows);
+        } catch (err) {
+          setBulkError(err.message);
+        }
+      };
+      reader.readAsArrayBuffer(file);
+    } else {
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        try {
+          const rows = parseBulkCSV(ev.target.result);
+          setBulkRows(rows);
+        } catch (err) {
+          setBulkError(err.message);
+        }
+      };
+      reader.readAsText(file);
+    }
     e.target.value = "";
   }
 
@@ -338,12 +365,23 @@ export default function OfficeStock() {
   }
 
   function downloadSampleCSV() {
-    const csv = "product_id,product_name,unit,low_stock,high_stock\nNM-BV-S/E-IMP-CF8-1PC-1/2\",NM BV S/E IMP CF8 1PC 1/2\",Pcs,5,100\nNM-BV-S/E-IND-CF8N-2PC-3/4\",NM BV S/E IND CF8N 2PC 3/4\",Pcs,2,50";
+    const csv = "product_id,product_name,unit,low_stock,high_stock\nNM-BV-S/E-IMP-CF8-1PC-1/2,NM BV S/E IMP CF8 1PC 1/2,Pcs,5,100\nNM-BV-S/E-IND-CF8N-2PC-3/4,NM BV S/E IND CF8N 2PC 3/4,Pcs,2,50";
     const blob = new Blob([csv], { type: "text/csv" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
     a.download = "bulk_upload_sample.csv";
     a.click();
+  }
+
+  function downloadSampleExcel() {
+    const ws = XLSX.utils.aoa_to_sheet([
+      ["product_id", "product_name", "unit", "low_stock", "high_stock"],
+      ["NM-BV-S/E-IMP-CF8-1PC-1/2", "NM BV S/E IMP CF8 1PC 1/2", "Pcs", 5, 100],
+      ["NM-BV-S/E-IND-CF8N-2PC-3/4", "NM BV S/E IND CF8N 2PC 3/4", "Pcs", 2, 50],
+    ]);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Bulk Upload");
+    XLSX.writeFile(wb, "bulk_upload_sample.xlsx");
   }
 
   async function handleDeleteProduct(e, product) {
@@ -432,26 +470,30 @@ export default function OfficeStock() {
             </div>
 
             <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 mb-4 text-sm text-blue-800">
-              <p className="font-semibold mb-1">CSV Format (5 columns):</p>
+              <p className="font-semibold mb-1">Required columns (CSV or Excel):</p>
               <code className="text-xs block bg-blue-100 rounded p-2">product_id, product_name, unit, low_stock, high_stock</code>
               <ul className="mt-2 space-y-1 text-xs list-disc pl-4">
-                <li><strong>product_id</strong> – required. Exact product ID (e.g. NM-BV-S/E-IMP-CF8-1PC-1/2").</li>
+                <li><strong>product_id</strong> – required. Exact product ID.</li>
                 <li><strong>product_name</strong> – required. Human-readable name.</li>
                 <li><strong>unit</strong> – optional (default: Pcs)</li>
                 <li><strong>low_stock</strong> – optional. Alert below this qty.</li>
                 <li><strong>high_stock</strong> – optional. Alert above this qty.</li>
               </ul>
-              <button onClick={downloadSampleCSV} className="mt-2 text-blue-600 underline text-xs font-semibold">⬇ Download Sample CSV</button>
+              <div className="flex gap-3 mt-2 flex-wrap">
+                <button onClick={downloadSampleCSV} className="text-blue-600 underline text-xs font-semibold">⬇ Download Sample CSV</button>
+                <button onClick={downloadSampleExcel} className="text-emerald-600 underline text-xs font-semibold">⬇ Download Sample Excel</button>
+              </div>
             </div>
 
             <label className="block mb-4">
-              <span className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Select CSV File</span>
+              <span className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Select CSV or Excel File</span>
               <input
                 ref={fileInputRef}
-                type="file" accept=".csv,text/csv"
+                type="file" accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
                 onChange={handleFileChange}
                 className="block w-full text-sm text-gray-600 file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-emerald-50 file:text-emerald-700 hover:file:bg-emerald-100 cursor-pointer"
               />
+              <p className="text-xs text-gray-400 mt-1">Supported formats: <strong>.xlsx</strong>, <strong>.xls</strong>, <strong>.csv</strong></p>
             </label>
 
             {bulkError && (
@@ -633,118 +675,79 @@ export default function OfficeStock() {
       {/* CATALOG TREE */}
       <div className="space-y-3">
         {materialKeys.length === 0 ? (
-          <div className="bg-white rounded-xl shadow p-12 text-center">
-            <div className="text-4xl mb-3">📭</div>
-            <p className="text-gray-400 text-lg font-medium">No office items yet</p>
-            <p className="text-gray-400 text-sm mt-1">Add a transaction with location "Office" or click "+ Add New Item"</p>
-          </div>
+          <div className="text-center text-gray-400 py-16 text-lg">No office stock items found.</div>
         ) : materialKeys.map(mat => {
-          const isMaterialOpen = openMaterials[mat] !== false;
-          const catKeys = sortCategoryKeys(Object.keys(catalog[mat]));
-          const totalInMat = catKeys.reduce((s, c) => s + catalog[mat][c].length, 0);
-
+          const catMap = catalog[mat];
+          const catKeys = sortCategoryKeys(Object.keys(catMap));
+          const isMatOpen = !!openMaterials[mat];
+          const totalInMat = catKeys.reduce((sum, cat) => sum + catMap[cat].length, 0);
           return (
-            <div key={mat} className="bg-white rounded-xl shadow overflow-hidden border border-gray-100">
+            <div key={mat} className="border border-gray-200 rounded-2xl overflow-hidden shadow-sm">
               <button
                 onClick={() => toggleMaterial(mat)}
-                className="w-full flex items-center justify-between px-5 py-4 bg-gradient-to-r from-blue-700 to-blue-800 text-white hover:from-blue-800 hover:to-blue-900 transition-all"
+                className="w-full flex items-center justify-between px-5 py-3.5 bg-gray-50 hover:bg-gray-100 transition-colors"
               >
-                <div className="flex items-center gap-3">
-                  <span className="text-lg font-bold">{mat}</span>
-                  <span className="text-xs bg-white/20 px-2 py-0.5 rounded-full font-medium">
-                    {totalInMat} items · {catKeys.length} categories
-                  </span>
-                </div>
-                <span className="text-xl font-light">{isMaterialOpen ? "▲" : "▼"}</span>
+                <span className="font-bold text-gray-800 text-base">{mat}</span>
+                <span className="text-xs text-gray-400">{totalInMat} item{totalInMat !== 1 ? "s" : ""} {isMatOpen ? "▲" : "▼"}</span>
               </button>
-
-              {isMaterialOpen && (
+              {isMatOpen && (
                 <div className="divide-y divide-gray-100">
                   {catKeys.map(cat => {
-                    const catKey = mat + "||" + cat;
-                    const isCatOpen = openCategories[catKey] !== false;
-                    const catItems = sortItemsBySize(catalog[mat][cat]);
-
+                    const items = sortItemsBySize(catMap[cat]);
+                    const catKey = `${mat}__${cat}`;
+                    const isCatOpen = !!openCategories[catKey];
                     return (
                       <div key={cat}>
                         <button
                           onClick={() => toggleCategory(catKey)}
-                          className="w-full flex items-center justify-between px-6 py-3 bg-blue-50 hover:bg-blue-100 transition-colors text-left"
+                          className="w-full flex items-center justify-between px-6 py-2.5 bg-white hover:bg-gray-50 transition-colors"
                         >
-                          <div className="flex items-center gap-2">
-                            <span className="text-sm font-bold text-blue-800">{cat}</span>
-                            <span className="text-xs bg-blue-200 text-blue-800 px-2 py-0.5 rounded-full">{catItems.length} item{catItems.length !== 1 ? "s" : ""}</span>
-                          </div>
-                          <span className="text-blue-400 text-sm">{isCatOpen ? "▲" : "▼"}</span>
+                          <span className="font-semibold text-gray-700 text-sm">{cat}</span>
+                          <span className="text-xs text-gray-400">{items.length} item{items.length !== 1 ? "s" : ""} {isCatOpen ? "▲" : "▼"}</span>
                         </button>
-
                         {isCatOpen && (
                           <div className="overflow-x-auto">
                             <table className="w-full text-sm">
                               <thead className="bg-gray-50 text-gray-500 text-xs uppercase tracking-wide">
                                 <tr>
-                                  <th className="px-6 py-2 text-left font-semibold">Item Name</th>
-                                  <th className="px-4 py-2 text-center font-semibold">Qty</th>
-                                  <th className="px-4 py-2 text-center font-semibold">Unit</th>
-                                  <th className="px-4 py-2 text-center font-semibold">Low Alert</th>
-                                  <th className="px-4 py-2 text-center font-semibold">High Alert</th>
-                                  <th className="px-4 py-2 text-center font-semibold">Status</th>
-                                  <th className="px-4 py-2 text-center font-semibold">Action</th>
+                                  <th className="px-6 py-2 text-left">Product</th>
+                                  <th className="px-4 py-2 text-center">Stock</th>
+                                  <th className="px-4 py-2 text-center">Unit</th>
+                                  <th className="px-4 py-2 text-center">Actions</th>
                                 </tr>
                               </thead>
-                              <tbody>
-                                {catItems.map((item, idx) => {
-                                  const qty = calcOfficeStock(item.id, transactions, officeLocationId);
-                                  const low = item.low_stock_alert && qty <= Number(item.low_stock_alert);
-                                  const high = item.high_stock_alert && qty >= Number(item.high_stock_alert);
+                              <tbody className="divide-y divide-gray-100">
+                                {items.map(item => {
+                                  const stock = calcOfficeStock(item.id, transactions, officeLocationId);
+                                  const low  = item.low_stock_alert  || 0;
+                                  const high = item.high_stock_alert || 0;
+                                  const isLow  = low  > 0 && stock <= low;
+                                  const isHigh = high > 0 && stock >= high;
                                   return (
                                     <tr
                                       key={item.id}
-                                      className={`border-t border-gray-100 ${idx % 2 === 1 ? "bg-gray-50/50" : "bg-white"} hover:bg-blue-50/30 transition-colors`}
+                                      className="hover:bg-blue-50 cursor-pointer transition-colors"
+                                      onClick={() => openPanel(item)}
                                     >
-                                      <td className="px-6 py-3">
-                                        <div className="font-medium text-gray-800">{item.product_name || item.name}</div>
+                                      <td className="px-6 py-2.5">
+                                        <div className="font-medium text-gray-800">{item.product_name}</div>
+                                        <div className="text-xs text-gray-400 font-mono">{item.product_id}</div>
                                       </td>
-                                      <td className={`px-4 py-3 text-center font-bold tabular-nums text-lg ${
-                                        qty === 0 ? "text-red-500" : low ? "text-orange-500" : high ? "text-blue-600" : "text-green-600"
-                                      }`}>{qty}</td>
-                                      <td className="px-4 py-3 text-center text-gray-500">{item.unit || "Pcs"}</td>
-                                      <td className="px-4 py-3 text-center">
-                                        {item.low_stock_alert ? (
-                                          <span className="text-xs bg-orange-100 text-orange-700 font-semibold px-2 py-0.5 rounded-full">≤{item.low_stock_alert}</span>
-                                        ) : <span className="text-gray-300 text-xs">–</span>}
+                                      <td className="px-4 py-2.5 text-center">
+                                        <span className={`font-bold text-base ${isLow ? "text-red-600" : isHigh ? "text-blue-600" : "text-gray-800"}`}>
+                                          {stock}
+                                        </span>
+                                        {isLow  && <span className="ml-1 text-xs text-red-500">⚠ Low</span>}
+                                        {isHigh && <span className="ml-1 text-xs text-blue-500">↑ High</span>}
                                       </td>
-                                      <td className="px-4 py-3 text-center">
-                                        {item.high_stock_alert ? (
-                                          <span className="text-xs bg-blue-100 text-blue-700 font-semibold px-2 py-0.5 rounded-full">≥{item.high_stock_alert}</span>
-                                        ) : <span className="text-gray-300 text-xs">–</span>}
-                                      </td>
-                                      <td className="px-4 py-3 text-center">
-                                        {qty === 0 ? (
-                                          <span className="text-xs bg-red-100 text-red-600 font-semibold px-2 py-0.5 rounded-full">Out of Stock</span>
-                                        ) : high ? (
-                                          <span className="text-xs bg-blue-100 text-blue-700 font-semibold px-2 py-0.5 rounded-full">🔵 Overstocked</span>
-                                        ) : low ? (
-                                          <span className="text-xs bg-orange-100 text-orange-700 font-semibold px-2 py-0.5 rounded-full">⚠ Low</span>
-                                        ) : (
-                                          <span className="text-xs bg-green-100 text-green-700 font-semibold px-2 py-0.5 rounded-full">✅ In Stock</span>
-                                        )}
-                                      </td>
-                                      <td className="px-4 py-3">
-                                        <div className="flex gap-1 justify-center">
-                                          <button
-                                            onClick={() => openPanel(item)}
-                                            className="bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold px-3 py-1.5 rounded-lg transition-colors"
-                                          >
-                                            + Stock
-                                          </button>
-                                          <button
-                                            onClick={(e) => handleDeleteProduct(e, item)}
-                                            className="bg-red-100 hover:bg-red-200 text-red-700 text-xs font-bold px-2 py-1.5 rounded-lg transition-colors"
-                                          >
-                                            Del
-                                          </button>
-                                        </div>
+                                      <td className="px-4 py-2.5 text-center text-gray-500 text-xs">{item.unit || "Pcs"}</td>
+                                      <td className="px-4 py-2.5 text-center" onClick={e => e.stopPropagation()}>
+                                        <button
+                                          onClick={(e) => handleDeleteProduct(e, item)}
+                                          className="text-red-400 hover:text-red-600 text-xs px-2 py-1 rounded transition-colors"
+                                        >
+                                          🗑
+                                        </button>
                                       </td>
                                     </tr>
                                   );
@@ -765,30 +768,24 @@ export default function OfficeStock() {
 
       {/* STOCK PANEL */}
       {panelOpen && panelItem && (
-        <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 px-4 pb-4 sm:pb-0">
+        <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 px-4">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6">
             <div className="flex items-start justify-between mb-4">
               <div>
-                <h2 className="text-lg font-bold text-gray-800">{panelItem.product_name}</h2>
-                <p className="text-sm text-gray-500">
-                  Current Office Qty: <span className="font-bold text-blue-600">{calcOfficeStock(panelItem.id, transactions, officeLocationId)} {panelItem.unit || "Pcs"}</span>
-                </p>
+                <h2 className="text-lg font-bold text-gray-900">{panelItem.product_name}</h2>
+                <p className="text-xs text-gray-400 font-mono mt-0.5">{panelItem.product_id}</p>
               </div>
-              <button onClick={() => setPanelOpen(false)} className="text-gray-400 hover:text-gray-700 text-xl font-bold">×</button>
+              <button onClick={() => setPanelOpen(false)} className="text-gray-400 hover:text-gray-700 text-2xl font-bold ml-4">×</button>
             </div>
             <div className="space-y-3">
               <div>
                 <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Transaction Type</label>
                 <div className="flex gap-2">
-                  {["inward","outward"].map(t => (
+                  {["inward", "outward"].map(t => (
                     <button
                       key={t}
                       onClick={() => setForm(f => ({ ...f, type: t }))}
-                      className={`flex-1 py-2 rounded-xl font-bold text-sm border-2 transition-colors ${
-                        form.type === t
-                          ? t === "inward" ? "bg-green-500 border-green-500 text-white" : "bg-red-500 border-red-500 text-white"
-                          : "bg-white border-gray-200 text-gray-500 hover:border-gray-400"
-                      }`}
+                      className={`flex-1 py-2 rounded-xl font-bold text-sm transition-colors ${form.type === t ? (t === "inward" ? "bg-green-600 text-white" : "bg-red-500 text-white") : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}
                     >
                       {t === "inward" ? "⬆ Inward" : "⬇ Outward"}
                     </button>
@@ -797,7 +794,7 @@ export default function OfficeStock() {
               </div>
               <div className="flex gap-3">
                 <div className="flex-1">
-                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Qty *</label>
+                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Quantity *</label>
                   <input
                     type="number" min="0"
                     value={form.qty}
@@ -818,11 +815,11 @@ export default function OfficeStock() {
                 </div>
               </div>
               <div>
-                <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Party / Vendor</label>
+                <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Party / Note</label>
                 <input
                   value={form.party}
                   onChange={e => setForm(f => ({ ...f, party: e.target.value }))}
-                  placeholder="Optional"
+                  placeholder="Supplier or note"
                   className="w-full border border-gray-300 rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-blue-400"
                 />
               </div>
