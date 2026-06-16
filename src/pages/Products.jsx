@@ -88,10 +88,6 @@ function buildCatalog(products) {
 
 // Converts a raw string like "11/2", "1/4", "3/4", "21/2" to a decimal inch value.
 function parseInchFraction(raw) {
-  // Pattern: optional whole part + fraction  e.g. "11/2" -> whole=1, num=1, den=2
-  //          or pure fraction                e.g. "1/2"  -> whole=0, num=1, den=2
-  //          or whole only                   e.g. "6"    -> 6
-  const withFraction = raw.match(/^(\d*)(\d)\\/( \\d+)$/);
   // Better: split at the slash
   if (raw.includes("/")) {
     const slashIdx = raw.indexOf("/");
@@ -649,8 +645,6 @@ export default function Products() {
          p.product_id?.toLowerCase().includes(search.toLowerCase())
   );
 
-  // ✅ FIX: catalogSource now always uses orderedProducts (with search filter applied),
-  // instead of falling back to the raw unordered `products` array when search is empty.
   const catalogSource = search ? filtered : orderedProducts;
   const catalog = buildCatalog(catalogSource);
   const materialKeys = Object.keys(catalog).sort();
