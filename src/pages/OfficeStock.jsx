@@ -5,9 +5,9 @@ import { supabase } from "../supabase";
 let OFFICE_LOCATION_ID = null;
 
 // ── Products that ALWAYS appear on the Office page (even at 0 qty) ────────────
-// Includes all original CF8 (304) ball valves + all CF8M (316) ball valves
+// Real product_ids fetched directly from the products table
 const OFFICE_ASSIGNED_PRODUCT_IDS = new Set([
-  // ── CF8 (SS 304) – IMP ──
+  // ── CF8 (SS 304) 1PC – IMP ──
   "NM-BV-S/E-IMP-CF8-1PC-1/4\"",
   "NM-BV-S/E-IMP-CF8-1PC-3/8\"",
   "NM-BV-S/E-IMP-CF8-1PC-1/2\"",
@@ -19,7 +19,7 @@ const OFFICE_ASSIGNED_PRODUCT_IDS = new Set([
   "NM-BV-S/E-IMP-CF8-1PC-2-1/2\"",
   "NM-BV-S/E-IMP-CF8-1PC-3\"",
   "NM-BV-S/E-IMP-CF8-1PC-4\"",
-  // ── CF8 (SS 304) – IND ──
+  // ── CF8 (SS 304) 1PC – IND ──
   "NM-BV-S/E-IND-CF8-1PC-1/4\"",
   "NM-BV-S/E-IND-CF8-1PC-3/8\"",
   "NM-BV-S/E-IND-CF8-1PC-1/2\"",
@@ -31,7 +31,7 @@ const OFFICE_ASSIGNED_PRODUCT_IDS = new Set([
   "NM-BV-S/E-IND-CF8-1PC-2-1/2\"",
   "NM-BV-S/E-IND-CF8-1PC-3\"",
   "NM-BV-S/E-IND-CF8-1PC-4\"",
-  // ── CF8 (SS 304) – NF ──
+  // ── CF8 (SS 304) 1PC – NF ──
   "NM-BV-S/E-NF-CF8-1PC-1/4\"",
   "NM-BV-S/E-NF-CF8-1PC-3/8\"",
   "NM-BV-S/E-NF-CF8-1PC-1/2\"",
@@ -43,43 +43,7 @@ const OFFICE_ASSIGNED_PRODUCT_IDS = new Set([
   "NM-BV-S/E-NF-CF8-1PC-2-1/2\"",
   "NM-BV-S/E-NF-CF8-1PC-3\"",
   "NM-BV-S/E-NF-CF8-1PC-4\"",
-  // ── CF8M (SS 316) – IMP ──
-  "NM-BV-S/E-IMP-CF8M-1PC-1/4\"",
-  "NM-BV-S/E-IMP-CF8M-1PC-3/8\"",
-  "NM-BV-S/E-IMP-CF8M-1PC-1/2\"",
-  "NM-BV-S/E-IMP-CF8M-1PC-3/4\"",
-  "NM-BV-S/E-IMP-CF8M-1PC-1\"",
-  "NM-BV-S/E-IMP-CF8M-1PC-1-1/4\"",
-  "NM-BV-S/E-IMP-CF8M-1PC-1-1/2\"",
-  "NM-BV-S/E-IMP-CF8M-1PC-2\"",
-  "NM-BV-S/E-IMP-CF8M-1PC-2-1/2\"",
-  "NM-BV-S/E-IMP-CF8M-1PC-3\"",
-  "NM-BV-S/E-IMP-CF8M-1PC-4\"",
-  // ── CF8M (SS 316) – IND ──
-  "NM-BV-S/E-IND-CF8M-1PC-1/4\"",
-  "NM-BV-S/E-IND-CF8M-1PC-3/8\"",
-  "NM-BV-S/E-IND-CF8M-1PC-1/2\"",
-  "NM-BV-S/E-IND-CF8M-1PC-3/4\"",
-  "NM-BV-S/E-IND-CF8M-1PC-1\"",
-  "NM-BV-S/E-IND-CF8M-1PC-1-1/4\"",
-  "NM-BV-S/E-IND-CF8M-1PC-1-1/2\"",
-  "NM-BV-S/E-IND-CF8M-1PC-2\"",
-  "NM-BV-S/E-IND-CF8M-1PC-2-1/2\"",
-  "NM-BV-S/E-IND-CF8M-1PC-3\"",
-  "NM-BV-S/E-IND-CF8M-1PC-4\"",
-  // ── CF8M (SS 316) – NF ──
-  "NM-BV-S/E-NF-CF8M-1PC-1/4\"",
-  "NM-BV-S/E-NF-CF8M-1PC-3/8\"",
-  "NM-BV-S/E-NF-CF8M-1PC-1/2\"",
-  "NM-BV-S/E-NF-CF8M-1PC-3/4\"",
-  "NM-BV-S/E-NF-CF8M-1PC-1\"",
-  "NM-BV-S/E-NF-CF8M-1PC-1-1/4\"",
-  "NM-BV-S/E-NF-CF8M-1PC-1-1/2\"",
-  "NM-BV-S/E-NF-CF8M-1PC-2\"",
-  "NM-BV-S/E-NF-CF8M-1PC-2-1/2\"",
-  "NM-BV-S/E-NF-CF8M-1PC-3\"",
-  "NM-BV-S/E-NF-CF8M-1PC-4\"",
-  // ── CF8 2PC – IMP ──
+  // ── CF8 (SS 304) 2PC – IMP ──
   "NM-BV-S/E-IMP-CF8-2PC-1/4\"",
   "NM-BV-S/E-IMP-CF8-2PC-3/8\"",
   "NM-BV-S/E-IMP-CF8-2PC-1/2\"",
@@ -91,7 +55,7 @@ const OFFICE_ASSIGNED_PRODUCT_IDS = new Set([
   "NM-BV-S/E-IMP-CF8-2PC-2-1/2\"",
   "NM-BV-S/E-IMP-CF8-2PC-3\"",
   "NM-BV-S/E-IMP-CF8-2PC-4\"",
-  // ── CF8 2PC – IND ──
+  // ── CF8 (SS 304) 2PC – IND ──
   "NM-BV-S/E-IND-CF8-2PC-1/4\"",
   "NM-BV-S/E-IND-CF8-2PC-3/8\"",
   "NM-BV-S/E-IND-CF8-2PC-1/2\"",
@@ -103,7 +67,7 @@ const OFFICE_ASSIGNED_PRODUCT_IDS = new Set([
   "NM-BV-S/E-IND-CF8-2PC-2-1/2\"",
   "NM-BV-S/E-IND-CF8-2PC-3\"",
   "NM-BV-S/E-IND-CF8-2PC-4\"",
-  // ── CF8 2PC – NF ──
+  // ── CF8 (SS 304) 2PC – NF ──
   "NM-BV-S/E-NF-CF8-2PC-1/4\"",
   "NM-BV-S/E-NF-CF8-2PC-3/8\"",
   "NM-BV-S/E-NF-CF8-2PC-1/2\"",
@@ -115,43 +79,7 @@ const OFFICE_ASSIGNED_PRODUCT_IDS = new Set([
   "NM-BV-S/E-NF-CF8-2PC-2-1/2\"",
   "NM-BV-S/E-NF-CF8-2PC-3\"",
   "NM-BV-S/E-NF-CF8-2PC-4\"",
-  // ── CF8M 2PC – IMP ──
-  "NM-BV-S/E-IMP-CF8M-2PC-1/4\"",
-  "NM-BV-S/E-IMP-CF8M-2PC-3/8\"",
-  "NM-BV-S/E-IMP-CF8M-2PC-1/2\"",
-  "NM-BV-S/E-IMP-CF8M-2PC-3/4\"",
-  "NM-BV-S/E-IMP-CF8M-2PC-1\"",
-  "NM-BV-S/E-IMP-CF8M-2PC-1-1/4\"",
-  "NM-BV-S/E-IMP-CF8M-2PC-1-1/2\"",
-  "NM-BV-S/E-IMP-CF8M-2PC-2\"",
-  "NM-BV-S/E-IMP-CF8M-2PC-2-1/2\"",
-  "NM-BV-S/E-IMP-CF8M-2PC-3\"",
-  "NM-BV-S/E-IMP-CF8M-2PC-4\"",
-  // ── CF8M 2PC – IND ──
-  "NM-BV-S/E-IND-CF8M-2PC-1/4\"",
-  "NM-BV-S/E-IND-CF8M-2PC-3/8\"",
-  "NM-BV-S/E-IND-CF8M-2PC-1/2\"",
-  "NM-BV-S/E-IND-CF8M-2PC-3/4\"",
-  "NM-BV-S/E-IND-CF8M-2PC-1\"",
-  "NM-BV-S/E-IND-CF8M-2PC-1-1/4\"",
-  "NM-BV-S/E-IND-CF8M-2PC-1-1/2\"",
-  "NM-BV-S/E-IND-CF8M-2PC-2\"",
-  "NM-BV-S/E-IND-CF8M-2PC-2-1/2\"",
-  "NM-BV-S/E-IND-CF8M-2PC-3\"",
-  "NM-BV-S/E-IND-CF8M-2PC-4\"",
-  // ── CF8M 2PC – NF ──
-  "NM-BV-S/E-NF-CF8M-2PC-1/4\"",
-  "NM-BV-S/E-NF-CF8M-2PC-3/8\"",
-  "NM-BV-S/E-NF-CF8M-2PC-1/2\"",
-  "NM-BV-S/E-NF-CF8M-2PC-3/4\"",
-  "NM-BV-S/E-NF-CF8M-2PC-1\"",
-  "NM-BV-S/E-NF-CF8M-2PC-1-1/4\"",
-  "NM-BV-S/E-NF-CF8M-2PC-1-1/2\"",
-  "NM-BV-S/E-NF-CF8M-2PC-2\"",
-  "NM-BV-S/E-NF-CF8M-2PC-2-1/2\"",
-  "NM-BV-S/E-NF-CF8M-2PC-3\"",
-  "NM-BV-S/E-NF-CF8M-2PC-4\"",
-  // ── CF8 3PC – IMP ──
+  // ── CF8 (SS 304) 3PC – IMP ──
   "NM-BV-S/E-IMP-CF8-3PC-1/4\"",
   "NM-BV-S/E-IMP-CF8-3PC-3/8\"",
   "NM-BV-S/E-IMP-CF8-3PC-1/2\"",
@@ -163,7 +91,7 @@ const OFFICE_ASSIGNED_PRODUCT_IDS = new Set([
   "NM-BV-S/E-IMP-CF8-3PC-2-1/2\"",
   "NM-BV-S/E-IMP-CF8-3PC-3\"",
   "NM-BV-S/E-IMP-CF8-3PC-4\"",
-  // ── CF8 3PC – IND ──
+  // ── CF8 (SS 304) 3PC – IND ──
   "NM-BV-S/E-IND-CF8-3PC-1/4\"",
   "NM-BV-S/E-IND-CF8-3PC-3/8\"",
   "NM-BV-S/E-IND-CF8-3PC-1/2\"",
@@ -175,7 +103,7 @@ const OFFICE_ASSIGNED_PRODUCT_IDS = new Set([
   "NM-BV-S/E-IND-CF8-3PC-2-1/2\"",
   "NM-BV-S/E-IND-CF8-3PC-3\"",
   "NM-BV-S/E-IND-CF8-3PC-4\"",
-  // ── CF8 3PC – NF ──
+  // ── CF8 (SS 304) 3PC – NF ──
   "NM-BV-S/E-NF-CF8-3PC-1/4\"",
   "NM-BV-S/E-NF-CF8-3PC-3/8\"",
   "NM-BV-S/E-NF-CF8-3PC-1/2\"",
@@ -187,42 +115,42 @@ const OFFICE_ASSIGNED_PRODUCT_IDS = new Set([
   "NM-BV-S/E-NF-CF8-3PC-2-1/2\"",
   "NM-BV-S/E-NF-CF8-3PC-3\"",
   "NM-BV-S/E-NF-CF8-3PC-4\"",
-  // ── CF8M 3PC – IMP ──
-  "NM-BV-S/E-IMP-CF8M-3PC-1/4\"",
-  "NM-BV-S/E-IMP-CF8M-3PC-3/8\"",
-  "NM-BV-S/E-IMP-CF8M-3PC-1/2\"",
-  "NM-BV-S/E-IMP-CF8M-3PC-3/4\"",
-  "NM-BV-S/E-IMP-CF8M-3PC-1\"",
-  "NM-BV-S/E-IMP-CF8M-3PC-1-1/4\"",
-  "NM-BV-S/E-IMP-CF8M-3PC-1-1/2\"",
-  "NM-BV-S/E-IMP-CF8M-3PC-2\"",
-  "NM-BV-S/E-IMP-CF8M-3PC-2-1/2\"",
-  "NM-BV-S/E-IMP-CF8M-3PC-3\"",
-  "NM-BV-S/E-IMP-CF8M-3PC-4\"",
-  // ── CF8M 3PC – IND ──
-  "NM-BV-S/E-IND-CF8M-3PC-1/4\"",
-  "NM-BV-S/E-IND-CF8M-3PC-3/8\"",
-  "NM-BV-S/E-IND-CF8M-3PC-1/2\"",
-  "NM-BV-S/E-IND-CF8M-3PC-3/4\"",
-  "NM-BV-S/E-IND-CF8M-3PC-1\"",
-  "NM-BV-S/E-IND-CF8M-3PC-1-1/4\"",
-  "NM-BV-S/E-IND-CF8M-3PC-1-1/2\"",
-  "NM-BV-S/E-IND-CF8M-3PC-2\"",
-  "NM-BV-S/E-IND-CF8M-3PC-2-1/2\"",
-  "NM-BV-S/E-IND-CF8M-3PC-3\"",
-  "NM-BV-S/E-IND-CF8M-3PC-4\"",
-  // ── CF8M 3PC – NF ──
-  "NM-BV-S/E-NF-CF8M-3PC-1/4\"",
-  "NM-BV-S/E-NF-CF8M-3PC-3/8\"",
-  "NM-BV-S/E-NF-CF8M-3PC-1/2\"",
-  "NM-BV-S/E-NF-CF8M-3PC-3/4\"",
-  "NM-BV-S/E-NF-CF8M-3PC-1\"",
-  "NM-BV-S/E-NF-CF8M-3PC-1-1/4\"",
-  "NM-BV-S/E-NF-CF8M-3PC-1-1/2\"",
-  "NM-BV-S/E-NF-CF8M-3PC-2\"",
-  "NM-BV-S/E-NF-CF8M-3PC-2-1/2\"",
-  "NM-BV-S/E-NF-CF8M-3PC-3\"",
-  "NM-BV-S/E-NF-CF8M-3PC-4\"",
+  // ── CF8N (SS 316) 1PC – IMP (exact IDs from DB) ──
+  "NM-BV-S/E-IMP-CF8N-1PC-1/4\"",
+  "NM-BV-S/E-IMP-CF8N-1PC-3/8\"",
+  "NM-BV-S/E-IMP-CF8N-1PC-1/2\"",
+  "NM-BV-S/E-IMP-CF8N-1PC-3/4\"",
+  "NM-BV-S/E-IMP-CF8N-1\"",
+  "NM-BV-S/E-IMP-CF8N-1-1/4\"",
+  "NM-BV-S/E-IMP-CF8N-1-1/2\"",
+  "NM-BV-S/E-IMP-CF8N-1PC-2\"",
+  "NM-BV-S/E-IMP-CF8N-1PC-2-1/2\"",
+  "NM-BV-S/E-IMP-CF8N-1PC-3\"",
+  "NM-BV-S/E-IMP-CF8N-1PC-4\"",
+  // ── CF8N (SS 316) 1PC – IND ──
+  "NM-BV-S/E-IND-CF8N-1PC-1/4\"",
+  "NM-BV-S/E-IND-CF8N-1PC-3/8\"",
+  "NM-BV-S/E-IND-CF8N-1PC-1/2\"",
+  "NM-BV-S/E-IND-CF8N-1PC-3/4\"",
+  "NM-BV-S/E-IND-CF8N-1PC-1\"",
+  "NM-BV-S/E-IND-CF8N-1PC-1-1/4\"",
+  "NM-BV-S/E-IND-CF8N-1PC-1-1/2\"",
+  "NM-BV-S/E-IND-CF8N-1PC-2\"",
+  "NM-BV-S/E-IND-CF8N-1PC-2-1/2\"",
+  "NM-BV-S/E-IND-CF8N-1PC-3\"",
+  "NM-BV-S/E-IND-CF8N-1PC-4\"",
+  // ── CF8N (SS 316) 1PC – NF ──
+  "NM-BV-S/E-NF-CF8N-1PC-1/4\"",
+  "NM-BV-S/E-NF-CF8N-1PC-3/8\"",
+  "NM-BV-S/E-NF-CF8N-1PC-1/2\"",
+  "NM-BV-S/E-NF-CF8N-1PC-3/4\"",
+  "NM-BV-S/E-NF-CF8N-1PC-1\"",
+  "NM-BV-S/E-NF-CF8N-1PC-1-1/4\"",
+  "NM-BV-S/E-NF-CF8N-1PC-1-1/2\"",
+  "NM-BV-S/E-NF-CF8N-1PC-2\"",
+  "NM-BV-S/E-NF-CF8N-1PC-2-1/2\"",
+  "NM-BV-S/E-NF-CF8N-1PC-3\"",
+  "NM-BV-S/E-NF-CF8N-1PC-4\"",
 ]);
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -240,6 +168,7 @@ function inferMaterial(name) {
   if (n.includes("409"))  return "SS 409";
   if (n.includes("430"))  return "SS 430";
   if (n.includes("CF8M")) return "SS 316";
+  if (n.includes("CF8N")) return "SS 316";
   if (n.includes("CF8"))  return "SS 304";
   if (n.includes("MS") || n.includes("MILD STEEL")) return "MS";
   if (n.includes("GI") || n.includes("GALVANISED") || n.includes("GALVANIZED")) return "GI";
@@ -355,8 +284,6 @@ function calcOfficeStock(productId, transactions, officeLocationId) {
 }
 
 // ── CSV Bulk Upload parser ────────────────────────────────────────────────────
-// Expected columns (header row, case-insensitive):
-//   name, unit, low_stock_alert, high_stock_alert, qty, rate
 function parseBulkCSV(text) {
   const lines = text.trim().split(/\r?\n/).filter(Boolean);
   if (lines.length < 2) throw new Error("CSV must have a header row and at least one data row.");
@@ -490,7 +417,6 @@ export default function OfficeStock() {
     }
   }
 
-  // ── Bulk Upload handlers ──────────────────────────────────────────────────
   function handleFileChange(e) {
     setBulkError("");
     setBulkRows([]);
@@ -522,11 +448,9 @@ export default function OfficeStock() {
     for (const row of bulkRows) {
       try {
         const productId = row.name.trim().toUpperCase().replace(/\s+/g, "-");
-        // upsert product
         const { data: existing } = await supabase.from("products").select("id").eq("product_id", productId).maybeSingle();
         let prodId;
         if (existing) {
-          // update alerts if provided
           await supabase.from("products").update({
             low_stock_alert: row.low_stock_alert || 0,
             high_stock_alert: row.high_stock_alert || 0,
@@ -545,7 +469,6 @@ export default function OfficeStock() {
           prodId = ins.id;
           added++;
         }
-        // insert opening stock transaction if qty > 0
         if (row.qty > 0) {
           await supabase.from("transactions").insert([{
             product_id: prodId,
@@ -703,6 +626,7 @@ export default function OfficeStock() {
                         <th className="px-3 py-2 text-center">High Alert</th>
                         <th className="px-3 py-2 text-center">Qty</th>
                         <th className="px-3 py-2 text-center">Rate</th>
+
                       </tr>
                     </thead>
                     <tbody>
