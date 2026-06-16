@@ -5,7 +5,7 @@ import * as XLSX from "xlsx";
 // Office location UUID — fetched once on mount
 let OFFICE_LOCATION_ID = null;
 
-// ── same catalog helpers as Products / WarehouseStock ─────────────────────────
+// ── catalog helpers ────────────────────────────────────────────────────────────
 function inferMaterial(name) {
   const n = name.toUpperCase();
   if (n.includes("316L")) return "SS 316L";
@@ -122,7 +122,7 @@ function sortCategoryKeys(keys) {
     return ia - ib;
   });
 }
-// ── end helpers ───────────────────────────────────────────────────────────────
+// ── end helpers ────────────────────────────────────────────────────────────────
 
 function calcOfficeStock(productId, transactions, officeLocationId) {
   return transactions
@@ -134,7 +134,7 @@ function calcOfficeStock(productId, transactions, officeLocationId) {
     }, 0);
 }
 
-// ── Bulk Upload parsers ───────────────────────────────────────────────────────
+// ── Bulk Upload parsers ────────────────────────────────────────────────────────
 function normaliseRow(headers, cols, i) {
   const idx = (col) => headers.indexOf(col);
   const nameIdx = idx("product_name") !== -1 ? idx("product_name") : idx("name");
@@ -154,7 +154,6 @@ function normaliseRow(headers, cols, i) {
   };
 }
 
-// CSV parser
 function parseBulkCSV(text) {
   const lines = text.trim().split(/\r?\n/).filter(Boolean);
   if (lines.length < 2) throw new Error("CSV must have a header row and at least one data row.");
@@ -165,7 +164,6 @@ function parseBulkCSV(text) {
   });
 }
 
-// Excel parser (uses xlsx library)
 function parseBulkExcel(arrayBuffer) {
   const workbook = XLSX.read(arrayBuffer, { type: "array" });
   const sheet = workbook.Sheets[workbook.SheetNames[0]];
@@ -189,6 +187,14 @@ export default function OfficeStock() {
   const [showAddItem, setShowAddItem]   = useState(false);
   const [newItem, setNewItem]           = useState({ name: "", unit: "Pcs", low_stock_alert: "", high_stock_alert: "", openingQty: "", openingRate: "" });
   const [addingItem, setAddingItem]     = useState(false);
+
+  // add existing product to office
+  const [showAddExisting, setShowAddExisting] = useState(false);
+  const [allProducts, setAllProducts]         = useState([]);
+  const [selectedProductId, setSelectedProductId] = useState("");
+  const [existingOpenQty, setExistingOpenQty]     = useState("");
+  const [existingOpenRate, setExistingOpenRate]   = useState("");
+  const [addingExisting, setAddingExisting]       = useState(false);
 
   // bulk upload
   const [showBulk, setShowBulk]         = useState(false);
@@ -224,23 +230,43 @@ export default function OfficeStock() {
     const locId = await getOfficeLocationId();
     setOfficeLocationId(locId);
 
-    // Load ALL products — no filter by name/id
-    const { data: allProducts } = await supabase.from("products").select("*").order("product_name");
-    setProducts(allProducts || []);
-
-    // Load all office transactions
-    if (locId) {
-      const { data: txns } = await supabase
-        .from("transactions")
-        .select("*")
-        .eq("location_id", locId)
-        .order("created_at");
-      setTransactions(txns || []);
-    } else {
+    if (!locId) {
+      setProducts([]);
       setTransactions([]);
+      return;
     }
+
+    // Load office transactions first
+    const { data: txns } = await supabase
+      .from("transactions")
+      .select("*")
+      .eq("location_id", locId)
+      .order("created_at");
+    const officeTxns = txns || [];
+    setTransactions(officeTxns);
+
+    // Get unique product IDs that have office transactions
+    const officeProductIds = [...new Set(officeTxns.map(t => t.product_id))];
+
+    if (officeProductIds.length === 0) {
+      setProducts([]);
+      return;
+    }
+
+    // Load only those products
+    const { data: officeProducts } = await supabase
+      .from("products")
+      .select("*")
+      .in("id", officeProductIds)
+      .order("product_name");
+    setProducts(officeProducts || []);
+
+    // Also keep a full list for the "Add Existing Product" dropdown
+    const { data: full } = await supabase.from("products").select("id, product_id, product_name").order("product_name");
+    setAllProducts(full || []);
   }
 
+  // ── Add brand-new product to office ────────────────────────────────────────
   async function handleAddItem() {
     if (!newItem.name.trim()) { alert("Enter an item name."); return; }
     const locId = officeLocationId || await getOfficeLocationId();
@@ -256,20 +282,21 @@ export default function OfficeStock() {
         high_stock_alert: Number(newItem.high_stock_alert || 0),
       }]).select("*").single();
       if (error) throw error;
-      if (newItem.openingQty && Number(newItem.openingQty) > 0) {
-        const { data: { user } } = await supabase.auth.getUser();
-        const { error: txErr } = await supabase.from("transactions").insert([{
-          product_id: inserted.id,
-          location_id: locId,
-          transaction_type: "inward",
-          quantity: Number(newItem.openingQty),
-          rate: Number(newItem.openingRate || 0),
-          party: "Opening Stock",
-          created_by_email: user?.email || "",
-          created_at: new Date().toISOString(),
-        }]);
-        if (txErr) throw txErr;
-      }
+
+      // Always create an opening inward transaction so it appears in Office Stock
+      const { data: { user } } = await supabase.auth.getUser();
+      const { error: txErr } = await supabase.from("transactions").insert([{
+        product_id: inserted.id,
+        location_id: locId,
+        transaction_type: "inward",
+        quantity: Number(newItem.openingQty || 0),
+        rate: Number(newItem.openingRate || 0),
+        party: "Opening Stock",
+        created_by_email: user?.email || "",
+        created_at: new Date().toISOString(),
+      }]);
+      if (txErr) throw txErr;
+
       setNewItem({ name: "", unit: "Pcs", low_stock_alert: "", high_stock_alert: "", openingQty: "", openingRate: "" });
       setShowAddItem(false);
       loadAll();
@@ -280,35 +307,56 @@ export default function OfficeStock() {
     }
   }
 
+  // ── Add existing product (already in Products page) to office ──────────────
+  async function handleAddExistingToOffice() {
+    if (!selectedProductId) { alert("Select a product."); return; }
+    const locId = officeLocationId || await getOfficeLocationId();
+    if (!locId) { alert("Office location not found."); return; }
+    setAddingExisting(true);
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      const { error } = await supabase.from("transactions").insert([{
+        product_id: selectedProductId,
+        location_id: locId,
+        transaction_type: "inward",
+        quantity: Number(existingOpenQty || 0),
+        rate: Number(existingOpenRate || 0),
+        party: "Opening Stock",
+        created_by_email: user?.email || "",
+        created_at: new Date().toISOString(),
+      }]);
+      if (error) throw error;
+      setSelectedProductId("");
+      setExistingOpenQty("");
+      setExistingOpenRate("");
+      setShowAddExisting(false);
+      loadAll();
+    } catch (err) {
+      alert("Error: " + err.message);
+    } finally {
+      setAddingExisting(false);
+    }
+  }
+
   function handleFileChange(e) {
     setBulkError("");
     setBulkRows([]);
     setBulkResult(null);
     const file = e.target.files[0];
     if (!file) return;
-
     const isExcel = /\.(xlsx|xls)$/i.test(file.name);
-
     if (isExcel) {
       const reader = new FileReader();
       reader.onload = (ev) => {
-        try {
-          const rows = parseBulkExcel(ev.target.result);
-          setBulkRows(rows);
-        } catch (err) {
-          setBulkError(err.message);
-        }
+        try { setBulkRows(parseBulkExcel(ev.target.result)); }
+        catch (err) { setBulkError(err.message); }
       };
       reader.readAsArrayBuffer(file);
     } else {
       const reader = new FileReader();
       reader.onload = (ev) => {
-        try {
-          const rows = parseBulkCSV(ev.target.result);
-          setBulkRows(rows);
-        } catch (err) {
-          setBulkError(err.message);
-        }
+        try { setBulkRows(parseBulkCSV(ev.target.result)); }
+        catch (err) { setBulkError(err.message); }
       };
       reader.readAsText(file);
     }
@@ -322,7 +370,6 @@ export default function OfficeStock() {
     setBulkUploading(true);
     setBulkResult(null);
     setBulkError("");
-
     const { data: { user } } = await supabase.auth.getUser();
     let added = 0, updated = 0, txnCreated = 0, errors = [];
 
@@ -330,7 +377,6 @@ export default function OfficeStock() {
       try {
         let productDbId = null;
         const { data: existing } = await supabase.from("products").select("id").eq("product_id", row.product_id).maybeSingle();
-
         if (existing) {
           await supabase.from("products").update({
             product_name:     row.name.trim(),
@@ -353,21 +399,19 @@ export default function OfficeStock() {
           added++;
         }
 
-        // Create opening stock inward transaction if opening_qty > 0
-        if (productDbId && row.opening_qty > 0) {
-          const { error: txErr } = await supabase.from("transactions").insert([{
-            product_id:       productDbId,
-            location_id:      locId,
-            transaction_type: "inward",
-            quantity:         row.opening_qty,
-            rate:             row.opening_rate || 0,
-            party:            "Opening Stock",
-            created_by_email: user?.email || "",
-            created_at:       new Date().toISOString(),
-          }]);
-          if (txErr) throw txErr;
-          txnCreated++;
-        }
+        // Always create a transaction so the product appears in Office Stock
+        const { error: txErr } = await supabase.from("transactions").insert([{
+          product_id:       productDbId,
+          location_id:      locId,
+          transaction_type: "inward",
+          quantity:         row.opening_qty || 0,
+          rate:             row.opening_rate || 0,
+          party:            "Opening Stock",
+          created_by_email: user?.email || "",
+          created_at:       new Date().toISOString(),
+        }]);
+        if (txErr) throw txErr;
+        txnCreated++;
       } catch (err) {
         errors.push(`"${row.name}": ${err.message}`);
       }
@@ -399,12 +443,11 @@ export default function OfficeStock() {
     XLSX.writeFile(wb, "bulk_upload_sample.xlsx");
   }
 
-  async function handleDeleteProduct(e, product) {
+  async function handleDeleteFromOffice(e, product) {
     e.stopPropagation();
     const locId = officeLocationId || await getOfficeLocationId();
-    if (!window.confirm(`Remove "${product.product_name}" from Office Stock? This will delete all its office transactions.`)) return;
+    if (!window.confirm(`Remove "${product.product_name}" from Office Stock?\nThis deletes all office transactions for this product (the product itself stays in the catalog).`)) return;
     await supabase.from("transactions").delete().eq("product_id", product.id).eq("location_id", locId);
-    await supabase.from("products").delete().eq("id", product.id);
     loadAll();
   }
 
@@ -458,23 +501,88 @@ export default function OfficeStock() {
       <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
         <div>
           <h1 className="text-3xl font-bold">🏢 Office Stock</h1>
-          <p className="text-gray-500 text-sm mt-1">All products — manage office location stock</p>
+          <p className="text-gray-500 text-sm mt-1">Only products with office transactions — {products.length} item{products.length !== 1 ? "s" : ""}</p>
         </div>
         <div className="flex gap-2 flex-wrap">
           <button
             onClick={() => { setShowBulk(true); setBulkRows([]); setBulkError(""); setBulkResult(null); }}
-            className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-5 py-2.5 rounded-xl shadow transition-colors"
+            className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-4 py-2.5 rounded-xl shadow transition-colors text-sm"
           >
             📂 Bulk Upload
           </button>
           <button
-            onClick={() => setShowAddItem(true)}
-            className="bg-blue-600 hover:bg-blue-700 text-white font-bold px-5 py-2.5 rounded-xl shadow transition-colors"
+            onClick={() => { setShowAddExisting(true); setSelectedProductId(""); setExistingOpenQty(""); setExistingOpenRate(""); }}
+            className="bg-purple-600 hover:bg-purple-700 text-white font-bold px-4 py-2.5 rounded-xl shadow transition-colors text-sm"
           >
-            + Add New Item
+            + Add Existing Product
+          </button>
+          <button
+            onClick={() => setShowAddItem(true)}
+            className="bg-blue-600 hover:bg-blue-700 text-white font-bold px-4 py-2.5 rounded-xl shadow transition-colors text-sm"
+          >
+            + New Product
           </button>
         </div>
       </div>
+
+      {/* ── ADD EXISTING PRODUCT MODAL ─────────────────────────────────────── */}
+      {showAddExisting && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 px-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6">
+            <h2 className="text-xl font-bold mb-1">Add Existing Product to Office</h2>
+            <p className="text-sm text-gray-500 mb-4">Pick a product from your catalog and set its opening stock at the office location.</p>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Select Product</label>
+                <select
+                  value={selectedProductId}
+                  onChange={e => setSelectedProductId(e.target.value)}
+                  className="w-full border border-gray-300 rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-purple-400 bg-white"
+                >
+                  <option value="">— choose a product —</option>
+                  {allProducts
+                    .filter(p => !products.find(op => op.id === p.id)) // hide already-added
+                    .map(p => (
+                      <option key={p.id} value={p.id}>{p.product_name} ({p.product_id})</option>
+                    ))}
+                </select>
+              </div>
+              <div className="flex gap-3">
+                <div className="flex-1">
+                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Opening Qty</label>
+                  <input
+                    type="number" min="0"
+                    value={existingOpenQty}
+                    onChange={e => setExistingOpenQty(e.target.value)}
+                    placeholder="0"
+                    className="w-full border border-gray-300 rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-purple-400"
+                  />
+                </div>
+                <div className="flex-1">
+                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Rate (₹)</label>
+                  <input
+                    type="number" min="0"
+                    value={existingOpenRate}
+                    onChange={e => setExistingOpenRate(e.target.value)}
+                    placeholder="0"
+                    className="w-full border border-gray-300 rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-purple-400"
+                  />
+                </div>
+              </div>
+            </div>
+            <div className="flex gap-3 mt-6">
+              <button
+                onClick={handleAddExistingToOffice}
+                disabled={addingExisting || !selectedProductId}
+                className="flex-1 bg-purple-600 hover:bg-purple-700 disabled:opacity-50 text-white font-bold py-3 rounded-xl"
+              >
+                {addingExisting ? "Adding..." : "✅ Add to Office"}
+              </button>
+              <button onClick={() => setShowAddExisting(false)} className="flex-1 bg-gray-200 hover:bg-gray-300 text-gray-700 font-bold py-3 rounded-xl">Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── BULK UPLOAD MODAL ─────────────────────────────────────────────── */}
       {showBulk && (
@@ -484,40 +592,26 @@ export default function OfficeStock() {
               <h2 className="text-xl font-bold">📂 Bulk Upload Items</h2>
               <button onClick={() => setShowBulk(false)} className="text-gray-400 hover:text-gray-700 text-2xl font-bold">×</button>
             </div>
-
             <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 mb-4 text-sm text-blue-800">
               <p className="font-semibold mb-1">Required columns (CSV or Excel):</p>
               <code className="text-xs block bg-blue-100 rounded p-2">product_id, product_name, unit, low_stock, high_stock, opening_qty, opening_rate</code>
-              <ul className="mt-2 space-y-1 text-xs list-disc pl-4">
-                <li><strong>product_id</strong> – required. Exact product ID.</li>
-                <li><strong>product_name</strong> – required. Human-readable name.</li>
-                <li><strong>unit</strong> – optional (default: Pcs)</li>
-                <li><strong>low_stock</strong> – optional. Alert below this qty.</li>
-                <li><strong>high_stock</strong> – optional. Alert above this qty.</li>
-                <li><strong>opening_qty</strong> – optional. Sets opening stock (creates inward transaction).</li>
-                <li><strong>opening_rate</strong> – optional. Rate (₹) for opening stock.</li>
-              </ul>
               <div className="flex gap-3 mt-2 flex-wrap">
                 <button onClick={downloadSampleCSV} className="text-blue-600 underline text-xs font-semibold">⬇ Download Sample CSV</button>
                 <button onClick={downloadSampleExcel} className="text-emerald-600 underline text-xs font-semibold">⬇ Download Sample Excel</button>
               </div>
             </div>
-
             <label className="block mb-4">
               <span className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Select CSV or Excel File</span>
               <input
                 ref={fileInputRef}
-                type="file" accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
+                type="file" accept=".csv,.xlsx,.xls"
                 onChange={handleFileChange}
                 className="block w-full text-sm text-gray-600 file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-emerald-50 file:text-emerald-700 hover:file:bg-emerald-100 cursor-pointer"
               />
-              <p className="text-xs text-gray-400 mt-1">Supported formats: <strong>.xlsx</strong>, <strong>.xls</strong>, <strong>.csv</strong></p>
             </label>
-
             {bulkError && (
               <div className="bg-red-50 border border-red-200 rounded-xl p-3 mb-4 text-red-700 text-sm font-medium">⚠ {bulkError}</div>
             )}
-
             {bulkRows.length > 0 && !bulkResult && (
               <div className="mb-4">
                 <p className="text-sm font-semibold text-gray-700 mb-2">Preview – {bulkRows.length} row{bulkRows.length !== 1 ? "s" : ""} found:</p>
@@ -528,8 +622,6 @@ export default function OfficeStock() {
                         <th className="px-3 py-2 text-left">Product ID</th>
                         <th className="px-3 py-2 text-left">Product Name</th>
                         <th className="px-3 py-2 text-center">Unit</th>
-                        <th className="px-3 py-2 text-center">Low</th>
-                        <th className="px-3 py-2 text-center">High</th>
                         <th className="px-3 py-2 text-center">Opening Qty</th>
                         <th className="px-3 py-2 text-center">Rate ₹</th>
                       </tr>
@@ -540,9 +632,7 @@ export default function OfficeStock() {
                           <td className="px-3 py-1.5 font-mono text-gray-600 text-xs">{r.product_id}</td>
                           <td className="px-3 py-1.5 font-medium text-gray-800">{r.name}</td>
                           <td className="px-3 py-1.5 text-center text-gray-500">{r.unit}</td>
-                          <td className="px-3 py-1.5 text-center text-orange-600">{r.low_stock_alert || "–"}</td>
-                          <td className="px-3 py-1.5 text-center text-blue-600">{r.high_stock_alert || "–"}</td>
-                          <td className="px-3 py-1.5 text-center font-bold text-green-700">{r.opening_qty > 0 ? r.opening_qty : "–"}</td>
+                          <td className="px-3 py-1.5 text-center font-bold text-green-700">{r.opening_qty > 0 ? r.opening_qty : "0"}</td>
                           <td className="px-3 py-1.5 text-center text-gray-500">{r.opening_rate > 0 ? `₹${r.opening_rate}` : "–"}</td>
                         </tr>
                       ))}
@@ -558,7 +648,6 @@ export default function OfficeStock() {
                 </button>
               </div>
             )}
-
             {bulkResult && (
               <div className="bg-green-50 border border-green-200 rounded-xl p-4 text-sm">
                 <p className="font-bold text-green-700 mb-1">✅ Upload Complete</p>
@@ -576,7 +665,6 @@ export default function OfficeStock() {
                 <button onClick={() => setShowBulk(false)} className="mt-3 w-full bg-gray-200 hover:bg-gray-300 text-gray-700 font-bold py-2.5 rounded-xl">Close</button>
               </div>
             )}
-
             {!bulkRows.length && !bulkResult && (
               <button onClick={() => setShowBulk(false)} className="w-full bg-gray-200 hover:bg-gray-300 text-gray-700 font-bold py-2.5 rounded-xl">Cancel</button>
             )}
@@ -584,18 +672,18 @@ export default function OfficeStock() {
         </div>
       )}
 
-      {/* ADD ITEM MODAL */}
+      {/* ── ADD NEW PRODUCT MODAL ─────────────────────────────────────────── */}
       {showAddItem && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 px-4">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6">
-            <h2 className="text-xl font-bold mb-4">Add New Office Item</h2>
+            <h2 className="text-xl font-bold mb-4">Add New Product to Office</h2>
             <div className="space-y-4">
               <div>
                 <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Item Name</label>
                 <input
                   value={newItem.name}
                   onChange={e => setNewItem(n => ({ ...n, name: e.target.value }))}
-                  placeholder="e.g. SS 316 BALL VALVE 1/2&quot;"
+                  placeholder='e.g. SS 316 BALL VALVE 1/2"'
                   className="w-full border border-gray-300 rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-blue-400"
                 />
                 {newItem.name && (
@@ -604,82 +692,41 @@ export default function OfficeStock() {
                   </p>
                 )}
               </div>
-
               <div className="flex gap-3">
                 <div className="flex-1">
                   <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Unit</label>
-                  <input
-                    value={newItem.unit}
-                    onChange={e => setNewItem(n => ({ ...n, unit: e.target.value }))}
-                    placeholder="Pcs, Kg, Mtr..."
-                    className="w-full border border-gray-300 rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-blue-400"
-                  />
+                  <input value={newItem.unit} onChange={e => setNewItem(n => ({ ...n, unit: e.target.value }))} placeholder="Pcs, Kg, Mtr..." className="w-full border border-gray-300 rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-blue-400" />
                 </div>
               </div>
-
               <div className="flex gap-3">
                 <div className="flex-1">
                   <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">🔴 Low Alert Qty</label>
-                  <input
-                    type="number" min="0"
-                    value={newItem.low_stock_alert}
-                    onChange={e => setNewItem(n => ({ ...n, low_stock_alert: e.target.value }))}
-                    placeholder="0"
-                    className="w-full border border-gray-300 rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-orange-400"
-                  />
+                  <input type="number" min="0" value={newItem.low_stock_alert} onChange={e => setNewItem(n => ({ ...n, low_stock_alert: e.target.value }))} placeholder="0" className="w-full border border-gray-300 rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-orange-400" />
                 </div>
                 <div className="flex-1">
                   <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">🔵 High Alert Qty</label>
-                  <input
-                    type="number" min="0"
-                    value={newItem.high_stock_alert}
-                    onChange={e => setNewItem(n => ({ ...n, high_stock_alert: e.target.value }))}
-                    placeholder="0"
-                    className="w-full border border-gray-300 rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-blue-400"
-                  />
+                  <input type="number" min="0" value={newItem.high_stock_alert} onChange={e => setNewItem(n => ({ ...n, high_stock_alert: e.target.value }))} placeholder="0" className="w-full border border-gray-300 rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-blue-400" />
                 </div>
               </div>
-
               <div className="border border-dashed border-gray-300 rounded-xl p-4 space-y-3 bg-gray-50">
                 <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Opening Stock <span className="text-gray-400 normal-case font-normal">optional</span></p>
                 <div className="flex gap-3">
                   <div className="flex-1">
                     <label className="block text-xs text-gray-500 mb-1">Qty</label>
-                    <input
-                      type="number" min="0"
-                      value={newItem.openingQty || ""}
-                      onChange={e => setNewItem(n => ({ ...n, openingQty: e.target.value }))}
-                      placeholder="0"
-                      className="w-full border border-gray-300 rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white"
-                    />
+                    <input type="number" min="0" value={newItem.openingQty || ""} onChange={e => setNewItem(n => ({ ...n, openingQty: e.target.value }))} placeholder="0" className="w-full border border-gray-300 rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white" />
                   </div>
                   <div className="flex-1">
                     <label className="block text-xs text-gray-500 mb-1">Rate (₹)</label>
-                    <input
-                      type="number" min="0"
-                      value={newItem.openingRate || ""}
-                      onChange={e => setNewItem(n => ({ ...n, openingRate: e.target.value }))}
-                      placeholder="0"
-                      className="w-full border border-gray-300 rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white"
-                    />
+                    <input type="number" min="0" value={newItem.openingRate || ""} onChange={e => setNewItem(n => ({ ...n, openingRate: e.target.value }))} placeholder="0" className="w-full border border-gray-300 rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white" />
                   </div>
                 </div>
               </div>
             </div>
             <div className="flex gap-3 mt-6">
-              <button
-                onClick={handleAddItem}
-                disabled={addingItem}
-                className="flex-1 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-bold py-3 rounded-xl"
-              >
+              <button onClick={handleAddItem} disabled={addingItem} className="flex-1 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-bold py-3 rounded-xl">
                 {addingItem ? "Adding..." : "✅ Add Item"}
               </button>
-              <button
-                onClick={() => setShowAddItem(false)}
-                className="flex-1 bg-gray-200 hover:bg-gray-300 text-gray-700 font-bold py-3 rounded-xl"
-              >
-                Cancel
-              </button>
+              <button onClick={() => setShowAddItem(false)} className="flex-1 bg-gray-200 hover:bg-gray-300 text-gray-700 font-bold py-3 rounded-xl">Cancel</button>
             </div>
           </div>
         </div>
@@ -688,7 +735,7 @@ export default function OfficeStock() {
       {/* SEARCH */}
       <div className="mb-5">
         <input
-          placeholder="Search items..."
+          placeholder="Search office items..."
           value={search}
           onChange={e => setSearch(e.target.value)}
           className="border border-gray-300 p-2.5 rounded-xl w-full max-w-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
@@ -698,7 +745,11 @@ export default function OfficeStock() {
       {/* CATALOG TREE */}
       <div className="space-y-3">
         {materialKeys.length === 0 ? (
-          <div className="text-center text-gray-400 py-16 text-lg">No products found. Use Bulk Upload or Add New Item to get started.</div>
+          <div className="text-center text-gray-400 py-16">
+            <div className="text-5xl mb-4">🏢</div>
+            <p className="text-lg font-semibold text-gray-600 mb-2">No office stock yet</p>
+            <p className="text-sm text-gray-400 mb-6">Use <strong>"+ Add Existing Product"</strong> to add products from your catalog to the office,<br/>or use <strong>"Bulk Upload"</strong> to import many at once.</p>
+          </div>
         ) : materialKeys.map(mat => {
           const catMap = catalog[mat];
           const catKeys = sortCategoryKeys(Object.keys(catMap));
@@ -766,7 +817,8 @@ export default function OfficeStock() {
                                       <td className="px-4 py-2.5 text-center text-gray-500 text-xs">{item.unit || "Pcs"}</td>
                                       <td className="px-4 py-2.5 text-center" onClick={e => e.stopPropagation()}>
                                         <button
-                                          onClick={(e) => handleDeleteProduct(e, item)}
+                                          onClick={(e) => handleDeleteFromOffice(e, item)}
+                                          title="Remove from office stock"
                                           className="text-red-400 hover:text-red-600 text-xs px-2 py-1 rounded transition-colors"
                                         >
                                           🗑
@@ -818,58 +870,27 @@ export default function OfficeStock() {
               <div className="flex gap-3">
                 <div className="flex-1">
                   <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Quantity *</label>
-                  <input
-                    type="number" min="0"
-                    value={form.qty}
-                    onChange={e => setForm(f => ({ ...f, qty: e.target.value }))}
-                    placeholder="0"
-                    className="w-full border border-gray-300 rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-blue-400"
-                  />
+                  <input type="number" min="0" value={form.qty} onChange={e => setForm(f => ({ ...f, qty: e.target.value }))} placeholder="0" className="w-full border border-gray-300 rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-blue-400" />
                 </div>
                 <div className="flex-1">
                   <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Rate (₹)</label>
-                  <input
-                    type="number" min="0"
-                    value={form.rate}
-                    onChange={e => setForm(f => ({ ...f, rate: e.target.value }))}
-                    placeholder="0"
-                    className="w-full border border-gray-300 rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-blue-400"
-                  />
+                  <input type="number" min="0" value={form.rate} onChange={e => setForm(f => ({ ...f, rate: e.target.value }))} placeholder="0" className="w-full border border-gray-300 rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-blue-400" />
                 </div>
               </div>
               <div>
                 <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Party / Note</label>
-                <input
-                  value={form.party}
-                  onChange={e => setForm(f => ({ ...f, party: e.target.value }))}
-                  placeholder="Supplier or note"
-                  className="w-full border border-gray-300 rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-blue-400"
-                />
+                <input value={form.party} onChange={e => setForm(f => ({ ...f, party: e.target.value }))} placeholder="Supplier or note" className="w-full border border-gray-300 rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-blue-400" />
               </div>
               <div>
                 <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Date</label>
-                <input
-                  type="date"
-                  value={form.date}
-                  onChange={e => setForm(f => ({ ...f, date: e.target.value }))}
-                  className="w-full border border-gray-300 rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-blue-400"
-                />
+                <input type="date" value={form.date} onChange={e => setForm(f => ({ ...f, date: e.target.value }))} className="w-full border border-gray-300 rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-blue-400" />
               </div>
             </div>
             <div className="flex gap-3 mt-5">
-              <button
-                onClick={handleAddStock}
-                disabled={saving}
-                className="flex-1 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-bold py-3 rounded-xl"
-              >
+              <button onClick={handleAddStock} disabled={saving} className="flex-1 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-bold py-3 rounded-xl">
                 {saving ? "Saving..." : "✅ Save"}
               </button>
-              <button
-                onClick={() => setPanelOpen(false)}
-                className="flex-1 bg-gray-200 hover:bg-gray-300 text-gray-700 font-bold py-3 rounded-xl"
-              >
-                Cancel
-              </button>
+              <button onClick={() => setPanelOpen(false)} className="flex-1 bg-gray-200 hover:bg-gray-300 text-gray-700 font-bold py-3 rounded-xl">Cancel</button>
             </div>
           </div>
         </div>
