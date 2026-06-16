@@ -208,7 +208,7 @@ export default function OfficeStock() {
     loadAll();
     const channel = supabase
       .channel("office-transactions-realtime")
-      .on("postgres_changes", { event: "*", schema: "public", table: "transactions" }, () => { loadTransactions(); })
+      .on("postgres_changes", { event: "*", schema: "public", table: "transactions" }, () => { loadAll(); })
       .subscribe();
     return () => { supabase.removeChannel(channel); };
   }, []);
@@ -220,39 +220,25 @@ export default function OfficeStock() {
     return OFFICE_LOCATION_ID;
   }
 
-  async function loadTransactions(locId) {
-    const id = locId || officeLocationId || await getOfficeLocationId();
-    if (!id) return;
-    const { data: txns } = await supabase.from("transactions").select("*").eq("location_id", id).order("created_at");
-    setTransactions(txns || []);
-  }
-
   async function loadAll() {
     const locId = await getOfficeLocationId();
     setOfficeLocationId(locId);
-    let txnsData = [];
+
+    // Load ALL products — no filter by name/id
+    const { data: allProducts } = await supabase.from("products").select("*").order("product_name");
+    setProducts(allProducts || []);
+
+    // Load all office transactions
     if (locId) {
-      const { data: txns } = await supabase.from("transactions").select("*").eq("location_id", locId).order("created_at");
-      txnsData = txns || [];
+      const { data: txns } = await supabase
+        .from("transactions")
+        .select("*")
+        .eq("location_id", locId)
+        .order("created_at");
+      setTransactions(txns || []);
+    } else {
+      setTransactions([]);
     }
-    setTransactions(txnsData);
-
-    const { data: ballValveProds } = await supabase
-      .from("products")
-      .select("*")
-      .or("product_name.ilike.%ball valve%,product_id.ilike.%BV-%");
-
-    const productMap = {};
-    (ballValveProds || []).forEach(p => { productMap[p.id] = p; });
-
-    const txnProductIds = new Set(txnsData.map(t => t.product_id).filter(Boolean));
-    const extraIds = [...txnProductIds].filter(id => !productMap[id]);
-    if (extraIds.length > 0) {
-      const { data: ep } = await supabase.from("products").select("*").in("id", extraIds);
-      (ep || []).forEach(p => { productMap[p.id] = p; });
-    }
-
-    setProducts(Object.values(productMap));
   }
 
   async function handleAddItem() {
@@ -346,7 +332,6 @@ export default function OfficeStock() {
         const { data: existing } = await supabase.from("products").select("id").eq("product_id", row.product_id).maybeSingle();
 
         if (existing) {
-          // Update product metadata
           await supabase.from("products").update({
             product_name:     row.name.trim(),
             unit:             row.unit || "Pcs",
@@ -368,7 +353,7 @@ export default function OfficeStock() {
           added++;
         }
 
-        // ✅ Create opening stock inward transaction if opening_qty > 0
+        // Create opening stock inward transaction if opening_qty > 0
         if (productDbId && row.opening_qty > 0) {
           const { error: txErr } = await supabase.from("transactions").insert([{
             product_id:       productDbId,
@@ -417,8 +402,9 @@ export default function OfficeStock() {
   async function handleDeleteProduct(e, product) {
     e.stopPropagation();
     const locId = officeLocationId || await getOfficeLocationId();
-    if (!window.confirm(`Remove "${product.product_name}" from Office Stock view? (This removes its office transactions)`)) return;
+    if (!window.confirm(`Remove "${product.product_name}" from Office Stock? This will delete all its office transactions.`)) return;
     await supabase.from("transactions").delete().eq("product_id", product.id).eq("location_id", locId);
+    await supabase.from("products").delete().eq("id", product.id);
     loadAll();
   }
 
@@ -472,7 +458,7 @@ export default function OfficeStock() {
       <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
         <div>
           <h1 className="text-3xl font-bold">🏢 Office Stock</h1>
-          <p className="text-gray-500 text-sm mt-1">Ball valves & products with Office location transactions</p>
+          <p className="text-gray-500 text-sm mt-1">All products — manage office location stock</p>
         </div>
         <div className="flex gap-2 flex-wrap">
           <button
@@ -712,7 +698,7 @@ export default function OfficeStock() {
       {/* CATALOG TREE */}
       <div className="space-y-3">
         {materialKeys.length === 0 ? (
-          <div className="text-center text-gray-400 py-16 text-lg">No office stock items found.</div>
+          <div className="text-center text-gray-400 py-16 text-lg">No products found. Use Bulk Upload or Add New Item to get started.</div>
         ) : materialKeys.map(mat => {
           const catMap = catalog[mat];
           const catKeys = sortCategoryKeys(Object.keys(catMap));
