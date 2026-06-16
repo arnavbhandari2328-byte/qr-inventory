@@ -4,156 +4,6 @@ import { supabase } from "../supabase";
 // Office location UUID — fetched once on mount
 let OFFICE_LOCATION_ID = null;
 
-// ── Products that ALWAYS appear on the Office page (even at 0 qty) ────────────
-// Real product_ids fetched directly from the products table
-const OFFICE_ASSIGNED_PRODUCT_IDS = new Set([
-  // ── CF8 (SS 304) 1PC – IMP ──
-  "NM-BV-S/E-IMP-CF8-1PC-1/4\"",
-  "NM-BV-S/E-IMP-CF8-1PC-3/8\"",
-  "NM-BV-S/E-IMP-CF8-1PC-1/2\"",
-  "NM-BV-S/E-IMP-CF8-1PC-3/4\"",
-  "NM-BV-S/E-IMP-CF8-1\"",
-  "NM-BV-S/E-IMP-CF8-1-1/4\"",
-  "NM-BV-S/E-IMP-CF8-1-1/2\"",
-  "NM-BV-S/E-IMP-CF8-1PC-2\"",
-  "NM-BV-S/E-IMP-CF8-1PC-2-1/2\"",
-  "NM-BV-S/E-IMP-CF8-1PC-3\"",
-  "NM-BV-S/E-IMP-CF8-1PC-4\"",
-  // ── CF8 (SS 304) 1PC – IND ──
-  "NM-BV-S/E-IND-CF8-1PC-1/4\"",
-  "NM-BV-S/E-IND-CF8-1PC-3/8\"",
-  "NM-BV-S/E-IND-CF8-1PC-1/2\"",
-  "NM-BV-S/E-IND-CF8-1PC-3/4\"",
-  "NM-BV-S/E-IND-CF8-1PC-1\"",
-  "NM-BV-S/E-IND-CF8-1PC-1-1/4\"",
-  "NM-BV-S/E-IND-CF8-1PC-1-1/2\"",
-  "NM-BV-S/E-IND-CF8-1PC-2\"",
-  "NM-BV-S/E-IND-CF8-1PC-2-1/2\"",
-  "NM-BV-S/E-IND-CF8-1PC-3\"",
-  "NM-BV-S/E-IND-CF8-1PC-4\"",
-  // ── CF8 (SS 304) 1PC – NF ──
-  "NM-BV-S/E-NF-CF8-1PC-1/4\"",
-  "NM-BV-S/E-NF-CF8-1PC-3/8\"",
-  "NM-BV-S/E-NF-CF8-1PC-1/2\"",
-  "NM-BV-S/E-NF-CF8-1PC-3/4\"",
-  "NM-BV-S/E-NF-CF8-1PC-1\"",
-  "NM-BV-S/E-NF-CF8-1PC-1-1/4\"",
-  "NM-BV-S/E-NF-CF8-1PC-1-1/2\"",
-  "NM-BV-S/E-NF-CF8-1PC-2\"",
-  "NM-BV-S/E-NF-CF8-1PC-2-1/2\"",
-  "NM-BV-S/E-NF-CF8-1PC-3\"",
-  "NM-BV-S/E-NF-CF8-1PC-4\"",
-  // ── CF8 (SS 304) 2PC – IMP ──
-  "NM-BV-S/E-IMP-CF8-2PC-1/4\"",
-  "NM-BV-S/E-IMP-CF8-2PC-3/8\"",
-  "NM-BV-S/E-IMP-CF8-2PC-1/2\"",
-  "NM-BV-S/E-IMP-CF8-2PC-3/4\"",
-  "NM-BV-S/E-IMP-CF8-2PC-1\"",
-  "NM-BV-S/E-IMP-CF8-2PC-1-1/4\"",
-  "NM-BV-S/E-IMP-CF8-2PC-1-1/2\"",
-  "NM-BV-S/E-IMP-CF8-2PC-2\"",
-  "NM-BV-S/E-IMP-CF8-2PC-2-1/2\"",
-  "NM-BV-S/E-IMP-CF8-2PC-3\"",
-  "NM-BV-S/E-IMP-CF8-2PC-4\"",
-  // ── CF8 (SS 304) 2PC – IND ──
-  "NM-BV-S/E-IND-CF8-2PC-1/4\"",
-  "NM-BV-S/E-IND-CF8-2PC-3/8\"",
-  "NM-BV-S/E-IND-CF8-2PC-1/2\"",
-  "NM-BV-S/E-IND-CF8-2PC-3/4\"",
-  "NM-BV-S/E-IND-CF8-2PC-1\"",
-  "NM-BV-S/E-IND-CF8-2PC-1-1/4\"",
-  "NM-BV-S/E-IND-CF8-2PC-1-1/2\"",
-  "NM-BV-S/E-IND-CF8-2PC-2\"",
-  "NM-BV-S/E-IND-CF8-2PC-2-1/2\"",
-  "NM-BV-S/E-IND-CF8-2PC-3\"",
-  "NM-BV-S/E-IND-CF8-2PC-4\"",
-  // ── CF8 (SS 304) 2PC – NF ──
-  "NM-BV-S/E-NF-CF8-2PC-1/4\"",
-  "NM-BV-S/E-NF-CF8-2PC-3/8\"",
-  "NM-BV-S/E-NF-CF8-2PC-1/2\"",
-  "NM-BV-S/E-NF-CF8-2PC-3/4\"",
-  "NM-BV-S/E-NF-CF8-2PC-1\"",
-  "NM-BV-S/E-NF-CF8-2PC-1-1/4\"",
-  "NM-BV-S/E-NF-CF8-2PC-1-1/2\"",
-  "NM-BV-S/E-NF-CF8-2PC-2\"",
-  "NM-BV-S/E-NF-CF8-2PC-2-1/2\"",
-  "NM-BV-S/E-NF-CF8-2PC-3\"",
-  "NM-BV-S/E-NF-CF8-2PC-4\"",
-  // ── CF8 (SS 304) 3PC – IMP ──
-  "NM-BV-S/E-IMP-CF8-3PC-1/4\"",
-  "NM-BV-S/E-IMP-CF8-3PC-3/8\"",
-  "NM-BV-S/E-IMP-CF8-3PC-1/2\"",
-  "NM-BV-S/E-IMP-CF8-3PC-3/4\"",
-  "NM-BV-S/E-IMP-CF8-3PC-1\"",
-  "NM-BV-S/E-IMP-CF8-3PC-1-1/4\"",
-  "NM-BV-S/E-IMP-CF8-3PC-1-1/2\"",
-  "NM-BV-S/E-IMP-CF8-3PC-2\"",
-  "NM-BV-S/E-IMP-CF8-3PC-2-1/2\"",
-  "NM-BV-S/E-IMP-CF8-3PC-3\"",
-  "NM-BV-S/E-IMP-CF8-3PC-4\"",
-  // ── CF8 (SS 304) 3PC – IND ──
-  "NM-BV-S/E-IND-CF8-3PC-1/4\"",
-  "NM-BV-S/E-IND-CF8-3PC-3/8\"",
-  "NM-BV-S/E-IND-CF8-3PC-1/2\"",
-  "NM-BV-S/E-IND-CF8-3PC-3/4\"",
-  "NM-BV-S/E-IND-CF8-3PC-1\"",
-  "NM-BV-S/E-IND-CF8-3PC-1-1/4\"",
-  "NM-BV-S/E-IND-CF8-3PC-1-1/2\"",
-  "NM-BV-S/E-IND-CF8-3PC-2\"",
-  "NM-BV-S/E-IND-CF8-3PC-2-1/2\"",
-  "NM-BV-S/E-IND-CF8-3PC-3\"",
-  "NM-BV-S/E-IND-CF8-3PC-4\"",
-  // ── CF8 (SS 304) 3PC – NF ──
-  "NM-BV-S/E-NF-CF8-3PC-1/4\"",
-  "NM-BV-S/E-NF-CF8-3PC-3/8\"",
-  "NM-BV-S/E-NF-CF8-3PC-1/2\"",
-  "NM-BV-S/E-NF-CF8-3PC-3/4\"",
-  "NM-BV-S/E-NF-CF8-3PC-1\"",
-  "NM-BV-S/E-NF-CF8-3PC-1-1/4\"",
-  "NM-BV-S/E-NF-CF8-3PC-1-1/2\"",
-  "NM-BV-S/E-NF-CF8-3PC-2\"",
-  "NM-BV-S/E-NF-CF8-3PC-2-1/2\"",
-  "NM-BV-S/E-NF-CF8-3PC-3\"",
-  "NM-BV-S/E-NF-CF8-3PC-4\"",
-  // ── CF8N (SS 316) 1PC – IMP (exact IDs from DB) ──
-  "NM-BV-S/E-IMP-CF8N-1PC-1/4\"",
-  "NM-BV-S/E-IMP-CF8N-1PC-3/8\"",
-  "NM-BV-S/E-IMP-CF8N-1PC-1/2\"",
-  "NM-BV-S/E-IMP-CF8N-1PC-3/4\"",
-  "NM-BV-S/E-IMP-CF8N-1\"",
-  "NM-BV-S/E-IMP-CF8N-1-1/4\"",
-  "NM-BV-S/E-IMP-CF8N-1-1/2\"",
-  "NM-BV-S/E-IMP-CF8N-1PC-2\"",
-  "NM-BV-S/E-IMP-CF8N-1PC-2-1/2\"",
-  "NM-BV-S/E-IMP-CF8N-1PC-3\"",
-  "NM-BV-S/E-IMP-CF8N-1PC-4\"",
-  // ── CF8N (SS 316) 1PC – IND ──
-  "NM-BV-S/E-IND-CF8N-1PC-1/4\"",
-  "NM-BV-S/E-IND-CF8N-1PC-3/8\"",
-  "NM-BV-S/E-IND-CF8N-1PC-1/2\"",
-  "NM-BV-S/E-IND-CF8N-1PC-3/4\"",
-  "NM-BV-S/E-IND-CF8N-1PC-1\"",
-  "NM-BV-S/E-IND-CF8N-1PC-1-1/4\"",
-  "NM-BV-S/E-IND-CF8N-1PC-1-1/2\"",
-  "NM-BV-S/E-IND-CF8N-1PC-2\"",
-  "NM-BV-S/E-IND-CF8N-1PC-2-1/2\"",
-  "NM-BV-S/E-IND-CF8N-1PC-3\"",
-  "NM-BV-S/E-IND-CF8N-1PC-4\"",
-  // ── CF8N (SS 316) 1PC – NF ──
-  "NM-BV-S/E-NF-CF8N-1PC-1/4\"",
-  "NM-BV-S/E-NF-CF8N-1PC-3/8\"",
-  "NM-BV-S/E-NF-CF8N-1PC-1/2\"",
-  "NM-BV-S/E-NF-CF8N-1PC-3/4\"",
-  "NM-BV-S/E-NF-CF8N-1PC-1\"",
-  "NM-BV-S/E-NF-CF8N-1PC-1-1/4\"",
-  "NM-BV-S/E-NF-CF8N-1PC-1-1/2\"",
-  "NM-BV-S/E-NF-CF8N-1PC-2\"",
-  "NM-BV-S/E-NF-CF8N-1PC-2-1/2\"",
-  "NM-BV-S/E-NF-CF8N-1PC-3\"",
-  "NM-BV-S/E-NF-CF8N-1PC-4\"",
-]);
-// ─────────────────────────────────────────────────────────────────────────────
-
 // ── same catalog helpers as Products / WarehouseStock ─────────────────────────
 function inferMaterial(name) {
   const n = name.toUpperCase();
@@ -284,24 +134,31 @@ function calcOfficeStock(productId, transactions, officeLocationId) {
 }
 
 // ── CSV Bulk Upload parser ────────────────────────────────────────────────────
+// Expected columns: product_id, product_name, unit, low_stock, high_stock
 function parseBulkCSV(text) {
   const lines = text.trim().split(/\r?\n/).filter(Boolean);
   if (lines.length < 2) throw new Error("CSV must have a header row and at least one data row.");
-  const headers = lines[0].split(",").map(h => h.trim().toLowerCase());
+  const headers = lines[0].split(",").map(h => h.trim().toLowerCase().replace(/\s+/g, "_"));
   const idx = (col) => headers.indexOf(col);
-  const nameIdx = idx("name");
-  if (nameIdx === -1) throw new Error("CSV must have a 'name' column.");
+
+  // Support both "product_name" and legacy "name"
+  const nameIdx = idx("product_name") !== -1 ? idx("product_name") : idx("name");
+  if (nameIdx === -1) throw new Error("CSV must have a 'product_name' column.");
+
+  // product_id column — optional, will auto-generate if missing
+  const pidIdx = idx("product_id");
+
   return lines.slice(1).map((line, i) => {
     const cols = line.split(",").map(c => c.trim().replace(/^"|"$/g, ""));
     const name = cols[nameIdx] || "";
-    if (!name) throw new Error(`Row ${i + 2}: name is empty.`);
+    if (!name) throw new Error(`Row ${i + 2}: product_name is empty.`);
+    const autoId = name.trim().toUpperCase().replace(/\s+/g, "-");
     return {
+      product_id: pidIdx !== -1 && cols[pidIdx] ? cols[pidIdx].trim() : autoId,
       name,
       unit: idx("unit") !== -1 ? (cols[idx("unit")] || "Pcs") : "Pcs",
-      low_stock_alert: idx("low_stock_alert") !== -1 ? Number(cols[idx("low_stock_alert")] || 0) : 0,
-      high_stock_alert: idx("high_stock_alert") !== -1 ? Number(cols[idx("high_stock_alert")] || 0) : 0,
-      qty: idx("qty") !== -1 ? Number(cols[idx("qty")] || 0) : 0,
-      rate: idx("rate") !== -1 ? Number(cols[idx("rate")] || 0) : 0,
+      low_stock_alert:  idx("low_stock")  !== -1 ? Number(cols[idx("low_stock")]  || 0) : 0,
+      high_stock_alert: idx("high_stock") !== -1 ? Number(cols[idx("high_stock")] || 0) : 0,
     };
   });
 }
@@ -365,17 +222,25 @@ export default function OfficeStock() {
       txnsData = txns || [];
     }
     setTransactions(txnsData);
+
+    // ── Fetch ALL ball valve products from DB (covers 0-qty items too) ──────
+    const { data: ballValveProds } = await supabase
+      .from("products")
+      .select("*")
+      .or("product_name.ilike.%ball valve%,product_id.ilike.%BV-%");
+
+    const productMap = {};
+    (ballValveProds || []).forEach(p => { productMap[p.id] = p; });
+
+    // ── Also include any products that have office transactions ──────────────
     const txnProductIds = new Set(txnsData.map(t => t.product_id).filter(Boolean));
-    const { data: assignedProds } = await supabase.from("products").select("*").in("product_id", [...OFFICE_ASSIGNED_PRODUCT_IDS]);
-    const assignedMap = {};
-    (assignedProds || []).forEach(p => { assignedMap[p.id] = p; });
-    const extraIds = [...txnProductIds].filter(id => !assignedMap[id]);
-    let extraProds = [];
+    const extraIds = [...txnProductIds].filter(id => !productMap[id]);
     if (extraIds.length > 0) {
       const { data: ep } = await supabase.from("products").select("*").in("id", extraIds);
-      extraProds = ep || [];
+      (ep || []).forEach(p => { productMap[p.id] = p; });
     }
-    setProducts([...Object.values(assignedMap), ...extraProds]);
+
+    setProducts(Object.values(productMap));
   }
 
   async function handleAddItem() {
@@ -438,48 +303,29 @@ export default function OfficeStock() {
 
   async function handleBulkUpload() {
     if (bulkRows.length === 0) return;
-    const locId = officeLocationId || await getOfficeLocationId();
-    if (!locId) { setBulkError("Office location not found."); return; }
     setBulkUploading(true);
     setBulkResult(null);
     setBulkError("");
     let added = 0, skipped = 0, errors = [];
-    const { data: { user } } = await supabase.auth.getUser();
     for (const row of bulkRows) {
       try {
-        const productId = row.name.trim().toUpperCase().replace(/\s+/g, "-");
-        const { data: existing } = await supabase.from("products").select("id").eq("product_id", productId).maybeSingle();
-        let prodId;
+        const { data: existing } = await supabase.from("products").select("id").eq("product_id", row.product_id).maybeSingle();
         if (existing) {
           await supabase.from("products").update({
-            low_stock_alert: row.low_stock_alert || 0,
+            low_stock_alert:  row.low_stock_alert  || 0,
             high_stock_alert: row.high_stock_alert || 0,
           }).eq("id", existing.id);
-          prodId = existing.id;
           skipped++;
         } else {
-          const { data: ins, error: insErr } = await supabase.from("products").insert([{
-            product_id: productId,
-            product_name: row.name.trim(),
-            unit: row.unit || "Pcs",
-            low_stock_alert: row.low_stock_alert || 0,
+          const { error: insErr } = await supabase.from("products").insert([{
+            product_id:       row.product_id,
+            product_name:     row.name.trim(),
+            unit:             row.unit || "Pcs",
+            low_stock_alert:  row.low_stock_alert  || 0,
             high_stock_alert: row.high_stock_alert || 0,
-          }]).select("id").single();
-          if (insErr) throw insErr;
-          prodId = ins.id;
-          added++;
-        }
-        if (row.qty > 0) {
-          await supabase.from("transactions").insert([{
-            product_id: prodId,
-            location_id: locId,
-            transaction_type: "inward",
-            quantity: row.qty,
-            rate: row.rate || 0,
-            party: "Bulk Upload",
-            created_by_email: user?.email || "",
-            created_at: new Date().toISOString(),
           }]);
+          if (insErr) throw insErr;
+          added++;
         }
       } catch (err) {
         errors.push(`"${row.name}": ${err.message}`);
@@ -492,7 +338,7 @@ export default function OfficeStock() {
   }
 
   function downloadSampleCSV() {
-    const csv = "name,unit,low_stock_alert,high_stock_alert,qty,rate\nSS 316 PIPE SCH-40 25NB,Pcs,5,100,10,250\nSS 304 BALL VALVE 1/2\",Pcs,2,50,0,0";
+    const csv = "product_id,product_name,unit,low_stock,high_stock\nNM-BV-S/E-IMP-CF8-1PC-1/2\",NM BV S/E IMP CF8 1PC 1/2\",Pcs,5,100\nNM-BV-S/E-IND-CF8N-2PC-3/4\",NM BV S/E IND CF8N 2PC 3/4\",Pcs,2,50";
     const blob = new Blob([csv], { type: "text/csv" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
@@ -558,7 +404,7 @@ export default function OfficeStock() {
       <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
         <div>
           <h1 className="text-3xl font-bold">🏢 Office Stock</h1>
-          <p className="text-gray-500 text-sm mt-1">Products with Office location transactions</p>
+          <p className="text-gray-500 text-sm mt-1">Ball valves & products with Office location transactions</p>
         </div>
         <div className="flex gap-2 flex-wrap">
           <button
@@ -586,15 +432,14 @@ export default function OfficeStock() {
             </div>
 
             <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 mb-4 text-sm text-blue-800">
-              <p className="font-semibold mb-1">CSV Format:</p>
-              <code className="text-xs block bg-blue-100 rounded p-2">name, unit, low_stock_alert, high_stock_alert, qty, rate</code>
+              <p className="font-semibold mb-1">CSV Format (5 columns):</p>
+              <code className="text-xs block bg-blue-100 rounded p-2">product_id, product_name, unit, low_stock, high_stock</code>
               <ul className="mt-2 space-y-1 text-xs list-disc pl-4">
-                <li><strong>name</strong> – required. Item name.</li>
+                <li><strong>product_id</strong> – required. Exact product ID (e.g. NM-BV-S/E-IMP-CF8-1PC-1/2").</li>
+                <li><strong>product_name</strong> – required. Human-readable name.</li>
                 <li><strong>unit</strong> – optional (default: Pcs)</li>
-                <li><strong>low_stock_alert</strong> – optional. Alert below this qty.</li>
-                <li><strong>high_stock_alert</strong> – optional. Alert above this qty.</li>
-                <li><strong>qty</strong> – optional. Opening stock qty.</li>
-                <li><strong>rate</strong> – optional. Opening rate (₹).</li>
+                <li><strong>low_stock</strong> – optional. Alert below this qty.</li>
+                <li><strong>high_stock</strong> – optional. Alert above this qty.</li>
               </ul>
               <button onClick={downloadSampleCSV} className="mt-2 text-blue-600 underline text-xs font-semibold">⬇ Download Sample CSV</button>
             </div>
@@ -620,24 +465,21 @@ export default function OfficeStock() {
                   <table className="w-full text-xs">
                     <thead className="bg-gray-50 sticky top-0 text-gray-500 uppercase tracking-wide">
                       <tr>
-                        <th className="px-3 py-2 text-left">Name</th>
+                        <th className="px-3 py-2 text-left">Product ID</th>
+                        <th className="px-3 py-2 text-left">Product Name</th>
                         <th className="px-3 py-2 text-center">Unit</th>
-                        <th className="px-3 py-2 text-center">Low Alert</th>
-                        <th className="px-3 py-2 text-center">High Alert</th>
-                        <th className="px-3 py-2 text-center">Qty</th>
-                        <th className="px-3 py-2 text-center">Rate</th>
-
+                        <th className="px-3 py-2 text-center">Low Stock</th>
+                        <th className="px-3 py-2 text-center">High Stock</th>
                       </tr>
                     </thead>
                     <tbody>
                       {bulkRows.map((r, i) => (
                         <tr key={i} className={i % 2 === 1 ? "bg-gray-50" : "bg-white"}>
+                          <td className="px-3 py-1.5 font-mono text-gray-600 text-xs">{r.product_id}</td>
                           <td className="px-3 py-1.5 font-medium text-gray-800">{r.name}</td>
                           <td className="px-3 py-1.5 text-center text-gray-500">{r.unit}</td>
                           <td className="px-3 py-1.5 text-center text-orange-600">{r.low_stock_alert || "–"}</td>
                           <td className="px-3 py-1.5 text-center text-blue-600">{r.high_stock_alert || "–"}</td>
-                          <td className="px-3 py-1.5 text-center tabular-nums">{r.qty || 0}</td>
-                          <td className="px-3 py-1.5 text-center tabular-nums">₹{r.rate || 0}</td>
                         </tr>
                       ))}
                     </tbody>
