@@ -124,6 +124,7 @@ function sortCategoryKeys(keys) {
 }
 
 // ── Stock status helper ────────────────────────────────────────────────────────
+// FIX 3: Returns "low" / "zero" / "high" / "ok" for badge rendering
 function getStockStatus(qty, product) {
   const low  = Number(product.low_stock_alert  || 0);
   const high = Number(product.high_stock_alert || 0);
@@ -249,7 +250,8 @@ export default function OfficeStock() {
       return;
     }
 
-    // Load ALL office transactions (including qty=0 opening entries)
+    // FIX 1: Load ALL office transactions — including qty=0 opening entries
+    // A product with a qty=0 inward transaction will still be included in officeProductIds
     const { data: txns } = await supabase
       .from("transactions")
       .select("*")
@@ -258,10 +260,9 @@ export default function OfficeStock() {
     const officeTxns = txns || [];
     setTransactions(officeTxns);
 
-    // FIX 1: Get unique product IDs — qty=0 transactions still count for visibility
+    // FIX 1: All product IDs that have ANY transaction at office (even qty=0) are included
     const officeProductIds = [...new Set(officeTxns.map(t => t.product_id))];
 
-    // Load products that have ANY office transaction (even qty=0 opening entries)
     const { data: officeProducts } = officeProductIds.length > 0
       ? await supabase.from("products").select("*").in("id", officeProductIds).order("product_name")
       : { data: [] };
@@ -406,7 +407,7 @@ export default function OfficeStock() {
           added++;
         }
 
-        // FIX 1: Always create opening transaction — qty=0 is fine — so product appears in office stock
+        // FIX 1: Always create opening transaction — qty=0 is valid — product must appear in office stock
         const { error: txErr } = await supabase.from("transactions").insert([{
           product_id:       productDbId,
           location_id:      locId,
@@ -760,7 +761,7 @@ export default function OfficeStock() {
           <div className="text-center text-gray-400 py-16">
             <div className="text-5xl mb-4">🏢</div>
             <p className="text-lg font-semibold text-gray-600 mb-2">No office stock yet</p>
-            <p className="text-sm text-gray-400 mb-6">Use <strong>"+ Add Existing"</strong> to add products from your catalog,<br/>or use <strong>"Bulk Upload"</strong> to import many at once.</p>
+            <p className="text-sm text-gray-400 mb-6">Use <strong>&quot;+ Add Existing&quot;</strong> to add products from your catalog,<br/>or use <strong>&quot;Bulk Upload&quot;</strong> to import many at once.</p>
           </div>
         ) : materialKeys.map(mat => {
           const catMap = catalog[mat];
@@ -793,7 +794,7 @@ export default function OfficeStock() {
                         </button>
                         {isCatOpen && (
                           <div className="overflow-x-auto">
-                            {/* FIX 4: Improved table UI matching screenshot */}
+                            {/* FIX 4: Improved table UI matching screenshot — Product | Stock+badge | Unit | Actions */}
                             <table className="w-full">
                               <thead>
                                 <tr className="border-b border-gray-100 bg-gray-50/60">
@@ -817,7 +818,7 @@ export default function OfficeStock() {
                                         <div className="font-medium text-gray-800 text-sm">{item.product_name}</div>
                                         <div className="text-xs text-gray-400 font-mono mt-0.5">{item.product_id}</div>
                                       </td>
-                                      {/* FIX 3: Low/High stock badges */}
+                                      {/* FIX 3: Low / High stock badges */}
                                       <td className="py-3 px-4">
                                         <div className="flex items-center gap-2">
                                           <span className={`font-bold tabular-nums text-sm ${status === "low" || status === "zero" ? "text-red-600" : status === "high" ? "text-emerald-700" : "text-gray-900"}`}>
