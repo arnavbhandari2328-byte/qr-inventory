@@ -122,7 +122,7 @@ function sortCategoryKeys(keys) {
   });
 }
 
-// FIX 3: stock status for badge
+// stock status helper — drives badge colour in the table
 function getStockStatus(qty, product) {
   const low  = Number(product.low_stock_alert  || 0);
   const high = Number(product.high_stock_alert || 0);
@@ -144,7 +144,8 @@ function calcOfficeStock(productId, transactions, officeLocationId) {
 }
 
 // ── Bulk Upload parsers ────────────────────────────────────────────────────────
-// FIX 2: accept "stock" column (alias for opening_qty); unit always defaults to Pcs
+// "stock" column is the canonical header; "opening_qty" is accepted as alias.
+// "unit" column is intentionally ignored — always defaults to Pcs.
 function normaliseRow(headers, cols, i) {
   const idx = (col) => headers.indexOf(col);
   const nameIdx = idx("product_name") !== -1 ? idx("product_name") : idx("name");
@@ -153,16 +154,26 @@ function normaliseRow(headers, cols, i) {
   const name = String(cols[nameIdx] || "").trim();
   if (!name) throw new Error(`Row ${i + 2}: product_name is empty.`);
   const autoId = name.toUpperCase().replace(/\s+/g, "-");
-  // Accept "stock" OR "opening_qty"
+
+  // Accept "stock" (preferred) OR "opening_qty" (legacy alias)
   const stockIdx = idx("stock") !== -1 ? idx("stock") : idx("opening_qty");
+  // Safely parse qty — guard against empty strings and NaN
+  const rawQty = stockIdx !== -1 ? cols[stockIdx] : "";
+  const parsedQty = parseFloat(String(rawQty).trim());
+  const safeQty = isNaN(parsedQty) ? 0 : parsedQty;
+
+  const rawRate = idx("opening_rate") !== -1 ? cols[idx("opening_rate")] : "";
+  const parsedRate = parseFloat(String(rawRate).trim());
+  const safeRate = isNaN(parsedRate) ? 0 : parsedRate;
+
   return {
     product_id:       pidIdx !== -1 && cols[pidIdx] ? String(cols[pidIdx]).trim() : autoId,
     name,
-    unit:             "Pcs",
-    low_stock_alert:  idx("low_stock")  !== -1 ? Number(cols[idx("low_stock")]  || 0) : 0,
-    high_stock_alert: idx("high_stock") !== -1 ? Number(cols[idx("high_stock")] || 0) : 0,
-    opening_qty:      stockIdx !== -1 ? Number(cols[stockIdx] ?? 0) : 0,
-    opening_rate:     idx("opening_rate") !== -1 ? Number(cols[idx("opening_rate")] || 0) : 0,
+    unit:             "Pcs",   // unit column is ignored — always Pcs
+    low_stock_alert:  idx("low_stock")  !== -1 ? (parseFloat(cols[idx("low_stock")])  || 0) : 0,
+    high_stock_alert: idx("high_stock") !== -1 ? (parseFloat(cols[idx("high_stock")]) || 0) : 0,
+    opening_qty:      safeQty,
+    opening_rate:     safeRate,
   };
 }
 
@@ -239,7 +250,9 @@ export default function OfficeStock() {
     setOfficeLocationId(locId);
     if (!locId) { setProducts([]); setTransactions([]); return; }
 
-    // FIX 1: load ALL office transactions — qty=0 opening entries are valid and must be included
+    // Load ALL office transactions — qty=0 opening entries are valid and must be included.
+    // A product appears in Office Stock only if at least one transaction exists for it
+    // at the office location (even a qty=0 opening stock entry counts).
     const { data: txns } = await supabase
       .from("transactions")
       .select("*")
@@ -248,7 +261,6 @@ export default function OfficeStock() {
     const officeTxns = txns || [];
     setTransactions(officeTxns);
 
-    // Every product that has ANY transaction at office (even qty=0) is shown
     const officeProductIds = [...new Set(officeTxns.map(t => t.product_id))];
     const { data: officeProducts } = officeProductIds.length > 0
       ? await supabase.from("products").select("*").in("id", officeProductIds).order("product_name")
@@ -275,13 +287,14 @@ export default function OfficeStock() {
       }]).select("*").single();
       if (error) throw error;
       const { data: { user } } = await supabase.auth.getUser();
-      // FIX 1: always insert opening transaction — even qty=0 — so product appears in list
+      // Always insert an opening transaction even when qty=0 — this is what makes
+      // the product show up in the Office Stock list.
       const { error: txErr } = await supabase.from("transactions").insert([{
         product_id: inserted.id,
         location_id: locId,
         transaction_type: "inward",
-        quantity: Number(newItem.openingQty ?? 0),
-        rate: Number(newItem.openingRate ?? 0),
+        quantity: Number(newItem.openingQty) || 0,
+        rate: Number(newItem.openingRate) || 0,
         party: "Opening Stock",
         created_by_email: user?.email || "",
         created_at: new Date().toISOString(),
@@ -304,13 +317,13 @@ export default function OfficeStock() {
     setAddingExisting(true);
     try {
       const { data: { user } } = await supabase.auth.getUser();
-      // FIX 1: always insert — qty=0 is valid
+      // qty=0 is valid — it registers the product at office with zero stock
       const { error } = await supabase.from("transactions").insert([{
         product_id: selectedProductId,
         location_id: locId,
         transaction_type: "inward",
-        quantity: Number(existingOpenQty ?? 0),
-        rate: Number(existingOpenRate ?? 0),
+        quantity: Number(existingOpenQty) || 0,
+        rate: Number(existingOpenRate) || 0,
         party: "Opening Stock",
         created_by_email: user?.email || "",
         created_at: new Date().toISOString(),
@@ -368,10 +381,13 @@ export default function OfficeStock() {
           if (insErr) throw insErr;
           productDbId = inserted.id; added++;
         }
-        // FIX 1: always create transaction — qty=0 is valid, ensures product appears in office stock
+        // qty=0 is intentional — creates the office transaction record so the
+        // product shows up in the list even if no stock has arrived yet.
+        const safeQty  = isNaN(row.opening_qty)  ? 0 : Number(row.opening_qty);
+        const safeRate = isNaN(row.opening_rate) ? 0 : Number(row.opening_rate);
         const { error: txErr } = await supabase.from("transactions").insert([{
           product_id: productDbId, location_id: locId, transaction_type: "inward",
-          quantity: row.opening_qty ?? 0, rate: row.opening_rate ?? 0,
+          quantity: safeQty, rate: safeRate,
           party: "Opening Stock", created_by_email: user?.email || "", created_at: new Date().toISOString(),
         }]);
         if (txErr) throw txErr;
@@ -385,7 +401,7 @@ export default function OfficeStock() {
     await loadAll();
   }
 
-  // FIX 2: sample uses "stock" column, no unit column
+  // Sample uses "stock" as the column header — no "unit" column needed
   function downloadSampleCSV() {
     const csv = "product_id,product_name,low_stock,high_stock,stock,opening_rate\nNM-BV-S/E-IMP-CF8-1PC-1/2,NM BV S/E IMP CF8 1PC 1/2,5,100,10,250\nNM-BV-S/E-IND-CF8N-2PC-3/4,NM BV S/E IND CF8N 2PC 3/4,2,50,0,300";
     const a = document.createElement("a");
@@ -448,7 +464,7 @@ export default function OfficeStock() {
 
   return (
     <div className="p-6">
-      {/* HEADER */}
+      {/* ── HEADER ─────────────────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">🏢 Office Stock</h1>
@@ -470,7 +486,7 @@ export default function OfficeStock() {
         </div>
       </div>
 
-      {/* SEARCH */}
+      {/* ── SEARCH ─────────────────────────────────────────────────────────────── */}
       <div className="mb-5">
         <input
           placeholder="Search office items..."
@@ -479,7 +495,7 @@ export default function OfficeStock() {
         />
       </div>
 
-      {/* ADD EXISTING MODAL */}
+      {/* ── ADD EXISTING MODAL ─────────────────────────────────────────────────── */}
       {showAddExisting && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 px-4">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6">
@@ -520,7 +536,7 @@ export default function OfficeStock() {
         </div>
       )}
 
-      {/* BULK UPLOAD MODAL */}
+      {/* ── BULK UPLOAD MODAL ──────────────────────────────────────────────────── */}
       {showBulk && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 px-4">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl p-6 max-h-[90vh] overflow-y-auto">
@@ -528,13 +544,14 @@ export default function OfficeStock() {
               <h2 className="text-xl font-bold">📂 Bulk Upload Items</h2>
               <button onClick={() => setShowBulk(false)} className="text-gray-400 hover:text-gray-700 text-2xl font-bold">×</button>
             </div>
-            {/* FIX 2: "stock" is the column head for quantity */}
+            {/* Column guide — "stock" is the canonical header */}
             <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 mb-4 text-sm text-blue-800">
               <p className="font-semibold mb-1">Required columns (CSV or Excel):</p>
               <code className="text-xs block bg-blue-100 rounded p-2 font-mono">product_id, product_name, low_stock, high_stock, <strong>stock</strong>, opening_rate</code>
               <p className="text-xs text-blue-600 mt-1.5">
                 ✅ Use <strong>stock</strong> as your column header for opening quantity.<br />
-                ✅ No <em>unit</em> column needed — defaults to Pcs automatically.
+                ✅ No <em>unit</em> column needed — defaults to Pcs automatically.<br />
+                ✅ Setting <strong>stock = 0</strong> is valid and will make the item appear in Office Stock.
               </p>
               <div className="flex gap-3 mt-2 flex-wrap">
                 <button onClick={downloadSampleCSV} className="text-blue-600 underline text-xs font-semibold">⬇ Sample CSV</button>
@@ -604,7 +621,7 @@ export default function OfficeStock() {
         </div>
       )}
 
-      {/* ADD NEW PRODUCT MODAL */}
+      {/* ── ADD NEW PRODUCT MODAL ──────────────────────────────────────────────── */}
       {showAddItem && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 px-4">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6">
@@ -639,7 +656,7 @@ export default function OfficeStock() {
                 </div>
               </div>
               <div className="border border-dashed border-gray-300 rounded-xl p-4 space-y-3 bg-gray-50">
-                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Opening Stock <span className="text-gray-400 normal-case font-normal">— 0 is fine</span></p>
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Opening Stock <span className="text-gray-400 normal-case font-normal">— 0 is fine, item will still appear</span></p>
                 <div className="flex gap-3">
                   <div className="flex-1">
                     <label className="block text-xs text-gray-500 mb-1">Qty</label>
@@ -664,7 +681,7 @@ export default function OfficeStock() {
         </div>
       )}
 
-      {/* CATALOG TREE */}
+      {/* ── CATALOG TREE ───────────────────────────────────────────────────────── */}
       <div className="space-y-3">
         {materialKeys.length === 0 ? (
           <div className="text-center text-gray-400 py-16">
@@ -672,7 +689,8 @@ export default function OfficeStock() {
             <p className="text-lg font-semibold text-gray-600 mb-2">No office stock yet</p>
             <p className="text-sm text-gray-400 mb-6">
               Use <strong>"+ Add Existing"</strong> to add products from your catalog,<br />
-              or use <strong>"Bulk Upload"</strong> to import many at once.
+              <strong>"+ New Product"</strong> to create a new one, or<br />
+              <strong>"Bulk Upload"</strong> to import many at once (use <code className="bg-gray-100 px-1 rounded">stock</code> as your qty column).
             </p>
           </div>
         ) : materialKeys.map(mat => {
@@ -702,7 +720,7 @@ export default function OfficeStock() {
                         </button>
                         {isCatOpen && (
                           <div className="overflow-x-auto">
-                            {/* FIX 4: Clean table — Product | Stock + badge | Unit | Actions */}
+                            {/* ── Product table — matches screenshot layout ─── */}
                             <table className="w-full">
                               <thead>
                                 <tr className="border-b border-gray-100 bg-gray-50/60">
@@ -723,7 +741,7 @@ export default function OfficeStock() {
                                         <div className="font-medium text-gray-800 text-sm">{item.product_name}</div>
                                         <div className="text-xs text-gray-400 font-mono mt-0.5">{item.product_id}</div>
                                       </td>
-                                      {/* FIX 3: low/high/zero badges */}
+                                      {/* Stock number + Low / High badge */}
                                       <td className="py-3 px-4">
                                         <div className="flex items-center gap-2">
                                           <span className={`font-bold tabular-nums text-sm ${
@@ -768,7 +786,7 @@ export default function OfficeStock() {
         })}
       </div>
 
-      {/* STOCK PANEL */}
+      {/* ── STOCK PANEL ────────────────────────────────────────────────────────── */}
       {panelOpen && panelItem && (
         <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 px-4">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6">
