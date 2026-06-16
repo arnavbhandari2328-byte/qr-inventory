@@ -140,7 +140,7 @@ function sortCategoryKeys(keys) {
 // ─── Add to Stock Modal ───────────────────────────────────────────────────────
 
 function AddToStockModal({ product, targetLocations, onClose, onSuccess }) {
-  const [qty, setQty] = useState("");
+  const [qty, setQty] = useState("0");
   const [rate, setRate] = useState("");
   const [party, setParty] = useState("");
   const [saving, setSaving] = useState(false);
@@ -149,8 +149,9 @@ function AddToStockModal({ product, targetLocations, onClose, onSuccess }) {
 
   const handleSave = async () => {
     const quantity = Number(qty);
-    if (!quantity || quantity <= 0) {
-      alert("Please enter a valid quantity greater than 0.");
+    // Allow 0 — useful for registering a product at a location with no opening stock
+    if (isNaN(quantity) || quantity < 0) {
+      alert("Please enter a valid quantity (0 or more).");
       return;
     }
     setSaving(true);
@@ -183,7 +184,7 @@ function AddToStockModal({ product, targetLocations, onClose, onSuccess }) {
         <div className="px-6 py-4 bg-gradient-to-r from-green-600 to-green-700 rounded-t-2xl text-white flex items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="text-xs font-semibold uppercase tracking-widest text-green-200 mb-1">
-              ▲ Add Inward Stock → {locationLabel}
+              ▲ Add to {locationLabel}
             </div>
             <h2 className="text-base font-bold leading-snug truncate">{product.product_name}</h2>
             <p className="text-green-200 font-mono text-xs mt-0.5">{product.product_id}</p>
@@ -195,12 +196,13 @@ function AddToStockModal({ product, targetLocations, onClose, onSuccess }) {
         <div className="p-6 space-y-4">
           <div>
             <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">
-              Quantity <span className="text-red-500">*</span>
+              Quantity
+              <span className="ml-2 text-gray-400 font-normal normal-case">(enter 0 to just register the product)</span>
             </label>
             <input
               type="number"
-              min="1"
-              placeholder="e.g. 50"
+              min="0"
+              placeholder="0"
               value={qty}
               onChange={e => setQty(e.target.value)}
               autoFocus
@@ -236,6 +238,12 @@ function AddToStockModal({ product, targetLocations, onClose, onSuccess }) {
           {targetLocations.length > 1 && (
             <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs text-amber-700 font-medium">
               ⚠ Same quantity will be added to <strong>both</strong> {locationLabel} separately.
+            </div>
+          )}
+
+          {Number(qty) === 0 && (
+            <div className="bg-blue-50 border border-blue-200 rounded-lg px-3 py-2 text-xs text-blue-700 font-medium">
+              ℹ Quantity is 0 — this will register the product at <strong>{locationLabel}</strong> with zero opening stock.
             </div>
           )}
         </div>
