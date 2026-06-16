@@ -122,6 +122,16 @@ function sortCategoryKeys(keys) {
     return ia - ib;
   });
 }
+
+// ── Stock status helper ────────────────────────────────────────────────────────
+function getStockStatus(qty, product) {
+  const low  = Number(product.low_stock_alert  || 0);
+  const high = Number(product.high_stock_alert || 0);
+  if (high > 0 && qty >= high) return "high";
+  if (low  > 0 && qty <= low)  return "low";
+  if (qty === 0)                return "zero";
+  return "ok";
+}
 // ── end helpers ────────────────────────────────────────────────────────────────
 
 function calcOfficeStock(productId, transactions, officeLocationId) {
@@ -135,6 +145,7 @@ function calcOfficeStock(productId, transactions, officeLocationId) {
 }
 
 // ── Bulk Upload parsers ────────────────────────────────────────────────────────
+// FIX 2: Accept "stock" as column name (alias for opening_qty); drop unit column (default Pcs)
 function normaliseRow(headers, cols, i) {
   const idx = (col) => headers.indexOf(col);
   const nameIdx = idx("product_name") !== -1 ? idx("product_name") : idx("name");
@@ -143,13 +154,15 @@ function normaliseRow(headers, cols, i) {
   const name = String(cols[nameIdx] || "").trim();
   if (!name) throw new Error(`Row ${i + 2}: product_name is empty.`);
   const autoId = name.toUpperCase().replace(/\s+/g, "-");
+  // Accept "stock" OR "opening_qty" as the stock column
+  const stockIdx = idx("stock") !== -1 ? idx("stock") : idx("opening_qty");
   return {
     product_id: pidIdx !== -1 && cols[pidIdx] ? String(cols[pidIdx]).trim() : autoId,
     name,
-    unit: idx("unit") !== -1 ? (String(cols[idx("unit")] || "Pcs").trim() || "Pcs") : "Pcs",
+    unit: "Pcs", // always default — no unit column needed
     low_stock_alert:  idx("low_stock")  !== -1 ? Number(cols[idx("low_stock")]  || 0) : 0,
     high_stock_alert: idx("high_stock") !== -1 ? Number(cols[idx("high_stock")] || 0) : 0,
-    opening_qty:  idx("opening_qty")  !== -1 ? Number(cols[idx("opening_qty")]  || 0) : 0,
+    opening_qty:  stockIdx !== -1 ? Number(cols[stockIdx] ?? 0) : 0,
     opening_rate: idx("opening_rate") !== -1 ? Number(cols[idx("opening_rate")] || 0) : 0,
   };
 }
@@ -236,7 +249,7 @@ export default function OfficeStock() {
       return;
     }
 
-    // Load office transactions first
+    // Load ALL office transactions (including qty=0 opening entries)
     const { data: txns } = await supabase
       .from("transactions")
       .select("*")
@@ -245,23 +258,16 @@ export default function OfficeStock() {
     const officeTxns = txns || [];
     setTransactions(officeTxns);
 
-    // Get unique product IDs that have office transactions
+    // FIX 1: Get unique product IDs — qty=0 transactions still count for visibility
     const officeProductIds = [...new Set(officeTxns.map(t => t.product_id))];
 
-    if (officeProductIds.length === 0) {
-      setProducts([]);
-      return;
-    }
-
-    // Load only those products
-    const { data: officeProducts } = await supabase
-      .from("products")
-      .select("*")
-      .in("id", officeProductIds)
-      .order("product_name");
+    // Load products that have ANY office transaction (even qty=0 opening entries)
+    const { data: officeProducts } = officeProductIds.length > 0
+      ? await supabase.from("products").select("*").in("id", officeProductIds).order("product_name")
+      : { data: [] };
     setProducts(officeProducts || []);
 
-    // Also keep a full list for the "Add Existing Product" dropdown
+    // Full product list for "Add Existing Product" dropdown
     const { data: full } = await supabase.from("products").select("id, product_id, product_name").order("product_name");
     setAllProducts(full || []);
   }
@@ -283,14 +289,14 @@ export default function OfficeStock() {
       }]).select("*").single();
       if (error) throw error;
 
-      // Always create an opening inward transaction so it appears in Office Stock
+      // FIX 1: Always create opening transaction — even qty=0 — so product appears in office stock
       const { data: { user } } = await supabase.auth.getUser();
       const { error: txErr } = await supabase.from("transactions").insert([{
         product_id: inserted.id,
         location_id: locId,
         transaction_type: "inward",
-        quantity: Number(newItem.openingQty || 0),
-        rate: Number(newItem.openingRate || 0),
+        quantity: Number(newItem.openingQty ?? 0),
+        rate: Number(newItem.openingRate ?? 0),
         party: "Opening Stock",
         created_by_email: user?.email || "",
         created_at: new Date().toISOString(),
@@ -315,12 +321,13 @@ export default function OfficeStock() {
     setAddingExisting(true);
     try {
       const { data: { user } } = await supabase.auth.getUser();
+      // FIX 1: Always insert transaction even if qty=0
       const { error } = await supabase.from("transactions").insert([{
         product_id: selectedProductId,
         location_id: locId,
         transaction_type: "inward",
-        quantity: Number(existingOpenQty || 0),
-        rate: Number(existingOpenRate || 0),
+        quantity: Number(existingOpenQty ?? 0),
+        rate: Number(existingOpenRate ?? 0),
         party: "Opening Stock",
         created_by_email: user?.email || "",
         created_at: new Date().toISOString(),
@@ -399,13 +406,13 @@ export default function OfficeStock() {
           added++;
         }
 
-        // Always create a transaction so the product appears in Office Stock
+        // FIX 1: Always create opening transaction — qty=0 is fine — so product appears in office stock
         const { error: txErr } = await supabase.from("transactions").insert([{
           product_id:       productDbId,
           location_id:      locId,
           transaction_type: "inward",
-          quantity:         row.opening_qty || 0,
-          rate:             row.opening_rate || 0,
+          quantity:         row.opening_qty ?? 0,
+          rate:             row.opening_rate ?? 0,
           party:            "Opening Stock",
           created_by_email: user?.email || "",
           created_at:       new Date().toISOString(),
@@ -423,8 +430,9 @@ export default function OfficeStock() {
     await loadAll();
   }
 
+  // FIX 2: Sample files use "stock" as the column head (no unit column)
   function downloadSampleCSV() {
-    const csv = "product_id,product_name,unit,low_stock,high_stock,opening_qty,opening_rate\nNM-BV-S/E-IMP-CF8-1PC-1/2,NM BV S/E IMP CF8 1PC 1/2,Pcs,5,100,10,250\nNM-BV-S/E-IND-CF8N-2PC-3/4,NM BV S/E IND CF8N 2PC 3/4,Pcs,2,50,5,300";
+    const csv = "product_id,product_name,low_stock,high_stock,stock,opening_rate\nNM-BV-S/E-IMP-CF8-1PC-1/2,NM BV S/E IMP CF8 1PC 1/2,5,100,10,250\nNM-BV-S/E-IND-CF8N-2PC-3/4,NM BV S/E IND CF8N 2PC 3/4,2,50,0,300";
     const blob = new Blob([csv], { type: "text/csv" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
@@ -434,9 +442,9 @@ export default function OfficeStock() {
 
   function downloadSampleExcel() {
     const ws = XLSX.utils.aoa_to_sheet([
-      ["product_id", "product_name", "unit", "low_stock", "high_stock", "opening_qty", "opening_rate"],
-      ["NM-BV-S/E-IMP-CF8-1PC-1/2", "NM BV S/E IMP CF8 1PC 1/2", "Pcs", 5, 100, 10, 250],
-      ["NM-BV-S/E-IND-CF8N-2PC-3/4", "NM BV S/E IND CF8N 2PC 3/4", "Pcs", 2, 50, 5, 300],
+      ["product_id", "product_name", "low_stock", "high_stock", "stock", "opening_rate"],
+      ["NM-BV-S/E-IMP-CF8-1PC-1/2", "NM BV S/E IMP CF8 1PC 1/2", 5, 100, 10, 250],
+      ["NM-BV-S/E-IND-CF8N-2PC-3/4", "NM BV S/E IND CF8N 2PC 3/4", 2, 50, 0, 300],
     ]);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Bulk Upload");
@@ -500,25 +508,25 @@ export default function OfficeStock() {
       {/* HEADER */}
       <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
         <div>
-          <h1 className="text-3xl font-bold">🏢 Office Stock</h1>
-          <p className="text-gray-500 text-sm mt-1">Only products with office transactions — {products.length} item{products.length !== 1 ? "s" : ""}</p>
+          <h1 className="text-2xl font-bold text-gray-900">🏢 Office Stock</h1>
+          <p className="text-gray-400 text-sm mt-0.5">{products.length} item{products.length !== 1 ? "s" : ""} tracked at office</p>
         </div>
         <div className="flex gap-2 flex-wrap">
           <button
             onClick={() => { setShowBulk(true); setBulkRows([]); setBulkError(""); setBulkResult(null); }}
-            className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-4 py-2.5 rounded-xl shadow transition-colors text-sm"
+            className="bg-emerald-600 hover:bg-emerald-700 text-white font-semibold px-4 py-2 rounded-lg shadow-sm transition-colors text-sm"
           >
             📂 Bulk Upload
           </button>
           <button
             onClick={() => { setShowAddExisting(true); setSelectedProductId(""); setExistingOpenQty(""); setExistingOpenRate(""); }}
-            className="bg-purple-600 hover:bg-purple-700 text-white font-bold px-4 py-2.5 rounded-xl shadow transition-colors text-sm"
+            className="bg-purple-600 hover:bg-purple-700 text-white font-semibold px-4 py-2 rounded-lg shadow-sm transition-colors text-sm"
           >
-            + Add Existing Product
+            + Add Existing
           </button>
           <button
             onClick={() => setShowAddItem(true)}
-            className="bg-blue-600 hover:bg-blue-700 text-white font-bold px-4 py-2.5 rounded-xl shadow transition-colors text-sm"
+            className="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-4 py-2 rounded-lg shadow-sm transition-colors text-sm"
           >
             + New Product
           </button>
@@ -541,7 +549,7 @@ export default function OfficeStock() {
                 >
                   <option value="">— choose a product —</option>
                   {allProducts
-                    .filter(p => !products.find(op => op.id === p.id)) // hide already-added
+                    .filter(p => !products.find(op => op.id === p.id))
                     .map(p => (
                       <option key={p.id} value={p.id}>{p.product_name} ({p.product_id})</option>
                     ))}
@@ -592,9 +600,11 @@ export default function OfficeStock() {
               <h2 className="text-xl font-bold">📂 Bulk Upload Items</h2>
               <button onClick={() => setShowBulk(false)} className="text-gray-400 hover:text-gray-700 text-2xl font-bold">×</button>
             </div>
+            {/* FIX 2: Updated column description — "stock" instead of "opening_qty", no unit column */}
             <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 mb-4 text-sm text-blue-800">
               <p className="font-semibold mb-1">Required columns (CSV or Excel):</p>
-              <code className="text-xs block bg-blue-100 rounded p-2">product_id, product_name, unit, low_stock, high_stock, opening_qty, opening_rate</code>
+              <code className="text-xs block bg-blue-100 rounded p-2">product_id, product_name, low_stock, high_stock, <strong>stock</strong>, opening_rate</code>
+              <p className="text-xs text-blue-600 mt-1">Use <strong>stock</strong> as your column head for opening quantity. The <em>unit</em> column is not needed — defaults to Pcs.</p>
               <div className="flex gap-3 mt-2 flex-wrap">
                 <button onClick={downloadSampleCSV} className="text-blue-600 underline text-xs font-semibold">⬇ Download Sample CSV</button>
                 <button onClick={downloadSampleExcel} className="text-emerald-600 underline text-xs font-semibold">⬇ Download Sample Excel</button>
@@ -621,8 +631,9 @@ export default function OfficeStock() {
                       <tr>
                         <th className="px-3 py-2 text-left">Product ID</th>
                         <th className="px-3 py-2 text-left">Product Name</th>
-                        <th className="px-3 py-2 text-center">Unit</th>
-                        <th className="px-3 py-2 text-center">Opening Qty</th>
+                        <th className="px-3 py-2 text-center">Low Alert</th>
+                        <th className="px-3 py-2 text-center">High Alert</th>
+                        <th className="px-3 py-2 text-center">Stock</th>
                         <th className="px-3 py-2 text-center">Rate ₹</th>
                       </tr>
                     </thead>
@@ -631,8 +642,9 @@ export default function OfficeStock() {
                         <tr key={i} className={i % 2 === 1 ? "bg-gray-50" : "bg-white"}>
                           <td className="px-3 py-1.5 font-mono text-gray-600 text-xs">{r.product_id}</td>
                           <td className="px-3 py-1.5 font-medium text-gray-800">{r.name}</td>
-                          <td className="px-3 py-1.5 text-center text-gray-500">{r.unit}</td>
-                          <td className="px-3 py-1.5 text-center font-bold text-green-700">{r.opening_qty > 0 ? r.opening_qty : "0"}</td>
+                          <td className="px-3 py-1.5 text-center text-orange-600">{r.low_stock_alert || "–"}</td>
+                          <td className="px-3 py-1.5 text-center text-blue-600">{r.high_stock_alert || "–"}</td>
+                          <td className="px-3 py-1.5 text-center font-bold text-green-700">{r.opening_qty}</td>
                           <td className="px-3 py-1.5 text-center text-gray-500">{r.opening_rate > 0 ? `₹${r.opening_rate}` : "–"}</td>
                         </tr>
                       ))}
@@ -709,7 +721,7 @@ export default function OfficeStock() {
                 </div>
               </div>
               <div className="border border-dashed border-gray-300 rounded-xl p-4 space-y-3 bg-gray-50">
-                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Opening Stock <span className="text-gray-400 normal-case font-normal">optional</span></p>
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Opening Stock <span className="text-gray-400 normal-case font-normal">optional — 0 is fine</span></p>
                 <div className="flex gap-3">
                   <div className="flex-1">
                     <label className="block text-xs text-gray-500 mb-1">Qty</label>
@@ -738,7 +750,7 @@ export default function OfficeStock() {
           placeholder="Search office items..."
           value={search}
           onChange={e => setSearch(e.target.value)}
-          className="border border-gray-300 p-2.5 rounded-xl w-full max-w-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+          className="border border-gray-200 p-2.5 rounded-lg w-full max-w-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-400 text-sm"
         />
       </div>
 
@@ -748,7 +760,7 @@ export default function OfficeStock() {
           <div className="text-center text-gray-400 py-16">
             <div className="text-5xl mb-4">🏢</div>
             <p className="text-lg font-semibold text-gray-600 mb-2">No office stock yet</p>
-            <p className="text-sm text-gray-400 mb-6">Use <strong>"+ Add Existing Product"</strong> to add products from your catalog to the office,<br/>or use <strong>"Bulk Upload"</strong> to import many at once.</p>
+            <p className="text-sm text-gray-400 mb-6">Use <strong>"+ Add Existing"</strong> to add products from your catalog,<br/>or use <strong>"Bulk Upload"</strong> to import many at once.</p>
           </div>
         ) : materialKeys.map(mat => {
           const catMap = catalog[mat];
@@ -756,12 +768,12 @@ export default function OfficeStock() {
           const isMatOpen = !!openMaterials[mat];
           const totalInMat = catKeys.reduce((sum, cat) => sum + catMap[cat].length, 0);
           return (
-            <div key={mat} className="border border-gray-200 rounded-2xl overflow-hidden shadow-sm">
+            <div key={mat} className="border border-gray-200 rounded-xl overflow-hidden shadow-sm bg-white">
               <button
                 onClick={() => toggleMaterial(mat)}
-                className="w-full flex items-center justify-between px-5 py-3.5 bg-gray-50 hover:bg-gray-100 transition-colors"
+                className="w-full flex items-center justify-between px-5 py-3 bg-gray-50 hover:bg-gray-100 transition-colors"
               >
-                <span className="font-bold text-gray-800 text-base">{mat}</span>
+                <span className="font-bold text-gray-800 text-sm">{mat}</span>
                 <span className="text-xs text-gray-400">{totalInMat} item{totalInMat !== 1 ? "s" : ""} {isMatOpen ? "▲" : "▼"}</span>
               </button>
               {isMatOpen && (
@@ -774,52 +786,61 @@ export default function OfficeStock() {
                       <div key={cat}>
                         <button
                           onClick={() => toggleCategory(catKey)}
-                          className="w-full flex items-center justify-between px-6 py-2.5 bg-white hover:bg-gray-50 transition-colors"
+                          className="w-full flex items-center justify-between px-6 py-2.5 bg-white hover:bg-gray-50 transition-colors border-t border-gray-100"
                         >
-                          <span className="font-semibold text-gray-700 text-sm">{cat}</span>
+                          <span className="font-semibold text-gray-600 text-xs uppercase tracking-wide">{cat}</span>
                           <span className="text-xs text-gray-400">{items.length} item{items.length !== 1 ? "s" : ""} {isCatOpen ? "▲" : "▼"}</span>
                         </button>
                         {isCatOpen && (
                           <div className="overflow-x-auto">
-                            <table className="w-full text-sm">
-                              <thead className="bg-gray-50 text-gray-500 text-xs uppercase tracking-wide">
-                                <tr>
-                                  <th className="px-6 py-2 text-left">Product</th>
-                                  <th className="px-4 py-2 text-center">Stock</th>
-                                  <th className="px-4 py-2 text-center">Unit</th>
-                                  <th className="px-4 py-2 text-center">Actions</th>
+                            {/* FIX 4: Improved table UI matching screenshot */}
+                            <table className="w-full">
+                              <thead>
+                                <tr className="border-b border-gray-100 bg-gray-50/60">
+                                  <th className="text-left text-xs font-semibold text-gray-400 uppercase tracking-wider py-2 px-5">Product</th>
+                                  <th className="text-left text-xs font-semibold text-gray-400 uppercase tracking-wider py-2 px-4 w-44">Stock</th>
+                                  <th className="text-left text-xs font-semibold text-gray-400 uppercase tracking-wider py-2 px-4 w-20">Unit</th>
+                                  <th className="text-right text-xs font-semibold text-gray-400 uppercase tracking-wider py-2 px-5 w-20">Actions</th>
                                 </tr>
                               </thead>
-                              <tbody className="divide-y divide-gray-100">
+                              <tbody>
                                 {items.map(item => {
                                   const stock = calcOfficeStock(item.id, transactions, officeLocationId);
-                                  const low  = item.low_stock_alert  || 0;
-                                  const high = item.high_stock_alert || 0;
-                                  const isLow  = low  > 0 && stock <= low;
-                                  const isHigh = high > 0 && stock >= high;
+                                  const status = getStockStatus(stock, item);
                                   return (
                                     <tr
                                       key={item.id}
-                                      className="hover:bg-blue-50 cursor-pointer transition-colors"
                                       onClick={() => openPanel(item)}
+                                      className="border-b border-gray-50 hover:bg-blue-50/40 cursor-pointer transition-colors group"
                                     >
-                                      <td className="px-6 py-2.5">
-                                        <div className="font-medium text-gray-800">{item.product_name}</div>
-                                        <div className="text-xs text-gray-400 font-mono">{item.product_id}</div>
+                                      <td className="py-3 px-5">
+                                        <div className="font-medium text-gray-800 text-sm">{item.product_name}</div>
+                                        <div className="text-xs text-gray-400 font-mono mt-0.5">{item.product_id}</div>
                                       </td>
-                                      <td className="px-4 py-2.5 text-center">
-                                        <span className={`font-bold text-base ${isLow ? "text-red-600" : isHigh ? "text-blue-600" : "text-gray-800"}`}>
-                                          {stock}
-                                        </span>
-                                        {isLow  && <span className="ml-1 text-xs text-red-500">⚠ Low</span>}
-                                        {isHigh && <span className="ml-1 text-xs text-blue-500">↑ High</span>}
+                                      {/* FIX 3: Low/High stock badges */}
+                                      <td className="py-3 px-4">
+                                        <div className="flex items-center gap-2">
+                                          <span className={`font-bold tabular-nums text-sm ${status === "low" || status === "zero" ? "text-red-600" : status === "high" ? "text-emerald-700" : "text-gray-900"}`}>
+                                            {stock}
+                                          </span>
+                                          {(status === "low" || status === "zero") && (
+                                            <span className="inline-flex items-center gap-0.5 text-xs font-semibold px-2 py-0.5 rounded-full border text-orange-600 bg-orange-50 border-orange-200">
+                                              ⚠ Low
+                                            </span>
+                                          )}
+                                          {status === "high" && (
+                                            <span className="inline-flex items-center gap-0.5 text-xs font-semibold px-2 py-0.5 rounded-full border text-emerald-700 bg-emerald-50 border-emerald-200">
+                                              ↑ High
+                                            </span>
+                                          )}
+                                        </div>
                                       </td>
-                                      <td className="px-4 py-2.5 text-center text-gray-500 text-xs">{item.unit || "Pcs"}</td>
-                                      <td className="px-4 py-2.5 text-center" onClick={e => e.stopPropagation()}>
+                                      <td className="py-3 px-4 text-sm text-gray-500">{item.unit || "Pcs"}</td>
+                                      <td className="py-3 px-5 text-right" onClick={e => e.stopPropagation()}>
                                         <button
                                           onClick={(e) => handleDeleteFromOffice(e, item)}
                                           title="Remove from office stock"
-                                          className="text-red-400 hover:text-red-600 text-xs px-2 py-1 rounded transition-colors"
+                                          className="text-gray-300 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100 p-1 rounded"
                                         >
                                           🗑
                                         </button>
@@ -849,6 +870,13 @@ export default function OfficeStock() {
               <div>
                 <h2 className="text-lg font-bold text-gray-900">{panelItem.product_name}</h2>
                 <p className="text-xs text-gray-400 font-mono mt-0.5">{panelItem.product_id}</p>
+                <p className="text-sm text-gray-500 mt-1">
+                  Current stock:{" "}
+                  <span className="font-bold text-gray-800">
+                    {calcOfficeStock(panelItem.id, transactions, officeLocationId)}
+                  </span>{" "}
+                  {panelItem.unit || "Pcs"}
+                </p>
               </div>
               <button onClick={() => setPanelOpen(false)} className="text-gray-400 hover:text-gray-700 text-2xl font-bold ml-4">×</button>
             </div>
