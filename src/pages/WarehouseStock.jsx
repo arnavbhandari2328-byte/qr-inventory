@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { supabase } from "../supabase";
 
-// ── shared helpers ────────────────────────────────────────────────────────────
+// ── same catalog helpers as OfficeStock ───────────────────────────────────────
 function inferMaterial(name) {
   const n = name.toUpperCase();
   if (n.includes("316L")) return "SS 316L";
@@ -74,23 +74,24 @@ function extractSizeKey(name) {
   return 0;
 }
 
-function sortProductsBySize(products) {
-  return [...products].sort((a, b) => {
-    const sa = extractSizeKey(a.product_name || "");
-    const sb = extractSizeKey(b.product_name || "");
+function sortItemsBySize(items) {
+  return [...items].sort((a, b) => {
+    const sa = extractSizeKey(a.product_name || a.name || "");
+    const sb = extractSizeKey(b.product_name || b.name || "");
     if (sa !== sb) return sa - sb;
-    return (a.product_id || "").localeCompare(b.product_id || "");
+    return (a.product_name || a.name || "").localeCompare(b.product_name || b.name || "");
   });
 }
 
-function buildCatalog(products) {
+function buildCatalog(items) {
   const catalog = {};
-  products.forEach(p => {
-    const mat = inferMaterial(p.product_name || "");
-    const cat = inferCategory(p.product_name || "");
+  items.forEach(item => {
+    const itemName = item.product_name || item.name || "";
+    const mat = inferMaterial(itemName);
+    const cat = inferCategory(itemName);
     if (!catalog[mat]) catalog[mat] = {};
     if (!catalog[mat][cat]) catalog[mat][cat] = [];
-    catalog[mat][cat].push(p);
+    catalog[mat][cat].push(item);
   });
   return catalog;
 }
@@ -112,13 +113,28 @@ function sortCategoryKeys(keys) {
     return ia - ib;
   });
 }
-// ── end shared helpers ────────────────────────────────────────────────────────
+// ── end helpers ───────────────────────────────────────────────────────────────
+
+// Compute stock for a product at a specific location from transactions array
+function calcStock(productId, transactions, locationId) {
+  return transactions
+    .filter(t => t.product_id === productId && t.location_id === locationId)
+    .reduce((sum, t) => {
+      const qty = Number(t.quantity || 0);
+      const type = (t.transaction_type || "").toLowerCase();
+      return sum + (type === "inward" ? qty : -qty);
+    }, 0);
+}
+
+// Total stock across all warehouse locations
+function calcTotalStock(productId, transactions, locationIds) {
+  return locationIds.reduce((sum, lid) => sum + calcStock(productId, transactions, lid), 0);
+}
 
 export default function WarehouseStock() {
   const [products, setProducts]         = useState([]);
-  // stockSummary[productUUID][locationUUID] = net qty
-  const [stockSummary, setStockSummary] = useState({});
-  // Only non-Office locations shown in warehouse view
+  const [transactions, setTransactions] = useState([]);
+  // Non-office warehouse/godown locations
   const [locations, setLocations]       = useState([]);
   const [search, setSearch]             = useState("");
   const [openMaterials, setOpenMaterials]   = useState({});
@@ -131,11 +147,9 @@ export default function WarehouseStock() {
 
   // stock panel
   const [panelOpen, setPanelOpen]       = useState(false);
-  const [panelProduct, setPanelProduct] = useState(null);
-  const [form, setForm] = useState({
-    location_id: "", type: "inward", qty: "", rate: "", party: "", date: ""
-  });
-  const [saving, setSaving] = useState(false);
+  const [panelItem, setPanelItem]       = useState(null);
+  const [form, setForm]                 = useState({ location_id: "", type: "inward", qty: "", rate: "", party: "", date: "" });
+  const [saving, setSaving]             = useState(false);
 
   useEffect(() => {
     loadAll();
@@ -159,62 +173,42 @@ export default function WarehouseStock() {
       .select("*")
       .not("name", "ilike", "office");
 
-    const warehouseLocations = loc || [];
-    const warehouseLocIds = warehouseLocations.map(l => l.id);
-    setLocations(warehouseLocations);
+    const warehouseLocs = loc || [];
+    const warehouseLocIds = warehouseLocs.map(l => l.id);
+    setLocations(warehouseLocs);
 
     if (warehouseLocIds.length === 0) {
       setProducts([]);
-      setStockSummary({});
+      setTransactions([]);
       return;
     }
 
-    // Step 2: fetch transactions for warehouse/godown locations
+    // Step 2: fetch all transactions for warehouse locations
     const { data: txns } = await supabase
       .from("transactions")
-      .select("product_id, location_id, transaction_type, quantity")
-      .in("location_id", warehouseLocIds);
+      .select("*")
+      .in("location_id", warehouseLocIds)
+      .order("created_at");
 
     const txnsData = txns || [];
+    setTransactions(txnsData);
 
-    // Step 3: build stock summary — keyed by product UUID, then by location UUID
-    const summary = {};
-    txnsData.forEach(t => {
-      const pid = t.product_id;
-      const lid = t.location_id;
-      if (!pid || !lid) return;
-      if (!summary[pid]) summary[pid] = {};
-      if (summary[pid][lid] === undefined) summary[pid][lid] = 0;
-      const qty = Number(t.quantity || 0);
-      const type = (t.transaction_type || "").toLowerCase();
-      summary[pid][lid] += type === "inward" ? qty : -qty;
-    });
+    // Step 3: collect unique product IDs that have warehouse transactions
+    const productIds = [...new Set(txnsData.map(t => t.product_id).filter(Boolean))];
 
-    // Step 4: keep ALL products that ever had a warehouse transaction
-    // (including 0-qty ones — so they don't vanish after full outward)
-    const productIdsWithWarehouseTxns = Object.keys(summary);
-
-    if (productIdsWithWarehouseTxns.length === 0) {
+    if (productIds.length === 0) {
       setProducts([]);
-      setStockSummary({});
       return;
     }
 
+    // Step 4: fetch those products
     const { data: prod } = await supabase
       .from("products")
       .select("*")
-      .in("id", productIdsWithWarehouseTxns);
+      .in("id", productIds);
 
-    setStockSummary(summary);
     setProducts(prod || []);
   }
-
-  // Total warehouse stock for a product = sum across all warehouse location IDs
-  const totalStock = (pid) =>
-    Object.values(stockSummary[pid] || {}).reduce((s, v) => s + v, 0);
-
-  // Stock for one specific warehouse location (by location UUID)
-  const stockByLoc = (pid, locId) => stockSummary[pid]?.[locId] ?? 0;
 
   async function handleAddItem() {
     if (!newItem.name.trim()) { alert("Enter an item name."); return; }
@@ -256,8 +250,8 @@ export default function WarehouseStock() {
     }
   }
 
-  function openPanel(product) {
-    setPanelProduct(product);
+  function openPanel(item) {
+    setPanelItem(item);
     const today = new Date().toISOString().split("T")[0];
     setForm({ location_id: locations[0]?.id || "", type: "inward", qty: "", rate: "", party: "", date: today });
     setPanelOpen(true);
@@ -270,7 +264,7 @@ export default function WarehouseStock() {
       const { data: { user } } = await supabase.auth.getUser();
       const ts = form.date ? new Date(form.date + "T12:00:00+05:30").toISOString() : new Date().toISOString();
       const { error } = await supabase.from("transactions").insert([{
-        product_id: panelProduct.id,
+        product_id: panelItem.id,
         location_id: form.location_id,
         transaction_type: form.type,
         quantity: Number(form.qty),
@@ -281,7 +275,7 @@ export default function WarehouseStock() {
       }]);
       if (error) throw error;
       setPanelOpen(false);
-      loadAll();
+      await loadAll();
     } catch (err) {
       alert("Error: " + err.message);
     } finally {
@@ -289,35 +283,20 @@ export default function WarehouseStock() {
     }
   }
 
-  const filtered = search
+  const locationIds = locations.map(l => l.id);
+
+  const filteredProducts = search
     ? products.filter(p =>
-        p.product_name?.toLowerCase().includes(search.toLowerCase()) ||
-        p.product_id?.toLowerCase().includes(search.toLowerCase())
+        (p.product_name || "").toLowerCase().includes(search.toLowerCase()) ||
+        (p.product_id || "").toLowerCase().includes(search.toLowerCase())
       )
     : products;
 
-  const catalog = buildCatalog(filtered);
+  const catalog = buildCatalog(filteredProducts);
   const materialKeys = Object.keys(catalog).sort();
+
   const toggleMaterial = (mat) => setOpenMaterials(prev => ({ ...prev, [mat]: !prev[mat] }));
   const toggleCategory = (key) => setOpenCategories(prev => ({ ...prev, [key]: !prev[key] }));
-
-  const stockBadge = (product) => {
-    const total = totalStock(product.id);
-    const low = product.low_stock_alert;
-    if (total === 0)
-      return <span className="ml-2 text-xs bg-red-100 text-red-700 font-semibold px-2 py-0.5 rounded-full">Out of Stock</span>;
-    if (low && total <= low)
-      return <span className="ml-2 text-xs bg-orange-100 text-orange-700 font-semibold px-2 py-0.5 rounded-full">⚠ Low Stock</span>;
-    return null;
-  };
-
-  const stockColor = (product) => {
-    const total = totalStock(product.id);
-    const low = product.low_stock_alert;
-    if (total === 0) return "text-red-500";
-    if (low && total <= low) return "text-orange-500";
-    return "text-green-600";
-  };
 
   return (
     <div className="p-6">
@@ -439,7 +418,6 @@ export default function WarehouseStock() {
       {/* SEARCH */}
       <div className="mb-5">
         <input
-          type="text"
           placeholder="Search products..."
           value={search}
           onChange={e => setSearch(e.target.value)}
@@ -453,7 +431,7 @@ export default function WarehouseStock() {
           <div className="bg-white rounded-xl shadow p-12 text-center">
             <div className="text-4xl mb-3">📭</div>
             <p className="text-gray-400 text-lg font-medium">No warehouse items yet</p>
-            <p className="text-gray-400 text-sm mt-1">Click "+ Add New Item" or log a transaction with a Warehouse/Godown location</p>
+            <p className="text-gray-400 text-sm mt-1">Click "+ Add New Item" or log a transaction with a Warehouse / Godown location</p>
           </div>
         ) : materialKeys.map(mat => {
           const isMaterialOpen = openMaterials[mat] !== false;
@@ -478,9 +456,9 @@ export default function WarehouseStock() {
               {isMaterialOpen && (
                 <div className="divide-y divide-gray-100">
                   {catKeys.map(cat => {
-                    const catKey = `${mat}__${cat}`;
+                    const catKey = mat + "||" + cat;
                     const isCatOpen = openCategories[catKey] !== false;
-                    const catProducts = sortProductsBySize(catalog[mat][cat]);
+                    const catItems = sortItemsBySize(catalog[mat][cat]);
 
                     return (
                       <div key={cat}>
@@ -490,57 +468,72 @@ export default function WarehouseStock() {
                         >
                           <div className="flex items-center gap-2">
                             <span className="text-sm font-bold text-blue-800">{cat}</span>
-                            <span className="text-xs bg-blue-200 text-blue-800 px-2 py-0.5 rounded-full">{catProducts.length} item{catProducts.length !== 1 ? "s" : ""}</span>
+                            <span className="text-xs bg-blue-200 text-blue-800 px-2 py-0.5 rounded-full">{catItems.length} item{catItems.length !== 1 ? "s" : ""}</span>
                           </div>
                           <span className="text-blue-400 text-sm">{isCatOpen ? "▲" : "▼"}</span>
                         </button>
 
                         {isCatOpen && (
                           <div className="overflow-x-auto">
-                            {/* Location columns header */}
-                            <div
-                              className="grid px-6 py-2 bg-gray-50 border-b border-gray-200"
-                              style={{ gridTemplateColumns: `1fr repeat(${locations.length + 1}, minmax(90px,130px)) 120px` }}
-                            >
-                              <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Product</span>
-                              {locations.map(l => (
-                                <span key={l.id} className="text-xs font-semibold text-gray-500 uppercase tracking-wide text-center">{l.name}</span>
-                              ))}
-                              <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide text-center">Total</span>
-                              <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide text-center">Action</span>
-                            </div>
-
-                            {/* Product rows */}
-                            {catProducts.map((p, idx) => (
-                              <div
-                                key={p.id}
-                                className={`grid px-6 py-3 border-b border-gray-100 last:border-0 items-center ${
-                                  idx % 2 === 0 ? "bg-white" : "bg-gray-50/50"
-                                } hover:bg-blue-50/30 transition-colors`}
-                                style={{ gridTemplateColumns: `1fr repeat(${locations.length + 1}, minmax(90px,130px)) 120px` }}
-                              >
-                                <span className="text-sm text-gray-800 font-medium pr-2">
-                                  {p.product_name}
-                                  {stockBadge(p)}
-                                </span>
-                                {locations.map(l => (
-                                  <span key={l.id} className={`text-sm font-semibold text-center tabular-nums ${stockColor(p)}`}>
-                                    {stockByLoc(p.id, l.id)} {p.unit || "Pcs"}
-                                  </span>
-                                ))}
-                                <span className={`text-sm font-bold text-center tabular-nums ${stockColor(p)}`}>
-                                  {totalStock(p.id)} {p.unit || "Pcs"}
-                                </span>
-                                <div className="flex justify-center">
-                                  <button
-                                    onClick={() => openPanel(p)}
-                                    className="bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold px-3 py-1.5 rounded-lg transition-colors"
-                                  >
-                                    + Stock
-                                  </button>
-                                </div>
-                              </div>
-                            ))}
+                            <table className="w-full text-sm">
+                              <thead className="bg-gray-50 text-gray-500 text-xs uppercase tracking-wide">
+                                <tr>
+                                  <th className="px-6 py-2 text-left font-semibold">Item Name</th>
+                                  {locations.map(l => (
+                                    <th key={l.id} className="px-4 py-2 text-center font-semibold">{l.name}</th>
+                                  ))}
+                                  <th className="px-4 py-2 text-center font-semibold">Total</th>
+                                  <th className="px-4 py-2 text-center font-semibold">Status</th>
+                                  <th className="px-4 py-2 text-center font-semibold">Action</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {catItems.map((item, idx) => {
+                                  const total = calcTotalStock(item.id, transactions, locationIds);
+                                  const low = item.low_stock_alert && total > 0 && total <= item.low_stock_alert;
+                                  const stockColor = total === 0 ? "text-red-500" : low ? "text-orange-500" : "text-green-600";
+                                  return (
+                                    <tr
+                                      key={item.id}
+                                      className={`border-t border-gray-100 ${idx % 2 === 1 ? "bg-gray-50/50" : "bg-white"} hover:bg-blue-50/30 transition-colors`}
+                                    >
+                                      <td className="px-6 py-3">
+                                        <div className="font-medium text-gray-800">{item.product_name || item.name}</div>
+                                        {low && <span className="text-xs bg-orange-100 text-orange-700 font-semibold px-2 py-0.5 rounded-full">⚠ Low Stock</span>}
+                                      </td>
+                                      {locations.map(l => {
+                                        const locQty = calcStock(item.id, transactions, l.id);
+                                        return (
+                                          <td key={l.id} className={`px-4 py-3 text-center font-semibold tabular-nums ${locQty === 0 ? "text-gray-400" : "text-gray-700"}`}>
+                                            {locQty} <span className="text-xs text-gray-400">{item.unit || "Pcs"}</span>
+                                          </td>
+                                        );
+                                      })}
+                                      <td className={`px-4 py-3 text-center font-bold tabular-nums text-lg ${stockColor}`}>
+                                        {total} <span className="text-xs font-normal">{item.unit || "Pcs"}</span>
+                                      </td>
+                                      <td className="px-4 py-3 text-center">
+                                        {total === 0 ? (
+                                          <span className="text-xs bg-red-100 text-red-600 font-semibold px-2 py-0.5 rounded-full">Out of Stock</span>
+                                        ) : low ? (
+                                          <span className="text-xs bg-orange-100 text-orange-700 font-semibold px-2 py-0.5 rounded-full">⚠ Low</span>
+                                        ) : (
+                                          <span className="text-xs bg-green-100 text-green-700 font-semibold px-2 py-0.5 rounded-full">✅ In Stock</span>
+                                        )}
+                                      </td>
+                                      <td className="px-4 py-3 text-center">
+                                        <button
+                                          onClick={() => openPanel(item)}
+                                          className="bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold px-3 py-1.5 rounded-lg transition-colors"
+                                        >
+                                          + Stock
+                                        </button>
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
                           </div>
                         )}
                       </div>
@@ -554,31 +547,36 @@ export default function WarehouseStock() {
       </div>
 
       {/* SLIDE-IN STOCK PANEL */}
-      {panelOpen && panelProduct && (
+      {panelOpen && panelItem && (
         <div className="fixed inset-0 z-50 flex">
           <div className="flex-1 bg-black/40" onClick={() => setPanelOpen(false)} />
           <div className="w-full max-w-md bg-white shadow-2xl flex flex-col">
             <div className="px-6 py-5 bg-gradient-to-r from-blue-700 to-blue-800 text-white">
               <h2 className="text-lg font-bold">+ Add Stock Movement</h2>
-              <p className="text-blue-200 text-sm mt-1 truncate">{panelProduct.product_name}</p>
+              <p className="text-blue-200 text-sm mt-1 truncate">{panelItem.product_name || panelItem.name}</p>
               <p className="text-blue-300 text-xs mt-0.5">🏭 Warehouse / Godown</p>
             </div>
 
             {/* Stock per location summary */}
             <div className="px-6 pt-4">
               <div className="bg-gray-50 rounded-xl p-3 space-y-1">
-                {locations.map(l => (
-                  <div key={l.id} className="flex justify-between text-sm">
-                    <span className="text-gray-600">{l.name}</span>
-                    <span className={`font-semibold tabular-nums ${stockColor(panelProduct)}`}>
-                      {stockByLoc(panelProduct.id, l.id)} {panelProduct.unit || "Pcs"}
-                    </span>
-                  </div>
-                ))}
+                {locations.map(l => {
+                  const locQty = calcStock(panelItem.id, transactions, l.id);
+                  return (
+                    <div key={l.id} className="flex justify-between text-sm">
+                      <span className="text-gray-600">{l.name}</span>
+                      <span className={`font-semibold tabular-nums ${locQty === 0 ? "text-gray-400" : "text-gray-700"}`}>
+                        {locQty} {panelItem.unit || "Pcs"}
+                      </span>
+                    </div>
+                  );
+                })}
                 <div className="flex justify-between text-sm border-t border-gray-200 pt-1 mt-1">
                   <span className="font-semibold text-gray-700">Total</span>
-                  <span className={`font-bold tabular-nums ${stockColor(panelProduct)}`}>
-                    {totalStock(panelProduct.id)} {panelProduct.unit || "Pcs"}
+                  <span className={`font-bold tabular-nums ${
+                    calcTotalStock(panelItem.id, transactions, locationIds) === 0 ? "text-red-500" : "text-green-600"
+                  }`}>
+                    {calcTotalStock(panelItem.id, transactions, locationIds)} {panelItem.unit || "Pcs"}
                   </span>
                 </div>
               </div>
