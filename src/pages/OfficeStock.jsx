@@ -157,21 +157,21 @@ function normaliseRow(headers, cols, i) {
 
   // Accept "stock" (preferred) OR "opening_qty" (legacy alias)
   const stockIdx = idx("stock") !== -1 ? idx("stock") : idx("opening_qty");
-  // Safely parse qty — guard against empty strings and NaN
+  // Use Number() — handles both string "0" and numeric 0 from Excel cells
   const rawQty = stockIdx !== -1 ? cols[stockIdx] : "";
-  const parsedQty = parseFloat(String(rawQty).trim());
+  const parsedQty = Number(String(rawQty).trim());
   const safeQty = isNaN(parsedQty) ? 0 : parsedQty;
 
   const rawRate = idx("opening_rate") !== -1 ? cols[idx("opening_rate")] : "";
-  const parsedRate = parseFloat(String(rawRate).trim());
+  const parsedRate = Number(String(rawRate).trim());
   const safeRate = isNaN(parsedRate) ? 0 : parsedRate;
 
   return {
     product_id:       pidIdx !== -1 && cols[pidIdx] ? String(cols[pidIdx]).trim() : autoId,
     name,
     unit:             "Pcs",   // unit column is ignored — always Pcs
-    low_stock_alert:  idx("low_stock")  !== -1 ? (parseFloat(cols[idx("low_stock")])  || 0) : 0,
-    high_stock_alert: idx("high_stock") !== -1 ? (parseFloat(cols[idx("high_stock")]) || 0) : 0,
+    low_stock_alert:  idx("low_stock")  !== -1 ? (Number(cols[idx("low_stock")])  || 0) : 0,
+    high_stock_alert: idx("high_stock") !== -1 ? (Number(cols[idx("high_stock")]) || 0) : 0,
     opening_qty:      safeQty,
     opening_rate:     safeRate,
   };
@@ -262,6 +262,9 @@ export default function OfficeStock() {
     setTransactions(officeTxns);
 
     const officeProductIds = [...new Set(officeTxns.map(t => t.product_id))];
+
+    // No early return — if officeProductIds is empty, setProducts([]) and continue.
+    // This prevents a stale render after the very first bulk upload of 0-stock items.
     const { data: officeProducts } = officeProductIds.length > 0
       ? await supabase.from("products").select("*").in("id", officeProductIds).order("product_name")
       : { data: [] };
@@ -355,6 +358,40 @@ export default function OfficeStock() {
     e.target.value = "";
   }
 
+  // ── ensureOfficeEntry ──────────────────────────────────────────────────────
+  // Checks whether a product already has ANY transaction at the office location.
+  // • If YES  → skip inserting a new opening record (prevents phantom duplicates on re-upload).
+  // • If NO   → insert an inward opening-stock transaction with the given qty (even if qty=0).
+  //             This is the anchor record that makes the product appear in Office Stock.
+  async function ensureOfficeEntry({ productDbId, locId, qty, rate, userEmail }) {
+    const { data: existing, error: chkErr } = await supabase
+      .from("transactions")
+      .select("id")
+      .eq("product_id", productDbId)
+      .eq("location_id", locId)
+      .limit(1)
+      .maybeSingle();
+
+    if (chkErr) throw chkErr;
+
+    // Product already registered at office — nothing to do
+    if (existing) return false;
+
+    // No office record yet → create the opening stock anchor (qty may be 0)
+    const { error: txErr } = await supabase.from("transactions").insert([{
+      product_id:       productDbId,
+      location_id:      locId,
+      transaction_type: "inward",
+      quantity:         qty,   // 0 is intentional and valid
+      rate:             rate,
+      party:            "Opening Stock",
+      created_by_email: userEmail,
+      created_at:       new Date().toISOString(),
+    }]);
+    if (txErr) throw txErr;
+    return true;
+  }
+
   async function handleBulkUpload() {
     if (bulkRows.length === 0) return;
     const locId = officeLocationId || await getOfficeLocationId();
@@ -381,17 +418,20 @@ export default function OfficeStock() {
           if (insErr) throw insErr;
           productDbId = inserted.id; added++;
         }
-        // qty=0 is intentional — creates the office transaction record so the
-        // product shows up in the list even if no stock has arrived yet.
+
+        // Use ensureOfficeEntry so that:
+        // 1. Products with stock=0 still get an anchor transaction → appear in Office Stock
+        // 2. Re-uploading the same file won't create duplicate opening entries
         const safeQty  = isNaN(row.opening_qty)  ? 0 : Number(row.opening_qty);
         const safeRate = isNaN(row.opening_rate) ? 0 : Number(row.opening_rate);
-        const { error: txErr } = await supabase.from("transactions").insert([{
-          product_id: productDbId, location_id: locId, transaction_type: "inward",
-          quantity: safeQty, rate: safeRate,
-          party: "Opening Stock", created_by_email: user?.email || "", created_at: new Date().toISOString(),
-        }]);
-        if (txErr) throw txErr;
-        txnCreated++;
+        const created = await ensureOfficeEntry({
+          productDbId,
+          locId,
+          qty:       safeQty,
+          rate:      safeRate,
+          userEmail: user?.email || "",
+        });
+        if (created) txnCreated++;
       } catch (err) { errors.push(`"${row.name}": ${err.message}`); }
     }
 
@@ -551,7 +591,8 @@ export default function OfficeStock() {
               <p className="text-xs text-blue-600 mt-1.5">
                 ✅ Use <strong>stock</strong> as your column header for opening quantity.<br />
                 ✅ No <em>unit</em> column needed — defaults to Pcs automatically.<br />
-                ✅ Setting <strong>stock = 0</strong> is valid and will make the item appear in Office Stock.
+                ✅ Setting <strong>stock = 0</strong> is valid and will make the item appear in Office Stock.<br />
+                ✅ Re-uploading is safe — existing office entries won't be duplicated.
               </p>
               <div className="flex gap-3 mt-2 flex-wrap">
                 <button onClick={downloadSampleCSV} className="text-blue-600 underline text-xs font-semibold">⬇ Sample CSV</button>
@@ -604,7 +645,7 @@ export default function OfficeStock() {
                 <p className="font-bold text-green-700 mb-1">✅ Upload Complete</p>
                 <p className="text-green-800">New items: <strong>{bulkResult.added}</strong></p>
                 <p className="text-green-800">Updated: <strong>{bulkResult.updated}</strong></p>
-                <p className="text-green-800">Transactions created: <strong>{bulkResult.txnCreated}</strong></p>
+                <p className="text-green-800">Office entries created: <strong>{bulkResult.txnCreated}</strong></p>
                 {bulkResult.errors.length > 0 && (
                   <div className="mt-2">
                     <p className="text-red-700 font-semibold">Errors ({bulkResult.errors.length}):</p>
@@ -741,31 +782,37 @@ export default function OfficeStock() {
                                         <div className="font-medium text-gray-800 text-sm">{item.product_name}</div>
                                         <div className="text-xs text-gray-400 font-mono mt-0.5">{item.product_id}</div>
                                       </td>
-                                      {/* Stock number + Low / High badge */}
+                                      {/* Stock number + Low / High / Zero badge */}
                                       <td className="py-3 px-4">
                                         <div className="flex items-center gap-2">
-                                          <span className={`font-bold tabular-nums text-sm ${
-                                            status === "zero" ? "text-red-600" :
-                                            status === "low"  ? "text-orange-600" :
-                                            status === "high" ? "text-emerald-700" :
-                                            "text-gray-900"
-                                          }`}>{stock}</span>
-                                          {(status === "low" || status === "zero") && (
-                                            <span className="inline-flex items-center gap-0.5 text-xs font-semibold px-2 py-0.5 rounded-full border text-orange-600 bg-orange-50 border-orange-200">
+                                          <span className={`font-bold tabular-nums text-sm ${stock === 0 ? "text-red-500" : "text-gray-900"}`}>
+                                            {stock}
+                                          </span>
+                                          {status === "zero" && (
+                                            <span className="inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full border border-red-200 bg-red-50 text-red-600">
+                                              ⚠ Low
+                                            </span>
+                                          )}
+                                          {status === "low" && (
+                                            <span className="inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full border border-orange-200 bg-orange-50 text-orange-600">
                                               ⚠ Low
                                             </span>
                                           )}
                                           {status === "high" && (
-                                            <span className="inline-flex items-center gap-0.5 text-xs font-semibold px-2 py-0.5 rounded-full border text-emerald-700 bg-emerald-50 border-emerald-200">
-                                              ↑ High
+                                            <span className="inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full border border-emerald-200 bg-emerald-50 text-emerald-700">
+                                              ✓ High
                                             </span>
                                           )}
                                         </div>
                                       </td>
                                       <td className="py-3 px-4 text-sm text-gray-500">{item.unit || "Pcs"}</td>
-                                      <td className="py-3 px-5 text-right" onClick={e => e.stopPropagation()}>
-                                        <button onClick={(e) => handleDeleteFromOffice(e, item)} title="Remove from office stock"
-                                          className="text-gray-300 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100 p-1 rounded">
+                                      <td className="py-3 px-5 text-right">
+                                        <button
+                                          onClick={(e) => handleDeleteFromOffice(e, item)}
+                                          className="text-gray-300 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100 p-1 rounded"
+                                          title="Remove from office stock"
+                                          aria-label="Remove from office stock"
+                                        >
                                           🗑
                                         </button>
                                       </td>
@@ -786,38 +833,37 @@ export default function OfficeStock() {
         })}
       </div>
 
-      {/* ── STOCK PANEL ────────────────────────────────────────────────────────── */}
+      {/* ── TRANSACTION PANEL ──────────────────────────────────────────────────── */}
       {panelOpen && panelItem && (
         <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 px-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 mb-4 sm:mb-0">
             <div className="flex items-start justify-between mb-4">
               <div>
                 <h2 className="text-lg font-bold text-gray-900">{panelItem.product_name}</h2>
                 <p className="text-xs text-gray-400 font-mono mt-0.5">{panelItem.product_id}</p>
                 <p className="text-sm text-gray-500 mt-1">
-                  Current stock: <span className="font-bold text-gray-800">{calcOfficeStock(panelItem.id, transactions, officeLocationId)}</span> {panelItem.unit || "Pcs"}
+                  Current stock: <span className="font-bold text-gray-800 tabular-nums">
+                    {calcOfficeStock(panelItem.id, transactions, officeLocationId)}
+                  </span>
                 </p>
               </div>
-              <button onClick={() => setPanelOpen(false)} className="text-gray-400 hover:text-gray-700 text-2xl font-bold ml-4">×</button>
+              <button onClick={() => setPanelOpen(false)} className="text-gray-400 hover:text-gray-600 text-2xl font-bold leading-none">×</button>
             </div>
             <div className="space-y-3">
-              <div>
-                <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Transaction Type</label>
-                <div className="flex gap-2">
-                  {["inward", "outward"].map(t => (
-                    <button key={t} onClick={() => setForm(f => ({ ...f, type: t }))}
-                      className={`flex-1 py-2 rounded-xl font-bold text-sm transition-colors ${
-                        form.type === t ? (t === "inward" ? "bg-green-600 text-white" : "bg-red-500 text-white") : "bg-gray-100 text-gray-600 hover:bg-gray-200"
-                      }`}>
-                      {t === "inward" ? "⬆ Inward" : "⬇ Outward"}
-                    </button>
-                  ))}
-                </div>
+              <div className="flex gap-2">
+                <button onClick={() => setForm(f => ({ ...f, type: "inward" }))}
+                  className={`flex-1 py-2.5 rounded-xl font-semibold text-sm transition-colors ${form.type === "inward" ? "bg-emerald-600 text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}>
+                  ↓ Inward
+                </button>
+                <button onClick={() => setForm(f => ({ ...f, type: "outward" }))}
+                  className={`flex-1 py-2.5 rounded-xl font-semibold text-sm transition-colors ${form.type === "outward" ? "bg-red-500 text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}>
+                  ↑ Outward
+                </button>
               </div>
               <div className="flex gap-3">
                 <div className="flex-1">
-                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Quantity *</label>
-                  <input type="number" min="0" value={form.qty} onChange={e => setForm(f => ({ ...f, qty: e.target.value }))}
+                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Qty *</label>
+                  <input type="number" min="1" value={form.qty} onChange={e => setForm(f => ({ ...f, qty: e.target.value }))}
                     placeholder="0" className="w-full border border-gray-300 rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-blue-400" />
                 </div>
                 <div className="flex-1">
@@ -829,7 +875,7 @@ export default function OfficeStock() {
               <div>
                 <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Party / Note</label>
                 <input value={form.party} onChange={e => setForm(f => ({ ...f, party: e.target.value }))}
-                  placeholder="Supplier or note" className="w-full border border-gray-300 rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-blue-400" />
+                  placeholder="Customer / supplier name" className="w-full border border-gray-300 rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-blue-400" />
               </div>
               <div>
                 <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Date</label>
@@ -840,7 +886,7 @@ export default function OfficeStock() {
             <div className="flex gap-3 mt-5">
               <button onClick={handleAddStock} disabled={saving}
                 className="flex-1 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-bold py-3 rounded-xl">
-                {saving ? "Saving..." : "✅ Save"}
+                {saving ? "Saving..." : "✅ Save Transaction"}
               </button>
               <button onClick={() => setPanelOpen(false)} className="flex-1 bg-gray-200 hover:bg-gray-300 text-gray-700 font-bold py-3 rounded-xl">Cancel</button>
             </div>
