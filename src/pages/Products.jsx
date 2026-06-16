@@ -78,22 +78,12 @@ function buildCatalog(products) {
   return catalog;
 }
 
-// ─── Inch fraction lookup table ───────────────────────────────────────────────
-// Product names use inch notation like: 1/4", 1/2", 3/4", 1", 11/4", 11/2", 2", etc.
-// "11/4" means 1+1/4 = 1.25, "11/2" means 1+1/2 = 1.5, "21/2" means 2+1/2 = 2.5
-// Standard pipe NB sizes in inches for reference:
-//   1/8" → 0.125,  1/4" → 0.25,  3/8" → 0.375,  1/2" → 0.5,  3/4" → 0.75
-//   1" → 1,  11/4" → 1.25,  11/2" → 1.5,  2" → 2,  21/2" → 2.5
-//   3" → 3,  4" → 4,  5" → 5,  6" → 6,  8" → 8,  10" → 10,  12" → 12
-
-// Converts a raw string like "11/2", "1/4", "3/4", "21/2" to a decimal inch value.
 function parseInchFraction(raw) {
-  // Better: split at the slash
   if (raw.includes("/")) {
     const slashIdx = raw.indexOf("/");
-    const denomStr = raw.slice(slashIdx + 1);          // e.g. "2"
-    const numerStr = raw.slice(slashIdx - 1, slashIdx); // last digit before slash = numerator
-    const wholeStr = raw.slice(0, slashIdx - 1);        // everything before that digit
+    const denomStr = raw.slice(slashIdx + 1);
+    const numerStr = raw.slice(slashIdx - 1, slashIdx);
+    const wholeStr = raw.slice(0, slashIdx - 1);
     const whole = wholeStr ? parseInt(wholeStr, 10) : 0;
     const numer = parseInt(numerStr, 10);
     const denom = parseInt(denomStr, 10);
@@ -105,39 +95,16 @@ function parseInchFraction(raw) {
   return isNaN(plain) ? 0 : plain;
 }
 
-// ─── Smart size extractor ─────────────────────────────────────────────────
-// Handles all of these product name formats:
-//   "SS 304 PIPE SCH-10 1/2""       -> 0.5
-//   "SS 304 PIPE SCH-40 11/2""      -> 1.5
-//   "SS 304 PIPE SCH-40 3""         -> 3
-//   "SS 304 PIPE ERW 15 NB"         -> 15  (NB mm values left as-is, they're already numeric)
-//   "40 X 40 SQUARE"                -> 40  (mm square)
 function extractSizeKey(productName) {
-  // Normalise: collapse whitespace, keep special chars
   const n = productName.trim();
-
-  // ——— 1. Inch notation with " symbol: e.g. 1/4", 11/2", 3"
-  //   Regex: one or more digits optionally followed by /digits, then optional space, then "
   const inchMatch = n.match(/(\d+(?:\/\d+)?)\s*"/i);
-  if (inchMatch) {
-    return parseInchFraction(inchMatch[1]);
-  }
-
-  // ——— 2. NB notation: e.g. 15 NB, 100 NB
-  //   Only integer NB (mm) values; no fractions expected for NB
+  if (inchMatch) return parseInchFraction(inchMatch[1]);
   const nbMatch = n.match(/(\d+(?:\.\d+)?)\s*NB/i);
-  if (nbMatch) {
-    return parseFloat(nbMatch[1]);
-  }
-
-  // ——— 3. mm square/rectangular: e.g. "40 X 40", "25 X 50", "25MM"
+  if (nbMatch) return parseFloat(nbMatch[1]);
   const mmMatch = n.match(/(\d+(?:\.\d+)?)\s*(?:X\s|MM)/i);
   if (mmMatch) return parseFloat(mmMatch[1]);
-
-  // ——— 4. Fallback: first standalone number in name
   const anyNum = n.match(/(\d+(?:\.\d+)?)/);
   if (anyNum) return parseFloat(anyNum[1]);
-
   return 0;
 }
 
@@ -146,12 +113,10 @@ function sortProductsBySize(products) {
     const sizeA = extractSizeKey(a.product_name);
     const sizeB = extractSizeKey(b.product_name);
     if (sizeA !== sizeB) return sizeA - sizeB;
-    // same size: fall back to product_id
     return a.product_id.localeCompare(b.product_id);
   });
 }
 
-// ─── Category display order ───────────────────────────────────────────────────
 const CATEGORY_ORDER = [
   "SCH 5", "SCH 10", "SCH 20", "SCH 40", "SCH 80", "SCH 160",
   "Seamless",
@@ -170,6 +135,196 @@ function sortCategoryKeys(keys) {
     if (ib === -1) return -1;
     return ia - ib;
   });
+}
+
+// ─── Add to Stock Modal ───────────────────────────────────────────────────────
+
+function AddToStockModal({ product, targetLocations, onClose, onSuccess }) {
+  const [qty, setQty] = useState("");
+  const [rate, setRate] = useState("");
+  const [party, setParty] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const locationLabel = targetLocations.map(l => l.name).join(" + ");
+
+  const handleSave = async () => {
+    const quantity = Number(qty);
+    if (!quantity || quantity <= 0) {
+      alert("Please enter a valid quantity greater than 0.");
+      return;
+    }
+    setSaving(true);
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      const email = user?.email || "admin";
+      const rows = targetLocations.map(loc => ({
+        product_id: product.id,
+        location_id: loc.id,
+        transaction_type: "inward",
+        quantity,
+        rate: Number(rate) || 0,
+        party: party || "Manual Stock Entry",
+        created_by_email: email,
+      }));
+      const { error } = await supabase.from("transactions").insert(rows);
+      if (error) throw error;
+      onSuccess();
+    } catch (err) {
+      alert("Failed to add stock: " + err.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 px-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md">
+        {/* Header */}
+        <div className="px-6 py-4 bg-gradient-to-r from-green-600 to-green-700 rounded-t-2xl text-white flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="text-xs font-semibold uppercase tracking-widest text-green-200 mb-1">
+              ▲ Add Inward Stock → {locationLabel}
+            </div>
+            <h2 className="text-base font-bold leading-snug truncate">{product.product_name}</h2>
+            <p className="text-green-200 font-mono text-xs mt-0.5">{product.product_id}</p>
+          </div>
+          <button onClick={onClose} className="text-green-200 hover:text-white text-2xl font-light leading-none shrink-0">✕</button>
+        </div>
+
+        {/* Form */}
+        <div className="p-6 space-y-4">
+          <div>
+            <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">
+              Quantity <span className="text-red-500">*</span>
+            </label>
+            <input
+              type="number"
+              min="1"
+              placeholder="e.g. 50"
+              value={qty}
+              onChange={e => setQty(e.target.value)}
+              autoFocus
+              className="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-base font-semibold focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">
+              Rate / Unit Price (optional)
+            </label>
+            <input
+              type="number"
+              min="0"
+              placeholder="e.g. 250"
+              value={rate}
+              onChange={e => setRate(e.target.value)}
+              className="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-base focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">
+              Party / Remark (optional)
+            </label>
+            <input
+              type="text"
+              placeholder="e.g. Supplier name or Opening Stock"
+              value={party}
+              onChange={e => setParty(e.target.value)}
+              className="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent"
+            />
+          </div>
+
+          {targetLocations.length > 1 && (
+            <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs text-amber-700 font-medium">
+              ⚠ Same quantity will be added to <strong>both</strong> {locationLabel} separately.
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="px-6 pb-6 flex gap-3">
+          <button
+            onClick={onClose}
+            className="flex-1 border border-gray-300 text-gray-600 hover:bg-gray-50 font-semibold py-2.5 rounded-xl transition-colors text-sm"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleSave}
+            disabled={saving}
+            className="flex-2 bg-green-600 hover:bg-green-700 disabled:opacity-50 text-white font-bold py-2.5 px-6 rounded-xl transition-colors text-sm"
+          >
+            {saving ? "Saving..." : `▲ Add to ${locationLabel}`}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Add to Stock Dropdown Button ─────────────────────────────────────────────
+
+function AddToStockButton({ product, locations, onAdded }) {
+  const [open, setOpen] = useState(false);
+  const [modal, setModal] = useState(null); // { targetLocations: [...] }
+  const ref = useRef(null);
+
+  const officeLocation    = locations.find(l => l.name.toLowerCase().includes("office"));
+  const warehouseLocation = locations.find(l => l.name.toLowerCase().includes("warehouse") || l.name.toLowerCase().includes("godown"));
+
+  useEffect(() => {
+    const handler = (e) => {
+      if (ref.current && !ref.current.contains(e.target)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+
+  const options = [
+    officeLocation    && { label: "🏢 Office Stock",         locs: [officeLocation] },
+    warehouseLocation && { label: "🏭 Warehouse / Godown",   locs: [warehouseLocation] },
+    officeLocation && warehouseLocation && { label: "📦 Both Locations", locs: [officeLocation, warehouseLocation] },
+  ].filter(Boolean);
+
+  if (options.length === 0) return null;
+
+  return (
+    <>
+      <div ref={ref} className="relative" onClick={e => e.stopPropagation()}>
+        <button
+          onClick={() => setOpen(o => !o)}
+          className="flex items-center gap-1 bg-green-600 hover:bg-green-700 text-white text-xs font-bold px-2.5 py-1.5 rounded-lg transition-colors whitespace-nowrap"
+        >
+          + Add Stock
+          <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
+            <path d="M6 9l6 6 6-6"/>
+          </svg>
+        </button>
+
+        {open && (
+          <div className="absolute right-0 top-full mt-1 w-48 bg-white border border-gray-200 rounded-xl shadow-xl z-40 overflow-hidden">
+            {options.map(opt => (
+              <button
+                key={opt.label}
+                onClick={() => { setOpen(false); setModal({ targetLocations: opt.locs }); }}
+                className="w-full text-left px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-green-50 hover:text-green-700 transition-colors flex items-center gap-2"
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {modal && (
+        <AddToStockModal
+          product={product}
+          targetLocations={modal.targetLocations}
+          onClose={() => setModal(null)}
+          onSuccess={() => { setModal(null); onAdded(); }}
+        />
+      )}
+    </>
+  );
 }
 
 // ─── Main Component ──────────────────────────────────────────────────────────
@@ -856,18 +1011,23 @@ export default function Products() {
                                           <td className={`px-4 py-3 text-center font-bold tabular-nums ${isLow ? "text-red-600" : "text-gray-800"}`}>
                                             {total}
                                           </td>
-                                          <td className="px-4 py-3 text-center">
-                                            <div className="flex gap-1 justify-center">
+                                          <td className="px-4 py-3 text-center" onClick={e => e.stopPropagation()}>
+                                            <div className="flex gap-1 justify-center items-center">
+                                              <AddToStockButton
+                                                product={p}
+                                                locations={locations}
+                                                onAdded={loadStockSummary}
+                                              />
                                               <button
                                                 onClick={(e) => handleEditClick(e, p)}
-                                                className="bg-orange-100 hover:bg-orange-200 text-orange-700 text-xs px-2 py-1 rounded font-semibold transition-colors"
+                                                className="bg-orange-100 hover:bg-orange-200 text-orange-700 text-xs px-2 py-1.5 rounded font-semibold transition-colors"
                                               >
                                                 Edit
                                               </button>
                                               {isAdmin && (
                                                 <button
                                                   onClick={(e) => handleDeleteProduct(e, p.product_id)}
-                                                  className="bg-red-100 hover:bg-red-200 text-red-700 text-xs px-2 py-1 rounded font-semibold transition-colors"
+                                                  className="bg-red-100 hover:bg-red-200 text-red-700 text-xs px-2 py-1.5 rounded font-semibold transition-colors"
                                                 >
                                                   Del
                                                 </button>
@@ -945,8 +1105,13 @@ export default function Products() {
                       <td className="p-3 tabular-nums">{stockByLocation(p.id, "Warehouse")}</td>
                       <td className="p-3 text-orange-600 font-semibold">{p.low_stock_alert}</td>
                       <td className="p-3 text-blue-600 font-semibold">{p.high_stock_alert || 0}</td>
-                      <td className="p-3">
-                        <div className="flex gap-2">
+                      <td className="p-3" onClick={e => e.stopPropagation()}>
+                        <div className="flex gap-1.5 items-center">
+                          <AddToStockButton
+                            product={p}
+                            locations={locations}
+                            onAdded={loadStockSummary}
+                          />
                           <button
                             onClick={(e) => handleEditClick(e, p)}
                             className="bg-yellow-400 hover:bg-yellow-500 text-white text-xs font-bold px-3 py-1.5 rounded transition-colors"
