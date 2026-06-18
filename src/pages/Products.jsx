@@ -149,7 +149,6 @@ function AddToStockModal({ product, targetLocations, onClose, onSuccess }) {
 
   const handleSave = async () => {
     const quantity = Number(qty);
-    // Allow 0 — useful for registering a product at a location with no opening stock
     if (isNaN(quantity) || quantity < 0) {
       alert("Please enter a valid quantity (0 or more).");
       return;
@@ -273,7 +272,7 @@ function AddToStockModal({ product, targetLocations, onClose, onSuccess }) {
 
 function AddToStockButton({ product, locations, onAdded }) {
   const [open, setOpen] = useState(false);
-  const [modal, setModal] = useState(null); // { targetLocations: [...] }
+  const [modal, setModal] = useState(null);
   const ref = useRef(null);
 
   const officeLocation    = locations.find(l => l.name.toLowerCase().includes("office"));
@@ -340,11 +339,12 @@ function AddToStockButton({ product, locations, onAdded }) {
 export default function Products() {
   const [products, setProducts] = useState([]);
   const [orderedIds, setOrderedIds] = useState([]);
-  const [stockSummary, setStockSummary] = useState({});
+  // stockMap: { [product_uuid]: { [location_uuid]: number } }
+  const [stockMap, setStockMap] = useState({});
   const [locations, setLocations] = useState([]);
   const [search, setSearch] = useState("");
   const [isAdmin, setIsAdmin] = useState(false);
-  const [viewMode, setViewMode] = useState("catalog"); // "catalog" | "table"
+  const [viewMode, setViewMode] = useState("catalog");
 
   const [latestTally, setLatestTally] = useState(null);
   const [tallyLoading, setTallyLoading] = useState(false);
@@ -384,7 +384,7 @@ export default function Products() {
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "transactions" },
-        () => { loadStockSummary(); }
+        () => { loadStockFromTransactions(); }
       )
       .subscribe();
 
@@ -440,19 +440,31 @@ export default function Products() {
     }
   };
 
-  const loadStockSummary = async () => {
+  // ── FIXED: compute stock directly from transactions table ─────────────────
+  // Previously used the stock_summary view which had a product_id type mismatch
+  // (view returned string product_id but we keyed by UUID p.id → always 0).
+  // Now we pull all transactions once and aggregate by product UUID + location UUID.
+  const loadStockFromTransactions = async () => {
     try {
-      const { data, error } = await supabase.from("stock_summary").select("*");
+      const { data, error } = await supabase
+        .from("transactions")
+        .select("product_id, location_id, transaction_type, quantity");
       if (error) throw error;
-      const summary = {};
-      (data || []).forEach(row => {
-        if (!summary[row.product_id]) summary[row.product_id] = {};
-        const qty = row.current_stock ?? row.total_stock ?? 0;
-        summary[row.product_id][row.location_name] = qty;
+
+      // map: { [product_uuid]: { [location_uuid]: number } }
+      const map = {};
+      (data || []).forEach(t => {
+        if (!map[t.product_id]) map[t.product_id] = {};
+        if (!map[t.product_id][t.location_id]) map[t.product_id][t.location_id] = 0;
+        if (t.transaction_type === "inward") {
+          map[t.product_id][t.location_id] += Number(t.quantity);
+        } else {
+          map[t.product_id][t.location_id] -= Number(t.quantity);
+        }
       });
-      setStockSummary(summary);
+      setStockMap(map);
     } catch (err) {
-      console.error("Failed to load stock summary:", err.message);
+      console.error("Failed to load stock from transactions:", err.message);
     }
   };
 
@@ -481,17 +493,18 @@ export default function Products() {
         setOrderedIds(getDefaultOrder(prod || []));
       }
 
-      await loadStockSummary();
+      await loadStockFromTransactions();
     } catch (err) {
       console.error("Failed loading data from Supabase:", err.message);
     }
   };
 
-  const stockByLocation = (productId, locationName) =>
-    stockSummary[productId]?.[locationName] ?? 0;
+  // Stock by product UUID + location UUID (no name matching — no mismatch possible)
+  const stockByLocation = (productUUID, locationUUID) =>
+    stockMap[productUUID]?.[locationUUID] ?? 0;
 
-  const totalStock = (productId) =>
-    Object.values(stockSummary[productId] || {}).reduce((s, v) => s + v, 0);
+  const totalStock = (productUUID) =>
+    Object.values(stockMap[productUUID] || {}).reduce((s, v) => s + v, 0);
 
   const saveOrder = (ids) => localStorage.setItem(STORAGE_KEY, JSON.stringify(ids));
 
@@ -590,7 +603,7 @@ export default function Products() {
         return { ...t, location_name: t.locations?.name || "", balance };
       });
       setLedger(calculated);
-      await loadStockSummary();
+      await loadStockFromTransactions();
     } catch (err) {
       console.error("Failed to load ledger:", err.message);
     } finally {
@@ -600,15 +613,19 @@ export default function Products() {
 
   const handleExportExcel = () => {
     if (!products.length) return;
-    const data = products.map(p => ({
-      Product_ID: p.product_id,
-      Product_Name: p.product_name,
-      Office: stockByLocation(p.id, "Office"),
-      Godown: stockByLocation(p.id, "Godown"),
-      Warehouse: stockByLocation(p.id, "Warehouse"),
-      Low_Alert: p.low_stock_alert,
-      High_Alert: p.high_stock_alert,
-    }));
+    const data = products.map(p => {
+      const row = {
+        Product_ID: p.product_id,
+        Product_Name: p.product_name,
+        Low_Alert: p.low_stock_alert,
+        High_Alert: p.high_stock_alert || 0,
+      };
+      locations.forEach(loc => {
+        row[loc.name] = stockByLocation(p.id, loc.id);
+      });
+      row.Total = totalStock(p.id);
+      return row;
+    });
     const ws = XLSX.utils.json_to_sheet(data);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Products");
@@ -625,21 +642,20 @@ export default function Products() {
       doc.setFontSize(8);
       doc.setTextColor(120, 120, 120);
       doc.text("Generated: " + new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" }), 14, 19);
-      const head = [["Product ID", "Product Name", "Office", "Godown", "Warehouse", "Low Alert", "High Alert"]];
+      const locationCols = locations.map(l => l.name);
+      const head = [["Product ID", "Product Name", ...locationCols, "Low Alert", "High Alert"]];
       const body = products.map(p => [
-        p.product_id, p.product_name,
-        String(stockByLocation(p.id, "Office")),
-        String(stockByLocation(p.id, "Godown")),
-        String(stockByLocation(p.id, "Warehouse")),
+        p.product_id,
+        p.product_name,
+        ...locations.map(loc => String(stockByLocation(p.id, loc.id))),
         String(p.low_stock_alert),
-        String(p.high_stock_alert || 0)
+        String(p.high_stock_alert || 0),
       ]);
       autoTable(doc, {
         head, body, startY: 23, theme: "grid",
         styles: { fontSize: 7, cellPadding: 2, overflow: "ellipsize", halign: "left", lineColor: [220, 220, 220], lineWidth: 0.2 },
         headStyles: { fillColor: [10, 42, 94], textColor: 255, fontStyle: "bold", fontSize: 7 },
         alternateRowStyles: { fillColor: [248, 249, 252] },
-        columnStyles: { 0: { cellWidth: 30 }, 1: { cellWidth: 80 }, 2: { cellWidth: 22, halign: "center" }, 3: { cellWidth: 22, halign: "center" }, 4: { cellWidth: 26, halign: "center" }, 5: { cellWidth: 22, halign: "center" }, 6: { cellWidth: 22, halign: "center" } },
         margin: { top: 23, left: 14, right: 14 }
       });
       doc.save("Products_Report.pdf");
@@ -706,9 +722,12 @@ export default function Products() {
             locationMap.forEach(loc => {
               const stock = Number(row[loc.headerKey] || 0);
               if (stock > 0) transactionsToInsert.push({
-                product_id: dbProduct.id, location_id: loc.id,
-                transaction_type: "inward", quantity: stock,
-                party: "Bulk Opening Stock", created_by_email: activeEmployee
+                product_id: dbProduct.id,
+                location_id: loc.id,
+                transaction_type: "inward",
+                quantity: stock,
+                party: "Bulk Opening Stock",
+                created_by_email: activeEmployee
               });
             });
           }
@@ -991,9 +1010,9 @@ export default function Products() {
                                     <tr>
                                       <th className="px-6 py-2 text-left font-semibold">Product ID</th>
                                       <th className="px-4 py-2 text-left font-semibold">Product Name</th>
-                                      <th className="px-4 py-2 text-center font-semibold">Office</th>
-                                      <th className="px-4 py-2 text-center font-semibold">Godown</th>
-                                      <th className="px-4 py-2 text-center font-semibold">Warehouse</th>
+                                      {locations.map(loc => (
+                                        <th key={loc.id} className="px-4 py-2 text-center font-semibold">{loc.name}</th>
+                                      ))}
                                       <th className="px-4 py-2 text-center font-semibold">Total</th>
                                       <th className="px-4 py-2 text-center font-semibold">Action</th>
                                     </tr>
@@ -1013,9 +1032,11 @@ export default function Products() {
                                             {p.product_name}
                                             {stockBadge(p)}
                                           </td>
-                                          <td className="px-4 py-3 text-center tabular-nums">{stockByLocation(p.id, "Office")}</td>
-                                          <td className="px-4 py-3 text-center tabular-nums">{stockByLocation(p.id, "Godown")}</td>
-                                          <td className="px-4 py-3 text-center tabular-nums">{stockByLocation(p.id, "Warehouse")}</td>
+                                          {locations.map(loc => (
+                                            <td key={loc.id} className="px-4 py-3 text-center tabular-nums">
+                                              {stockByLocation(p.id, loc.id)}
+                                            </td>
+                                          ))}
                                           <td className={`px-4 py-3 text-center font-bold tabular-nums ${isLow ? "text-red-600" : "text-gray-800"}`}>
                                             {total}
                                           </td>
@@ -1024,7 +1045,7 @@ export default function Products() {
                                               <AddToStockButton
                                                 product={p}
                                                 locations={locations}
-                                                onAdded={loadStockSummary}
+                                                onAdded={loadStockFromTransactions}
                                               />
                                               <button
                                                 onClick={(e) => handleEditClick(e, p)}
@@ -1070,9 +1091,9 @@ export default function Products() {
                 <th className="p-3 w-10 text-gray-400 text-xs uppercase">Order</th>
                 <th className="p-3">Product ID</th>
                 <th className="p-3">Product Name</th>
-                <th className="p-3">Office</th>
-                <th className="p-3">Godown</th>
-                <th className="p-3">Warehouse</th>
+                {locations.map(loc => (
+                  <th key={loc.id} className="p-3">{loc.name}</th>
+                ))}
                 <th className="p-3">Low Alert</th>
                 <th className="p-3">High Alert</th>
                 <th className="p-3">Action</th>
@@ -1080,7 +1101,7 @@ export default function Products() {
             </thead>
             <tbody>
               {filtered.length === 0 ? (
-                <tr><td colSpan="9" className="p-4 text-gray-500 text-center">No products found</td></tr>
+                <tr><td colSpan={5 + locations.length} className="p-4 text-gray-500 text-center">No products found</td></tr>
               ) : (
                 filtered.map((p, index) => {
                   const isDraggedRow = isDragging && dragIndexRef.current === index;
@@ -1108,9 +1129,9 @@ export default function Products() {
                         {p.product_name}
                         {stockBadge(p)}
                       </td>
-                      <td className="p-3 tabular-nums">{stockByLocation(p.id, "Office")}</td>
-                      <td className="p-3 tabular-nums">{stockByLocation(p.id, "Godown")}</td>
-                      <td className="p-3 tabular-nums">{stockByLocation(p.id, "Warehouse")}</td>
+                      {locations.map(loc => (
+                        <td key={loc.id} className="p-3 tabular-nums">{stockByLocation(p.id, loc.id)}</td>
+                      ))}
                       <td className="p-3 text-orange-600 font-semibold">{p.low_stock_alert}</td>
                       <td className="p-3 text-blue-600 font-semibold">{p.high_stock_alert || 0}</td>
                       <td className="p-3" onClick={e => e.stopPropagation()}>
@@ -1118,7 +1139,7 @@ export default function Products() {
                           <AddToStockButton
                             product={p}
                             locations={locations}
-                            onAdded={loadStockSummary}
+                            onAdded={loadStockFromTransactions}
                           />
                           <button
                             onClick={(e) => handleEditClick(e, p)}
@@ -1171,7 +1192,7 @@ export default function Products() {
                   {locations.map(loc => (
                     <div key={loc.id} className="flex flex-col items-center bg-white border border-gray-200 rounded-xl px-5 py-3 shadow-sm min-w-[90px]">
                       <span className="text-xs text-gray-400 uppercase tracking-wide font-semibold mb-1">{loc.name}</span>
-                      <span className="text-2xl font-extrabold text-blue-700 tabular-nums">{stockByLocation(selectedProduct.id, loc.name)}</span>
+                      <span className="text-2xl font-extrabold text-blue-700 tabular-nums">{stockByLocation(selectedProduct.id, loc.id)}</span>
                     </div>
                   ))}
                   <div className="flex flex-col items-center bg-blue-700 border border-blue-700 rounded-xl px-5 py-3 shadow-sm min-w-[90px]">
