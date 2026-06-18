@@ -179,7 +179,6 @@ function AddToStockModal({ product, targetLocations, onClose, onSuccess }) {
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 px-4">
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md">
-        {/* Header */}
         <div className="px-6 py-4 bg-gradient-to-r from-green-600 to-green-700 rounded-t-2xl text-white flex items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="text-xs font-semibold uppercase tracking-widest text-green-200 mb-1">
@@ -191,7 +190,6 @@ function AddToStockModal({ product, targetLocations, onClose, onSuccess }) {
           <button onClick={onClose} className="text-green-200 hover:text-white text-2xl font-light leading-none shrink-0">✕</button>
         </div>
 
-        {/* Form */}
         <div className="p-6 space-y-4">
           <div>
             <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">
@@ -247,7 +245,6 @@ function AddToStockModal({ product, targetLocations, onClose, onSuccess }) {
           )}
         </div>
 
-        {/* Footer */}
         <div className="px-6 pb-6 flex gap-3">
           <button
             onClick={onClose}
@@ -267,8 +264,6 @@ function AddToStockModal({ product, targetLocations, onClose, onSuccess }) {
     </div>
   );
 }
-
-// ─── Add to Stock Dropdown Button ─────────────────────────────────────────────
 
 function AddToStockButton({ product, locations, onAdded }) {
   const [open, setOpen] = useState(false);
@@ -334,12 +329,9 @@ function AddToStockButton({ product, locations, onAdded }) {
   );
 }
 
-// ─── Main Component ──────────────────────────────────────────────────────────
-
 export default function Products() {
   const [products, setProducts] = useState([]);
   const [orderedIds, setOrderedIds] = useState([]);
-  // stockMap: { [product_uuid]: { [location_uuid]: number } }
   const [stockMap, setStockMap] = useState({});
   const [locations, setLocations] = useState([]);
   const [search, setSearch] = useState("");
@@ -440,10 +432,6 @@ export default function Products() {
     }
   };
 
-  // ── FIXED: compute stock directly from transactions table ─────────────────
-  // Previously used the stock_summary view which had a product_id type mismatch
-  // (view returned string product_id but we keyed by UUID p.id → always 0).
-  // Now we pull all transactions once and aggregate by product UUID + location UUID.
   const loadStockFromTransactions = async () => {
     try {
       const { data, error } = await supabase
@@ -451,7 +439,6 @@ export default function Products() {
         .select("product_id, location_id, transaction_type, quantity");
       if (error) throw error;
 
-      // map: { [product_uuid]: { [location_uuid]: number } }
       const map = {};
       (data || []).forEach(t => {
         if (!map[t.product_id]) map[t.product_id] = {};
@@ -499,12 +486,15 @@ export default function Products() {
     }
   };
 
-  // Stock by product UUID + location UUID (no name matching — no mismatch possible)
-  const stockByLocation = (productUUID, locationUUID) =>
-    stockMap[productUUID]?.[locationUUID] ?? 0;
+  const stockByLocation = (productUUID, locationUUID) => {
+    const v = stockMap[productUUID]?.[locationUUID] ?? 0;
+    return Object.is(v, -0) ? 0 : v;
+  };
 
-  const totalStock = (productUUID) =>
-    Object.values(stockMap[productUUID] || {}).reduce((s, v) => s + v, 0);
+  const totalStock = (productUUID) => {
+    const t = Object.values(stockMap[productUUID] || {}).reduce((s, v) => s + v, 0);
+    return Object.is(t, -0) ? 0 : t;
+  };
 
   const saveOrder = (ids) => localStorage.setItem(STORAGE_KEY, JSON.stringify(ids));
 
@@ -848,7 +838,6 @@ export default function Products() {
 
   return (
     <div className="p-6">
-      {/* PAGE HEADER */}
       <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
         <h1 className="text-3xl font-bold">Products</h1>
         <div className="flex gap-2 items-center flex-wrap">
@@ -887,7 +876,6 @@ export default function Products() {
         </div>
       )}
 
-      {/* ADD / EDIT FORM */}
       <div className="bg-white shadow rounded p-4 mb-6">
         <div className="flex gap-3 items-center flex-wrap">
           <input name="product_id" placeholder="Product ID" value={form.product_id} onChange={handleChange} disabled={!!editingId} className="border p-2 rounded flex-1 min-w-[150px] disabled:bg-gray-100" />
@@ -940,7 +928,6 @@ export default function Products() {
         )}
       </div>
 
-      {/* SEARCH + RESET ORDER */}
       <div className="flex gap-3 items-center mb-4">
         <input
           placeholder="Search by ID or Name..."
@@ -955,7 +942,6 @@ export default function Products() {
         )}
       </div>
 
-      {/* CATALOG VIEW */}
       {viewMode === "catalog" && (
         <div className="space-y-3">
           {materialKeys.length === 0 ? (
@@ -1082,7 +1068,6 @@ export default function Products() {
         </div>
       )}
 
-      {/* TABLE VIEW */}
       {viewMode === "table" && (
         <div className="bg-white shadow rounded overflow-hidden">
           <table className="w-full">
@@ -1166,11 +1151,9 @@ export default function Products() {
         </div>
       )}
 
-      {/* LEDGER MODAL */}
       {selectedProduct && (
         <div className="fixed inset-0 bg-black/60 flex items-start justify-center z-50 pt-10 px-4 pb-4">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-5xl max-h-[88vh] flex flex-col">
-
             <div className="px-7 py-5 border-b bg-gradient-to-r from-blue-700 to-blue-800 rounded-t-2xl text-white">
               <div className="flex items-start justify-between gap-4">
                 <div className="flex-1 min-w-0">
