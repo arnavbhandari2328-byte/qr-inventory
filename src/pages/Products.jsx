@@ -291,7 +291,14 @@ export default function Products() {
   // ── Bulk upload ──────────────────────────────────────────────────────────────
   const downloadTemplate = () => {
     const ws = XLSX.utils.json_to_sheet([
-      { product_id: "NM-PP-001", product_name: "Example Product 25NB 304", low_stock_alert: 10 },
+      {
+        product_id:      "NM-PP-001",
+        product_name:    "Example Product 25NB 304",
+        stock:           100,
+        low_alert:       10,
+        high_alert:      500,
+        location:        "warehouse",
+      },
     ]);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Products");
@@ -309,12 +316,46 @@ export default function Products() {
         const raw = XLSX.utils.sheet_to_json(ws, { defval: "" });
         const errors = [];
         const rows = raw.map((r, i) => {
-          const name = String(r.product_name || r.Product_Name || r["Product Name"] || "").trim();
-          if (!name) errors.push(`Row ${i+2}: product_name is required`);
+          // product_name is required
+          const name = String(
+            r.product_name || r.Product_Name || r["Product Name"] || ""
+          ).trim();
+          if (!name) errors.push(`Row ${i + 2}: product_name is required`);
+
+          // stock column
+          const stockVal = r.stock !== undefined ? r.stock
+            : r.Stock !== undefined ? r.Stock
+            : r["Stock"] !== undefined ? r["Stock"]
+            : "";
+          const stockNum = stockVal !== "" ? Number(stockVal) || 0 : null;
+
+          // low_alert column
+          const lowVal = r.low_alert !== undefined ? r.low_alert
+            : r.Low_Alert !== undefined ? r.Low_Alert
+            : r["Low Alert"] !== undefined ? r["Low Alert"]
+            : r.low_stock_alert !== undefined ? r.low_stock_alert
+            : "";
+          const lowNum = lowVal !== "" ? Number(lowVal) || null : null;
+
+          // high_alert column
+          const highVal = r.high_alert !== undefined ? r.high_alert
+            : r.High_Alert !== undefined ? r.High_Alert
+            : r["High Alert"] !== undefined ? r["High Alert"]
+            : "";
+          const highNum = highVal !== "" ? Number(highVal) || null : null;
+
+          // location column
+          const locationName = String(
+            r.location || r.Location || r["Location"] || ""
+          ).trim().toLowerCase() || null;
+
           return {
-            product_id:      String(r.product_id || r.Product_ID || r["Product ID"] || "").trim() || null,
-            product_name:    name,
-            low_stock_alert: r.low_stock_alert || r.Low_Alert ? Number(r.low_stock_alert || r.Low_Alert) || null : null,
+            product_id:        String(r.product_id || r.Product_ID || r["Product ID"] || "").trim() || null,
+            product_name:      name,
+            low_stock_alert:   lowNum,
+            high_stock_alert:  highNum,
+            _stock:            stockNum,
+            _location:         locationName,
           };
         }).filter(r => r.product_name);
         setBulkRows(rows);
@@ -330,16 +371,56 @@ export default function Products() {
   const handleBulkSave = async () => {
     if (!bulkRows.length) return;
     setBulkSaving(true);
+
     const CHUNK = 50;
-    for (let i = 0; i < bulkRows.length; i += CHUNK) {
-      await supabase.from("products").upsert(bulkRows.slice(i, i + CHUNK), { onConflict: "product_name" });
+
+    // 1. Upsert product records (without the _stock/_location helper fields)
+    const productPayloads = bulkRows.map(({ _stock, _location, ...rest }) => rest);
+    for (let i = 0; i < productPayloads.length; i += CHUNK) {
+      await supabase.from("products").upsert(productPayloads.slice(i, i + CHUNK), { onConflict: "product_name" });
     }
+
+    // 2. If any row has a stock value, insert opening-stock inward transactions
+    const rowsWithStock = bulkRows.filter(r => r._stock !== null && r._stock > 0);
+    if (rowsWithStock.length > 0) {
+      // Refresh products to get their UUIDs after upsert
+      const { data: freshProducts } = await supabase.from("products").select("id, product_name");
+      const nameToId = {};
+      (freshProducts || []).forEach(p => { nameToId[p.product_name] = p.id; });
+
+      const txns = [];
+      for (const row of rowsWithStock) {
+        const productUUID = nameToId[row.product_name];
+        if (!productUUID) continue;
+
+        // Find the location id; default to first location if not matched
+        let locId = null;
+        if (row._location) {
+          const matched = locations.find(l => l.name?.toLowerCase() === row._location);
+          if (matched) locId = matched.id;
+        }
+        if (!locId && locations.length > 0) locId = locations[0].id;
+        if (!locId) continue;
+
+        txns.push({
+          product_id:       productUUID,
+          location_id:      locId,
+          transaction_type: "inward",
+          quantity:         row._stock,
+          notes:            "Bulk upload opening stock",
+        });
+      }
+      for (let i = 0; i < txns.length; i += CHUNK) {
+        await supabase.from("transactions").insert(txns.slice(i, i + CHUNK));
+      }
+    }
+
     setBulkSaving(false);
     setShowBulk(false);
     setBulkRows([]);
     setBulkErrors([]);
     if (fileRef.current) fileRef.current.value = "";
-    await loadProducts();
+    await loadAll();
   };
 
   // ── Delete ───────────────────────────────────────────────────────────────────
@@ -598,7 +679,16 @@ export default function Products() {
               ⬇ Download Template
             </button>
           </div>
-          <p className="text-xs text-gray-500 mb-3">Upload an Excel (.xlsx) or CSV file with columns: <code className="bg-gray-100 px-1 rounded">product_id</code>, <code className="bg-gray-100 px-1 rounded">product_name</code>, <code className="bg-gray-100 px-1 rounded">low_stock_alert</code>. Existing products (matched by name) will be updated.</p>
+          <p className="text-xs text-gray-500 mb-3">
+            Upload an Excel (.xlsx) or CSV file with columns:{" "}
+            <code className="bg-gray-100 px-1 rounded">product_id</code>,{" "}
+            <code className="bg-gray-100 px-1 rounded">product_name</code>,{" "}
+            <code className="bg-gray-100 px-1 rounded">stock</code>,{" "}
+            <code className="bg-gray-100 px-1 rounded">low_alert</code>,{" "}
+            <code className="bg-gray-100 px-1 rounded">high_alert</code>,{" "}
+            <code className="bg-gray-100 px-1 rounded">location</code>.{" "}
+            Existing products (matched by name) will be updated. Stock value will be added as an opening inward transaction for the given location.
+          </p>
           <input ref={fileRef} type="file" accept=".xlsx,.csv,.xls" onChange={handleBulkFile} className="block w-full text-sm text-gray-600 file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-blue-50 file:text-blue-700 file:font-semibold hover:file:bg-blue-100 mb-3" />
           {bulkErrors.length > 0 && (
             <div className="bg-red-50 border border-red-200 rounded-lg p-3 mb-3">
@@ -613,336 +703,36 @@ export default function Products() {
                   <thead className="sticky top-0 bg-gray-50">
                     <tr>
                       <th className="px-3 py-2 text-left text-gray-500 font-bold">Product ID</th>
-                      <th className="px-3 py-2 text-left text-gray-500 font-bold">Name</th>
-                      <th className="px-3 py-2 text-center text-gray-500 font-bold">Alert</th>
+                      <th className="px-3 py-2 text-left text-gray-500 font-bold">Product Name</th>
+                      <th className="px-3 py-2 text-left text-gray-500 font-bold">Stock</th>
+                      <th className="px-3 py-2 text-left text-gray-500 font-bold">Low Alert</th>
+                      <th className="px-3 py-2 text-left text-gray-500 font-bold">High Alert</th>
+                      <th className="px-3 py-2 text-left text-gray-500 font-bold">Location</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-gray-50">
-                    {bulkRows.map((r,i) => (
-                      <tr key={i} className="hover:bg-gray-50">
-                        <td className="px-3 py-2 font-mono text-gray-400">{r.product_id || "—"}</td>
-                        <td className="px-3 py-2 font-semibold text-gray-700">{r.product_name}</td>
-                        <td className="px-3 py-2 text-center text-gray-500">{r.low_stock_alert ?? "—"}</td>
+                  <tbody>
+                    {bulkRows.map((r, i) => (
+                      <tr key={i} className={i % 2 === 0 ? "bg-white" : "bg-gray-50"}>
+                        <td className="px-3 py-1.5 font-mono text-gray-600">{r.product_id || "—"}</td>
+                        <td className="px-3 py-1.5 text-gray-800 font-medium">{r.product_name}</td>
+                        <td className="px-3 py-1.5 text-gray-600">{r._stock ?? "—"}</td>
+                        <td className="px-3 py-1.5 text-gray-600">{r.low_stock_alert ?? "—"}</td>
+                        <td className="px-3 py-1.5 text-gray-600">{r.high_stock_alert ?? "—"}</td>
+                        <td className="px-3 py-1.5 text-gray-600">{r._location || "—"}</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
-              <div className="flex gap-2">
-                <button onClick={() => { setBulkRows([]); setBulkErrors([]); if (fileRef.current) fileRef.current.value = ""; }} className="flex-1 border border-gray-200 py-2 rounded-lg text-sm font-semibold text-gray-600 hover:bg-gray-50">Clear</button>
-                <button onClick={handleBulkSave} disabled={bulkSaving} style={{ background:"#0369A1" }} className="flex-1 py-2 rounded-lg text-sm font-bold text-white disabled:opacity-50 hover:opacity-90">
-                  {bulkSaving ? "Importing…" : `Import ${bulkRows.length} Products`}
-                </button>
-              </div>
+              <button
+                onClick={handleBulkSave}
+                disabled={bulkSaving}
+                style={{ background:"#0369A1" }}
+                className="text-white px-5 py-2 rounded-lg text-sm font-bold hover:opacity-90 transition disabled:opacity-50"
+              >
+                {bulkSaving ? "Importing…" : `Import ${bulkRows.length} Products`}
+              </button>
             </>
           )}
         </div>
       )}
-
-      {/* ADD FORM */}
-      {showAddForm && (
-        <div className="bg-white border-l-4 shadow rounded-xl p-5 mb-5 grid grid-cols-1 sm:grid-cols-4 gap-3" style={{ borderColor:"#E8630A" }}>
-          <input placeholder="Product ID (optional)" value={form.product_id} onChange={e => setForm({ ...form, product_id: e.target.value })}
-            className="border border-gray-200 px-3 py-2 rounded-lg text-sm focus:outline-none" />
-          <input placeholder="Product Name *" value={form.product_name} onChange={e => setForm({ ...form, product_name: e.target.value })}
-            className="border border-gray-200 px-3 py-2 rounded-lg text-sm focus:outline-none sm:col-span-2" />
-          <input placeholder="Low Stock Alert" value={form.low_stock_alert} type="number" onChange={e => setForm({ ...form, low_stock_alert: e.target.value })}
-            className="border border-gray-200 px-3 py-2 rounded-lg text-sm focus:outline-none" />
-          <button onClick={handleAddProduct} disabled={saving || !form.product_name.trim()}
-            style={{ background:"#1B3A6B" }} className="sm:col-span-4 disabled:opacity-50 text-white py-2.5 rounded-lg text-sm font-bold transition hover:opacity-90">
-            {saving ? "Adding…" : "Add Product"}
-          </button>
-        </div>
-      )}
-
-      {/* SEARCH */}
-      <div className="relative mb-5">
-        <svg className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
-        <input placeholder="Search by product ID or name…" value={search} onChange={e => setSearch(e.target.value)}
-          className="w-full border border-gray-200 pl-10 pr-4 py-2.5 rounded-xl text-sm focus:outline-none bg-white shadow-sm" />
-      </div>
-
-      {/* CATEGORY PILLS */}
-      <div className="flex flex-wrap gap-2 mb-5">
-        {CATEGORIES.filter(c => grouped[c.key]).map(c => (
-          <button key={c.key} onClick={() => toggleCat(c.key)}
-            style={{ background: openCats[c.key] === false ? c.light : c.color, color: openCats[c.key] === false ? c.color : "#fff", border:`1.5px solid ${c.color}` }}
-            className="px-3 py-1 rounded-full text-xs font-bold transition-all">
-            {c.icon} {c.label} ({Object.values(grouped[c.key]?.grades||{}).flat().length})
-          </button>
-        ))}
-      </div>
-
-      {loading ? (
-        <div className="flex items-center justify-center py-20 text-gray-400">
-          <svg className="animate-spin mr-2" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
-          Loading products…
-        </div>
-      ) : filtered.length === 0 ? (
-        <div className="text-center py-20 text-gray-400">
-          <svg className="mx-auto mb-3 opacity-40" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
-          <p className="font-semibold">No products found</p>
-          <p className="text-sm mt-1">Try a different search term</p>
-        </div>
-      ) : (
-        <div className="space-y-4">
-          {catOrder.map(catKey => {
-            const { cat, grades } = grouped[catKey];
-            const totalProducts   = Object.values(grades).flat().length;
-            const totalQty        = Object.values(grades).flat().reduce((s,p) => s + totalStock(p.id), 0);
-            const isOpen          = openCats[catKey] !== false;
-
-            return (
-              <div key={catKey} className="rounded-2xl overflow-hidden shadow-sm" style={{ border:`1.5px solid ${cat.color}22` }}>
-                <button onClick={() => toggleCat(catKey)} className="w-full flex items-center justify-between px-5 py-4 transition-colors text-left" style={{ background: cat.light }}>
-                  <div className="flex items-center gap-3">
-                    <div className="w-9 h-9 rounded-xl flex items-center justify-center text-white font-black text-lg shadow-sm" style={{ background: cat.color }}>
-                      {cat.icon}
-                    </div>
-                    <div>
-                      <p className="font-black text-base" style={{ color: cat.color }}>{cat.label}</p>
-                      <p className="text-xs text-gray-500 mt-0.5">{totalProducts} products · {totalQty.toLocaleString()} units total · {Object.keys(grades).length} group{Object.keys(grades).length !== 1 ? 's' : ''}</p>
-                    </div>
-                  </div>
-                  <svg className="transition-transform" style={{ transform: isOpen ? "rotate(180deg)" : "rotate(0deg)", color: cat.color }} width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="m6 9 6 6 6-6"/></svg>
-                </button>
-
-                {isOpen && (
-                  <div className="bg-white">
-                    {Object.keys(grades).sort(gradeSort).map(grade => {
-                      const gradeKey    = `${catKey}-${grade}`;
-                      const isGradeOpen = openGrades[gradeKey] !== false;
-                      const items       = grades[grade];
-                      const gradeQty    = items.reduce((s,p) => s + totalStock(p.id), 0);
-
-                      return (
-                        <div key={grade} className="border-t border-gray-50">
-                          <button onClick={() => toggleGrade(gradeKey)} className="w-full flex items-center justify-between px-5 py-3 hover:bg-gray-50 transition text-left" style={{ background:"#FAFAF9" }}>
-                            <div className="flex items-center gap-2.5">
-                              <span className="inline-flex items-center px-2.5 py-0.5 rounded-md text-xs font-bold text-white" style={{ background: cat.color }}>{grade}</span>
-                              <span className="text-sm font-semibold text-gray-600">{items.length} item{items.length !== 1 ? 's' : ''}</span>
-                              <span className="text-xs text-gray-400">· {gradeQty.toLocaleString()} units</span>
-                            </div>
-                            <svg className="transition-transform text-gray-400" style={{ transform: isGradeOpen ? "rotate(180deg)" : "rotate(0deg)" }} width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="m6 9 6 6 6-6"/></svg>
-                          </button>
-
-                          {isGradeOpen && (
-                            <div className="overflow-x-auto">
-                              <table className="w-full text-sm">
-                                <thead>
-                                  <tr style={{ background: cat.light }} className="text-xs font-bold uppercase tracking-wide">
-                                    <th className="px-4 py-2.5 text-left" style={{ color: cat.color }}>Product ID</th>
-                                    <th className="px-4 py-2.5 text-left" style={{ color: cat.color }}>Name</th>
-                                    <th className="px-4 py-2.5 text-center" style={{ color: cat.color }}>Office</th>
-                                    <th className="px-4 py-2.5 text-center" style={{ color: cat.color }}>Warehouse</th>
-                                    <th className="px-4 py-2.5 text-center" style={{ color: cat.color }}>Total</th>
-                                    <th className="px-4 py-2.5 text-center" style={{ color: cat.color }}>Alert</th>
-                                    <th className="px-4 py-2.5 text-center" style={{ color: cat.color }}>Actions</th>
-                                  </tr>
-                                </thead>
-                                <tbody className="divide-y divide-gray-50">
-                                  {items.map(p => {
-                                    const office    = officeStock(p.id);
-                                    const warehouse = warehouseStock(p.id);
-                                    const total     = totalStock(p.id);
-                                    const isLow     = p.low_stock_alert && total <= Number(p.low_stock_alert);
-                                    const isEditing = editingId === p.id;
-                                    return (
-                                      <tr key={p.id} className={`transition hover:bg-orange-50/20 ${isLow ? "bg-red-50/40" : ""}`}>
-                                        <td className="px-4 py-3 font-mono text-xs text-gray-400">
-                                          {isEditing
-                                            ? <input value={editForm.product_id} onChange={e => setEditForm({ ...editForm, product_id: e.target.value })} className="border rounded px-2 py-1 w-full text-xs" />
-                                            : (p.product_id || "—")}
-                                        </td>
-                                        <td className="px-4 py-3 font-semibold cursor-pointer" onClick={() => !isEditing && openLedger(p)}>
-                                          {isEditing
-                                            ? <input value={editForm.product_name} onChange={e => setEditForm({ ...editForm, product_name: e.target.value })} className="border rounded px-2 py-1 w-full" />
-                                            : <span className="hover:underline" style={{ color:"#1B3A6B" }}>{p.product_name}</span>}
-                                        </td>
-                                        <td className="px-4 py-3 text-center">
-                                          <span className="inline-block px-2.5 py-0.5 rounded-full text-xs font-bold tabular-nums" style={{ background:"#EBF0FA", color:"#1B3A6B" }}>{office}</span>
-                                        </td>
-                                        <td className="px-4 py-3 text-center">
-                                          <span className="inline-block px-2.5 py-0.5 rounded-full text-xs font-bold tabular-nums" style={{ background:"#E6F5F1", color:"#0D7A5F" }}>{warehouse}</span>
-                                        </td>
-                                        <td className="px-4 py-3 text-center">
-                                          <span className="font-black tabular-nums text-gray-800">{total}</span>
-                                        </td>
-                                        <td className="px-4 py-3 text-center">
-                                          {isEditing
-                                            ? <input value={editForm.low_stock_alert} type="number" onChange={e => setEditForm({ ...editForm, low_stock_alert: e.target.value })} className="border rounded px-2 py-1 w-16 text-center text-xs" />
-                                            : <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${isLow ? "bg-red-100 text-red-600" : "bg-gray-100 text-gray-500"}`}>{p.low_stock_alert || "—"}</span>}
-                                        </td>
-                                        <td className="px-4 py-3">
-                                          <div className="flex items-center justify-center gap-1.5 flex-wrap">
-                                            {isEditing ? (
-                                              <>
-                                                <button onClick={() => saveEdit(p.id)} className="text-xs text-white px-2.5 py-1 rounded-md" style={{ background:"#0D7A5F" }}>Save</button>
-                                                <button onClick={() => setEditingId(null)} className="text-xs bg-gray-200 text-gray-700 px-2.5 py-1 rounded-md">Cancel</button>
-                                              </>
-                                            ) : (
-                                              <>
-                                                <div className="relative group">
-                                                  <button className="text-xs px-2.5 py-1 rounded-md font-medium" style={{ background:"#EBF0FA", color:"#1B3A6B" }}>+ Stock ▾</button>
-                                                  <div className="absolute right-0 top-full mt-1 bg-white border border-gray-100 rounded-xl shadow-xl z-10 hidden group-hover:block min-w-[140px] overflow-hidden">
-                                                    {["office","warehouse","both"].map(mode => (
-                                                      <button key={mode} onClick={e => { e.stopPropagation(); setStockModal({ product: p, mode }); }}
-                                                        className="block w-full text-left px-4 py-2.5 text-xs hover:bg-orange-50 capitalize font-medium text-gray-700">
-                                                        {mode === "both" ? "Office + Warehouse" : mode.charAt(0).toUpperCase()+mode.slice(1)}
-                                                      </button>
-                                                    ))}
-                                                  </div>
-                                                </div>
-                                                <button onClick={e => { e.stopPropagation(); startEdit(p); }} className="text-xs px-2.5 py-1 rounded-md font-medium bg-amber-50 text-amber-700 hover:bg-amber-100">Edit</button>
-                                                <button onClick={e => { e.stopPropagation(); setDeleteConfirm(p); }} className="text-xs px-2.5 py-1 rounded-md font-medium bg-red-50 text-red-600 hover:bg-red-100">Delete</button>
-                                              </>
-                                            )}
-                                          </div>
-                                        </td>
-                                      </tr>
-                                    );
-                                  })}
-                                </tbody>
-                              </table>
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      {/* TALLY ALL CONFIRM MODAL */}
-      {showTallyAll && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 px-4" onClick={() => setShowTallyAll(false)}>
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6" onClick={e => e.stopPropagation()}>
-            <div className="flex items-center gap-3 mb-4">
-              <div className="w-10 h-10 rounded-xl flex items-center justify-center text-white text-lg" style={{ background:"#5B21B6" }}>✓</div>
-              <div>
-                <h3 className="font-black text-base" style={{ color:"#5B21B6" }}>Tally All Products</h3>
-                <p className="text-xs text-gray-500 mt-0.5">Records a new tally event for all products now</p>
-              </div>
-            </div>
-            <div className="bg-purple-50 rounded-xl p-4 mb-4">
-              <p className="text-sm text-gray-700">This will record <span className="font-bold">{formatDateTime(new Date().toISOString())}</span> as the latest tally timestamp.</p>
-              {latestTally && (
-                <p className="text-xs text-gray-500 mt-2">Previous tally: <span className="font-semibold">{formatDateTime(latestTally.tallied_at)}</span></p>
-              )}
-            </div>
-            <div className="flex gap-2">
-              <button onClick={() => setShowTallyAll(false)} className="flex-1 border border-gray-200 py-2.5 rounded-xl text-sm font-semibold text-gray-600 hover:bg-gray-50">Cancel</button>
-              <button onClick={handleTallyAll} disabled={tallyAllConfirming} className="flex-1 py-2.5 rounded-xl text-sm font-bold text-white disabled:opacity-50" style={{ background:"#5B21B6" }}>
-                {tallyAllConfirming ? "Saving…" : "Confirm Tally"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* LEDGER MODAL */}
-      {selectedProduct && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 px-4" onClick={() => setSelectedProduct(null)}>
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[85vh] flex flex-col overflow-hidden" onClick={e => e.stopPropagation()}>
-            <div className="px-6 py-4 flex items-center justify-between text-white" style={{ background:"#1B3A6B" }}>
-              <div>
-                <p className="font-black text-lg">{selectedProduct.product_name}</p>
-                <p className="text-blue-200 text-xs font-mono mt-0.5">{selectedProduct.product_id}</p>
-              </div>
-              <button onClick={() => setSelectedProduct(null)} className="text-blue-200 hover:text-white text-2xl leading-none">×</button>
-            </div>
-            <div className="flex gap-6 px-6 py-3 border-b" style={{ background:"#EBF0FA" }}>
-              <div><p className="text-xs text-gray-500 font-semibold">OFFICE</p><p className="font-black text-xl" style={{ color:"#1B3A6B" }}>{officeStock(selectedProduct.id)}</p></div>
-              <div className="border-l border-blue-200" />
-              <div><p className="text-xs text-gray-500 font-semibold">WAREHOUSE</p><p className="font-black text-xl" style={{ color:"#0D7A5F" }}>{warehouseStock(selectedProduct.id)}</p></div>
-              <div className="border-l border-blue-200" />
-              <div><p className="text-xs text-gray-500 font-semibold">TOTAL</p><p className="font-black text-xl text-gray-800">{totalStock(selectedProduct.id)}</p></div>
-              {latestTally && (
-                <><div className="border-l border-blue-200" />
-                <div><p className="text-xs text-gray-500 font-semibold">LAST TALLIED</p><p className="font-semibold text-sm text-purple-700">{formatDateTime(latestTally.tallied_at)}</p></div></>
-              )}
-            </div>
-            <div className="overflow-y-auto flex-1">
-              {ledgerLoading ? (
-                <div className="flex items-center justify-center py-16 text-gray-400 text-sm">Loading ledger…</div>
-              ) : ledger.length === 0 ? (
-                <div className="flex items-center justify-center py-16 text-gray-400 text-sm">No transactions yet</div>
-              ) : (
-                <table className="w-full text-sm">
-                  <thead className="sticky top-0 bg-gray-50 border-b text-xs uppercase text-gray-500 font-bold tracking-wide">
-                    <tr>
-                      <th className="px-4 py-3 text-left">Date</th>
-                      <th className="px-4 py-3 text-left">Type</th>
-                      <th className="px-4 py-3 text-right">Qty</th>
-                      <th className="px-4 py-3 text-right">Balance</th>
-                      <th className="px-4 py-3 text-left">Party</th>
-                      <th className="px-4 py-3 text-left">Notes</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-50">
-                    {[...ledger].reverse().map((t, i) => (
-                      <tr key={i} className="hover:bg-gray-50 transition">
-                        <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">{new Date(t.created_at).toLocaleDateString("en-IN",{day:"2-digit",month:"short",year:"numeric"})}</td>
-                        <td className="px-4 py-3">
-                          <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold ${t.transaction_type==="inward" ? "bg-green-100 text-green-700" : "bg-red-100 text-red-600"}`}>
-                            {t.transaction_type === "inward" ? "▲ In" : "▼ Out"}
-                          </span>
-                        </td>
-                        <td className={`px-4 py-3 text-right font-bold tabular-nums ${t.transaction_type==="inward" ? "text-green-600" : "text-red-500"}`}>
-                          {t.transaction_type==="inward" ? "+" : "-"}{Number(t.quantity)}
-                        </td>
-                        <td className="px-4 py-3 text-right font-black tabular-nums text-gray-800">{t.balance}</td>
-                        <td className="px-4 py-3 text-xs text-gray-600">{t.party || "—"}</td>
-                        <td className="px-4 py-3 text-xs text-gray-400">{t.notes || "—"}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ADD STOCK MODAL */}
-      {stockModal && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 px-4" onClick={() => setStockModal(null)}>
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6" onClick={e => e.stopPropagation()}>
-            <h3 className="font-black text-lg mb-1" style={{ color:"#1B3A6B" }}>Add Stock</h3>
-            <p className="text-sm text-gray-500 mb-4">{stockModal.product.product_name} · <span className="capitalize font-semibold">{stockModal.mode === "both" ? "Office + Warehouse" : stockModal.mode}</span></p>
-            <div className="space-y-3">
-              <input type="number" placeholder="Quantity *" value={stockForm.quantity} onChange={e => setStockForm({ ...stockForm, quantity: e.target.value })}
-                className="w-full border border-gray-200 px-4 py-2.5 rounded-xl text-sm focus:outline-none" />
-              <input placeholder="Party name (optional)" value={stockForm.party} onChange={e => setStockForm({ ...stockForm, party: e.target.value })}
-                className="w-full border border-gray-200 px-4 py-2.5 rounded-xl text-sm focus:outline-none" />
-              <textarea placeholder="Notes (optional)" value={stockForm.notes} onChange={e => setStockForm({ ...stockForm, notes: e.target.value })} rows={2}
-                className="w-full border border-gray-200 px-4 py-2.5 rounded-xl text-sm focus:outline-none resize-none" />
-            </div>
-            <div className="flex gap-2 mt-4">
-              <button onClick={() => setStockModal(null)} className="flex-1 border border-gray-200 py-2.5 rounded-xl text-sm font-semibold text-gray-600 hover:bg-gray-50">Cancel</button>
-              <button onClick={submitStock} disabled={!stockForm.quantity} className="flex-1 py-2.5 rounded-xl text-sm font-bold text-white disabled:opacity-50" style={{ background:"#E8630A" }}>Confirm</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* DELETE CONFIRM */}
-      {deleteConfirm && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 px-4" onClick={() => setDeleteConfirm(null)}>
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6" onClick={e => e.stopPropagation()}>
-            <h3 className="font-black text-lg text-red-600 mb-2">Delete Product?</h3>
-            <p className="text-sm text-gray-600 mb-5">This will permanently delete <span className="font-semibold">{deleteConfirm.product_name}</span>. This cannot be undone.</p>
-            <div className="flex gap-2">
-              <button onClick={() => setDeleteConfirm(null)} className="flex-1 border border-gray-200 py-2.5 rounded-xl text-sm font-semibold text-gray-600 hover:bg-gray-50">Cancel</button>
-              <button onClick={() => handleDelete(deleteConfirm.id)} className="flex-1 bg-red-600 hover:bg-red-700 py-2.5 rounded-xl text-sm font-bold text-white">Delete</button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
