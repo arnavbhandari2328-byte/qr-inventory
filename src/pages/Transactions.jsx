@@ -148,15 +148,15 @@ function buildOrderedProductList(products) {
 // ── Big Prominent Product Picker ──────────────────────────────────────────────
 
 function ProductPicker({ products, value, onChange }) {
-  const [query, setQuery] = useState("");
-  const [open, setOpen]   = useState(false);
+  const [query, setQuery]           = useState("");
+  const [open, setOpen]             = useState(false);
   const [highlighted, setHighlighted] = useState(0);
   const inputRef   = useRef(null);
   const listRef    = useRef(null);
   const wrapperRef = useRef(null);
 
-  const orderedList      = buildOrderedProductList(products);
-  const selectedProduct  = products.find(p => p.id === value);
+  const orderedList     = buildOrderedProductList(products);
+  const selectedProduct = products.find(p => p.id === value);
 
   const filtered = query.trim() === ""
     ? orderedList
@@ -198,12 +198,11 @@ function ProductPicker({ products, value, onChange }) {
 
   return (
     <div ref={wrapperRef} className="relative col-span-full">
-      {/* Prominent label */}
       <label className="block text-xs font-black uppercase tracking-widest mb-1.5" style={{ color: "#1B3A6B" }}>
         🔍 Search &amp; Select Product
       </label>
       <div
-        className={`flex items-center rounded-xl bg-white cursor-text transition-all shadow-sm`}
+        className="flex items-center rounded-xl bg-white cursor-text transition-all shadow-sm"
         style={{
           minHeight: "56px",
           border: open
@@ -215,7 +214,6 @@ function ProductPicker({ products, value, onChange }) {
         }}
         onClick={() => { setOpen(true); inputRef.current?.focus(); }}
       >
-        {/* Selected pill */}
         {!open && selectedProduct && query === "" ? (
           <div className="flex items-center flex-1 px-4 gap-3">
             <span className="inline-flex items-center gap-1.5 text-white text-sm font-bold px-3 py-1.5 rounded-lg" style={{ background: "#1B3A6B" }}>
@@ -306,6 +304,19 @@ function formatIST(iso) {
   });
 }
 
+function formatDateLabel(iso) {
+  if (!iso) return "Unknown Date";
+  return new Date(iso).toLocaleDateString("en-IN", {
+    timeZone: "Asia/Kolkata",
+    weekday: "long", day: "2-digit", month: "long", year: "numeric",
+  });
+}
+
+function isoToLocalDate(iso) {
+  if (!iso) return "";
+  return new Date(iso).toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" }); // YYYY-MM-DD
+}
+
 // ── Main Component ────────────────────────────────────────────────────────────
 
 export default function Transactions() {
@@ -315,18 +326,24 @@ export default function Transactions() {
   const [search, setSearch]             = useState("");
   const [filterType, setFilterType]     = useState("all");
   const [filterLocation, setFilterLocation] = useState("all");
+  const [filterDateFrom, setFilterDateFrom] = useState("");
+  const [filterDateTo, setFilterDateTo]     = useState("");
   const [loading, setLoading]           = useState(true);
   const [editingId, setEditingId]       = useState(null);
   const [isAdmin, setIsAdmin]           = useState(false);
   const [showForm, setShowForm]         = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState(null);
 
+  // Collapsible date groups — mirrors Products collapsible categories
+  const [openDates, setOpenDates]       = useState({});
+
   const [page, setPage]             = useState(0);
   const [totalCount, setTotalCount] = useState(0);
   const PAGE_SIZE = 50;
 
   const [form, setForm] = useState({
-    product_id: "", location_id: "", transaction_type: "inward", quantity: "", party: "",
+    product_id: "", location_id: "", transaction_type: "inward",
+    quantity: "", party: "", notes: "",
   });
 
   useEffect(() => { checkUserRole(); fetchDropdowns(); }, []);
@@ -370,29 +387,37 @@ export default function Transactions() {
     try {
       const activeEmployee = localStorage.getItem("userEmail") || "Unknown User";
       const payload = {
-        product_id: form.product_id,
-        location_id: form.location_id,
+        product_id:       form.product_id,
+        location_id:      form.location_id,
         transaction_type: form.transaction_type,
-        quantity: Number(form.quantity),
-        party: form.party,
+        quantity:         Number(form.quantity),
+        party:            form.party,
+        notes:            form.notes || null,
         created_by_email: activeEmployee,
       };
       if (editingId) await supabase.from("transactions").update(payload).eq("id", editingId);
       else           await supabase.from("transactions").insert([payload]);
-      setForm({ product_id: "", location_id: "", transaction_type: "inward", quantity: "", party: "" });
+      setForm({ product_id: "", location_id: "", transaction_type: "inward", quantity: "", party: "", notes: "" });
       setEditingId(null); setShowForm(false); setPage(0);
       fetchTransactions();
     } catch { alert("Failed to save transaction."); }
   };
 
   const handleEditClick = t => {
-    setForm({ product_id: t.product_id, location_id: t.location_id, transaction_type: t.transaction_type, quantity: t.quantity, party: t.party || "" });
+    setForm({
+      product_id:       t.product_id,
+      location_id:      t.location_id,
+      transaction_type: t.transaction_type,
+      quantity:         t.quantity,
+      party:            t.party || "",
+      notes:            t.notes || "",
+    });
     setEditingId(t.id); setShowForm(true);
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
   const cancelEdit = () => {
-    setForm({ product_id: "", location_id: "", transaction_type: "inward", quantity: "", party: "" });
+    setForm({ product_id: "", location_id: "", transaction_type: "inward", quantity: "", party: "", notes: "" });
     setEditingId(null); setShowForm(false);
   };
 
@@ -412,6 +437,7 @@ export default function Transactions() {
         Quantity:  t.quantity,
         Location:  locations.find(l => l.id === t.location_id)?.name || "",
         Party:     t.party || "—",
+        Notes:     t.notes || "—",
         Employee:  t.created_by_email || "System",
       }));
       const ws = XLSX.utils.json_to_sheet(exportData);
@@ -434,7 +460,7 @@ export default function Transactions() {
       doc.text("NIVEE METAL — Transactions Report", 14, 12);
       doc.setFontSize(8); doc.setFont("helvetica", "normal");
       doc.text(`Generated: ${new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}`, pageW - 14, 12, { align: "right" });
-      const head = [["Date (IST)", "Product", "Type", "Qty", "Location", "Party", "Employee"]];
+      const head = [["Date (IST)", "Product", "Type", "Qty", "Location", "Party", "Notes", "Employee"]];
       const body = (allTrans || []).map(t => [
         formatIST(t.created_at),
         products.find(p => p.id === t.product_id)?.product_name || "—",
@@ -442,6 +468,7 @@ export default function Transactions() {
         String(t.quantity),
         locations.find(l => l.id === t.location_id)?.name || "—",
         t.party || "—",
+        t.notes || "—",
         t.created_by_email || "System",
       ]);
       autoTable(doc, {
@@ -450,8 +477,9 @@ export default function Transactions() {
         headStyles: { fillColor: [27, 58, 107], textColor: 255, fontStyle: "bold", fontSize: 7 },
         alternateRowStyles: { fillColor: [235, 240, 250] },
         columnStyles: {
-          0: { cellWidth: 38 }, 1: { cellWidth: 70 }, 2: { cellWidth: 18, halign: "center" },
-          3: { cellWidth: 14, halign: "center" }, 4: { cellWidth: 22 }, 5: { cellWidth: 48 }, 6: { cellWidth: 48 },
+          0: { cellWidth: 34 }, 1: { cellWidth: 62 }, 2: { cellWidth: 16, halign: "center" },
+          3: { cellWidth: 12, halign: "center" }, 4: { cellWidth: 20 }, 5: { cellWidth: 36 },
+          6: { cellWidth: 36 }, 7: { cellWidth: 36 },
         },
         margin: { top: 23, left: 14, right: 14 },
         didDrawPage: () => {
@@ -463,23 +491,39 @@ export default function Transactions() {
     } catch (err) { alert("PDF export failed: " + err.message); }
   };
 
-  // Filter logic
+  // ── Filter + Group by date ────────────────────────────────────────────────
   const filtered = transactions.filter(t => {
-    const product    = products.find(p => p.id === t.product_id);
-    const matchSearch  = !search || product?.product_name?.toLowerCase().includes(search.toLowerCase());
+    const product      = products.find(p => p.id === t.product_id);
+    const matchSearch  = !search || product?.product_name?.toLowerCase().includes(search.toLowerCase()) || (t.party || "").toLowerCase().includes(search.toLowerCase());
     const matchType    = filterType === "all" || t.transaction_type === filterType;
     const matchLoc     = filterLocation === "all" || t.location_id === filterLocation;
-    return matchSearch && matchType && matchLoc;
+    const localDate    = isoToLocalDate(t.created_at);
+    const matchFrom    = !filterDateFrom || localDate >= filterDateFrom;
+    const matchTo      = !filterDateTo   || localDate <= filterDateTo;
+    return matchSearch && matchType && matchLoc && matchFrom && matchTo;
   });
 
-  const totalPages   = Math.ceil(totalCount / PAGE_SIZE);
-  const inwardCount  = transactions.filter(t => t.transaction_type === "inward").length;
-  const outwardCount = transactions.filter(t => t.transaction_type === "outward").length;
+  // Group by local date label (matches Products' category grouping pattern)
+  const groupedByDate = {};
+  filtered.forEach(t => {
+    const label = isoToLocalDate(t.created_at); // YYYY-MM-DD key
+    if (!groupedByDate[label]) groupedByDate[label] = [];
+    groupedByDate[label].push(t);
+  });
+  const dateKeys = Object.keys(groupedByDate).sort((a, b) => b.localeCompare(a)); // newest first
+
+  const toggleDate = (key) => setOpenDates(prev => ({ ...prev, [key]: !prev[key] }));
+
+  const totalPages    = Math.ceil(totalCount / PAGE_SIZE);
+  const inwardCount   = transactions.filter(t => t.transaction_type === "inward").length;
+  const outwardCount  = transactions.filter(t => t.transaction_type === "outward").length;
+  const inwardQty     = transactions.filter(t => t.transaction_type === "inward").reduce((s, t) => s + (Number(t.quantity) || 0), 0);
+  const outwardQty    = transactions.filter(t => t.transaction_type === "outward").reduce((s, t) => s + (Number(t.quantity) || 0), 0);
 
   return (
     <div style={{ background: "#F8F7F4", minHeight: "100vh" }} className="p-4 md:p-6 max-w-screen-xl mx-auto">
 
-      {/* ── HEADER ── */}
+      {/* ── HEADER — mirrors Products header exactly ── */}
       <div className="flex flex-wrap items-start justify-between gap-3 mb-6">
         <div>
           <div className="flex items-center gap-3 mb-1">
@@ -490,16 +534,30 @@ export default function Transactions() {
             </div>
             <h1 style={{ color: "#1B3A6B" }} className="text-2xl font-black tracking-tight">Transactions Log</h1>
           </div>
-          <div className="ml-12">
+          {/* Stats strip — mirrors Products "X products · Y low stock" */}
+          <div className="ml-12 flex flex-col gap-0.5">
             <p className="text-sm text-gray-500">
               <span className="font-semibold text-gray-700">{totalCount.toLocaleString()}</span> total entries
-              {" · "}<span style={{ color: "#0D7A5F" }} className="font-semibold">{inwardCount} IN</span>
-              {" · "}<span className="font-semibold text-red-500">{outwardCount} OUT</span>
+              {" · "}
+              <span style={{ color: "#0D7A5F" }} className="font-semibold">{inwardCount} IN</span>
+              {" · "}
+              <span className="font-semibold text-red-500">{outwardCount} OUT</span>
               <span className="text-gray-400 text-xs ml-1">(this page)</span>
+            </p>
+            <p className="text-xs flex items-center gap-1.5">
+              <span className="inline-flex items-center gap-1 bg-green-50 text-green-700 border border-green-200 px-2.5 py-0.5 rounded-full font-semibold">
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>
+                +{inwardQty.toLocaleString()} units in
+              </span>
+              <span className="inline-flex items-center gap-1 bg-red-50 text-red-600 border border-red-200 px-2.5 py-0.5 rounded-full font-semibold">
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                -{outwardQty.toLocaleString()} units out
+              </span>
             </p>
           </div>
         </div>
 
+        {/* Action buttons — same order / style as Products */}
         <div className="flex gap-2 flex-wrap">
           {/* Excel */}
           <button onClick={exportToExcel} style={{ background: "#0D7A5F" }} className="flex items-center gap-2 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:opacity-90 transition shadow-sm">
@@ -511,7 +569,7 @@ export default function Transactions() {
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
             PDF
           </button>
-          {/* New Transaction */}
+          {/* New Transaction — mirrors Products "+ Add Product" */}
           <button
             onClick={() => { setShowForm(f => !f); if (editingId) cancelEdit(); }}
             style={{ background: showForm ? "#6B7280" : "#E8630A" }}
@@ -522,13 +580,12 @@ export default function Transactions() {
         </div>
       </div>
 
-      {/* ── TRANSACTION FORM ── */}
+      {/* ── TRANSACTION FORM — exact same panel style as Products add form ── */}
       {(showForm || editingId) && (
         <div
           className="bg-white shadow rounded-xl p-5 mb-5"
-          style={{ borderLeft: `4px solid ${editingId ? "#E8630A" : "#1B3A6B"}`, border: `1.5px solid ${editingId ? "#E8630A44" : "#1B3A6B22"}` }}
+          style={{ border: `1.5px solid ${editingId ? "#E8630A44" : "#1B3A6B22"}` }}
         >
-          {/* Form header */}
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-3">
               <div className="w-9 h-9 rounded-xl flex items-center justify-center text-white" style={{ background: editingId ? "#E8630A" : "#1B3A6B" }}>
@@ -548,31 +605,28 @@ export default function Transactions() {
             <button onClick={cancelEdit} className="text-gray-400 hover:text-gray-600 text-2xl leading-none">×</button>
           </div>
 
-          {/* Big Product Picker */}
           <div className="space-y-4">
+            {/* Product Picker */}
             <ProductPicker
               products={products}
               value={form.product_id}
               onChange={id => setForm({ ...form, product_id: id })}
             />
 
-            {/* Location, Type, Qty, Party */}
+            {/* Location · Type · Qty · Party */}
             <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
-              {/* Location */}
               <div>
                 <label className="block text-xs font-bold uppercase tracking-widest mb-1.5 text-gray-500">📍 Location</label>
                 <select
                   value={form.location_id}
                   onChange={e => setForm({ ...form, location_id: e.target.value })}
                   className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm font-semibold text-gray-800 bg-white focus:outline-none"
-                  style={{ borderColor: "#D1D5DB" }}
                 >
                   <option value="">Select Location</option>
                   {locations.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
                 </select>
               </div>
 
-              {/* Type toggle */}
               <div>
                 <label className="block text-xs font-bold uppercase tracking-widest mb-1.5 text-gray-500">↕ Type</label>
                 <div className="flex rounded-lg overflow-hidden border border-gray-200">
@@ -597,7 +651,6 @@ export default function Transactions() {
                 </div>
               </div>
 
-              {/* Quantity */}
               <div>
                 <label className="block text-xs font-bold uppercase tracking-widest mb-1.5 text-gray-500"># Quantity</label>
                 <input
@@ -609,7 +662,6 @@ export default function Transactions() {
                 />
               </div>
 
-              {/* Party */}
               <div>
                 <label className="block text-xs font-bold uppercase tracking-widest mb-1.5 text-gray-500">🏢 Party Name</label>
                 <input
@@ -620,6 +672,18 @@ export default function Transactions() {
                   className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm font-semibold text-gray-800 focus:outline-none"
                 />
               </div>
+            </div>
+
+            {/* Notes row */}
+            <div>
+              <label className="block text-xs font-bold uppercase tracking-widest mb-1.5 text-gray-500">📝 Notes</label>
+              <input
+                type="text"
+                placeholder="Optional notes (e.g. invoice no., remarks)"
+                value={form.notes}
+                onChange={e => setForm({ ...form, notes: e.target.value })}
+                className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm font-semibold text-gray-800 focus:outline-none"
+              />
             </div>
 
             {/* Save / Cancel */}
@@ -640,8 +704,8 @@ export default function Transactions() {
         </div>
       )}
 
-      {/* ── FILTER PILLS (mirrors Products category pills style) ── */}
-      <div className="flex flex-wrap gap-2 mb-5">
+      {/* ── FILTER PILLS — mirrors Products category pill strip exactly ── */}
+      <div className="flex flex-wrap gap-2 mb-4">
         {[
           { key: "all",     label: "All Transactions", color: "#1B3A6B", light: "#EBF0FA" },
           { key: "inward",  label: "▲ Inward",         color: "#0D7A5F", light: "#E6F5F1" },
@@ -677,21 +741,52 @@ export default function Transactions() {
         ))}
       </div>
 
-      {/* ── SEARCH ── */}
-      <div className="relative mb-5">
-        <svg className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
-        <input
-          placeholder="Filter by product name…"
-          value={search}
-          onChange={e => setSearch(e.target.value)}
-          className="w-full border border-gray-200 pl-10 pr-10 py-2.5 rounded-xl text-sm focus:outline-none bg-white shadow-sm"
-        />
-        {search && (
-          <button onClick={() => setSearch("")} className="absolute right-3.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 text-xl leading-none">×</button>
+      {/* ── SEARCH + DATE RANGE row ── */}
+      <div className="flex flex-wrap gap-3 mb-5">
+        {/* Search */}
+        <div className="relative flex-1 min-w-[200px]">
+          <svg className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+          <input
+            placeholder="Filter by product name or party…"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            className="w-full border border-gray-200 pl-10 pr-10 py-2.5 rounded-xl text-sm focus:outline-none bg-white shadow-sm"
+          />
+          {search && (
+            <button onClick={() => setSearch("")} className="absolute right-3.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 text-xl leading-none">×</button>
+          )}
+        </div>
+        {/* Date From */}
+        <div className="flex items-center gap-2 bg-white border border-gray-200 rounded-xl px-3 shadow-sm">
+          <label className="text-xs font-bold uppercase tracking-widest text-gray-400 whitespace-nowrap">From</label>
+          <input
+            type="date"
+            value={filterDateFrom}
+            onChange={e => setFilterDateFrom(e.target.value)}
+            className="py-2.5 text-sm text-gray-700 font-semibold focus:outline-none bg-transparent"
+          />
+        </div>
+        {/* Date To */}
+        <div className="flex items-center gap-2 bg-white border border-gray-200 rounded-xl px-3 shadow-sm">
+          <label className="text-xs font-bold uppercase tracking-widest text-gray-400 whitespace-nowrap">To</label>
+          <input
+            type="date"
+            value={filterDateTo}
+            onChange={e => setFilterDateTo(e.target.value)}
+            className="py-2.5 text-sm text-gray-700 font-semibold focus:outline-none bg-transparent"
+          />
+        </div>
+        {(filterDateFrom || filterDateTo) && (
+          <button
+            onClick={() => { setFilterDateFrom(""); setFilterDateTo(""); }}
+            className="flex items-center gap-1 text-xs font-bold px-3 py-2 rounded-xl border border-gray-200 bg-white text-gray-500 hover:bg-gray-50 shadow-sm transition"
+          >
+            × Clear dates
+          </button>
         )}
       </div>
 
-      {/* ── TABLE ── */}
+      {/* ── GROUPED TABLE — mirrors Products collapsible category/grade sections ── */}
       {loading ? (
         <div className="flex items-center justify-center py-20 text-gray-400">
           <svg className="animate-spin mr-2" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
@@ -706,76 +801,133 @@ export default function Transactions() {
           <p className="text-sm mt-1">{search ? `No results for "${search}"` : "Record your first transaction above"}</p>
         </div>
       ) : (
-        <div className="rounded-2xl overflow-hidden shadow-sm" style={{ border: "1.5px solid #1B3A6B22" }}>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr style={{ background: "#EBF0FA" }} className="text-xs font-bold uppercase tracking-wide">
-                  <th className="px-4 py-2.5 text-left" style={{ color: "#1B3A6B" }}>Date (IST)</th>
-                  <th className="px-4 py-2.5 text-left" style={{ color: "#1B3A6B" }}>Product</th>
-                  <th className="px-4 py-2.5 text-center" style={{ color: "#1B3A6B" }}>Type</th>
-                  <th className="px-4 py-2.5 text-center" style={{ color: "#1B3A6B" }}>Qty</th>
-                  <th className="px-4 py-2.5 text-center" style={{ color: "#1B3A6B" }}>Location</th>
-                  <th className="px-4 py-2.5 text-left" style={{ color: "#1B3A6B" }}>Party</th>
-                  <th className="px-4 py-2.5 text-left" style={{ color: "#1B3A6B" }}>Employee</th>
-                  <th className="px-4 py-2.5 text-center" style={{ color: "#1B3A6B" }}>Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-50 bg-white">
-                {filtered.map(t => {
-                  const product  = products.find(p => p.id === t.product_id);
-                  const location = locations.find(l => l.id === t.location_id);
-                  const isIn     = t.transaction_type === "inward";
-                  const isEditing = editingId === t.id;
-                  return (
-                    <tr key={t.id} className={`transition hover:bg-orange-50/20 ${isEditing ? "bg-orange-50/40" : ""}`}>
-                      <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">{formatIST(t.created_at)}</td>
-                      <td className="px-4 py-3 font-semibold max-w-xs" style={{ color: "#1B3A6B" }}>
-                        <span className="line-clamp-2 leading-snug">{product?.product_name || <span className="text-gray-300 italic font-normal">Unknown product</span>}</span>
-                      </td>
-                      <td className="px-4 py-3 text-center">
-                        <span className="inline-block px-2.5 py-0.5 rounded-full text-xs font-bold" style={{
-                          background: isIn ? "#E6F5F1" : "#FEF2F2",
-                          color: isIn ? "#0D7A5F" : "#DC2626",
-                        }}>
-                          {isIn ? "▲ IN" : "▼ OUT"}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 text-center">
-                        <span className="font-black tabular-nums text-gray-800">{t.quantity}</span>
-                      </td>
-                      <td className="px-4 py-3 text-center">
-                        <span className="inline-block px-2.5 py-0.5 rounded-full text-xs font-bold tabular-nums" style={{ background: "#EBF0FA", color: "#1B3A6B" }}>
-                          {location?.name || "—"}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 text-xs text-gray-600 max-w-[160px] truncate">{t.party || "—"}</td>
-                      <td className="px-4 py-3 text-xs text-gray-400">{t.created_by_email || "System"}</td>
-                      <td className="px-4 py-3">
-                        <div className="flex items-center justify-center gap-1.5 flex-wrap">
-                          <button
-                            onClick={() => handleEditClick(t)}
-                            className="text-xs px-2.5 py-1 rounded-md font-medium transition"
-                            style={{ background: "#EBF0FA", color: "#1B3A6B" }}
-                          >Edit</button>
-                          {isAdmin && (
-                            <button
-                              onClick={() => setDeleteConfirm(t)}
-                              className="text-xs px-2.5 py-1 rounded-md font-medium bg-red-50 text-red-600 hover:bg-red-100 transition"
-                            >Delete</button>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+        <div className="space-y-3">
+          {dateKeys.map(dateKey => {
+            const items      = groupedByDate[dateKey];
+            const isOpen     = openDates[dateKey] !== false; // default open
+            const dayInward  = items.filter(t => t.transaction_type === "inward").reduce((s, t) => s + (Number(t.quantity) || 0), 0);
+            const dayOutward = items.filter(t => t.transaction_type === "outward").reduce((s, t) => s + (Number(t.quantity) || 0), 0);
+
+            return (
+              <div key={dateKey} className="rounded-2xl overflow-hidden shadow-sm" style={{ border: "1.5px solid #1B3A6B22" }}>
+                {/* Date group header — mirrors Products category header */}
+                <button
+                  onClick={() => toggleDate(dateKey)}
+                  className="w-full flex items-center justify-between px-5 py-3 transition-colors hover:opacity-95"
+                  style={{ background: "#EBF0FA" }}
+                >
+                  <div className="flex items-center gap-3">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#1B3A6B" strokeWidth="2.5">
+                      <rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>
+                    </svg>
+                    <span className="font-black text-sm" style={{ color: "#1B3A6B" }}>
+                      {formatDateLabel(`${dateKey}T00:00:00`)}
+                    </span>
+                    <span className="text-xs font-semibold text-gray-500">
+                      {items.length} {items.length === 1 ? "entry" : "entries"}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    {dayInward > 0 && (
+                      <span className="text-xs font-bold px-2.5 py-0.5 rounded-full" style={{ background: "#E6F5F1", color: "#0D7A5F" }}>
+                        +{dayInward.toLocaleString()} IN
+                      </span>
+                    )}
+                    {dayOutward > 0 && (
+                      <span className="text-xs font-bold px-2.5 py-0.5 rounded-full" style={{ background: "#FEF2F2", color: "#DC2626" }}>
+                        -{dayOutward.toLocaleString()} OUT
+                      </span>
+                    )}
+                    <svg
+                      width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#1B3A6B" strokeWidth="2.5"
+                      style={{ transform: isOpen ? "rotate(180deg)" : "rotate(0deg)", transition: "transform 200ms" }}
+                    >
+                      <polyline points="6 9 12 15 18 9"/>
+                    </svg>
+                  </div>
+                </button>
+
+                {/* Rows */}
+                {isOpen && (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="text-xs font-bold uppercase tracking-wide" style={{ background: "#F8F7F4", borderBottom: "1.5px solid #1B3A6B22" }}>
+                          <th className="px-4 py-2 text-left" style={{ color: "#1B3A6B" }}>Time</th>
+                          <th className="px-4 py-2 text-left" style={{ color: "#1B3A6B" }}>Product</th>
+                          <th className="px-4 py-2 text-center" style={{ color: "#1B3A6B" }}>Type</th>
+                          <th className="px-4 py-2 text-center" style={{ color: "#1B3A6B" }}>Qty</th>
+                          <th className="px-4 py-2 text-center" style={{ color: "#1B3A6B" }}>Location</th>
+                          <th className="px-4 py-2 text-left" style={{ color: "#1B3A6B" }}>Party</th>
+                          <th className="px-4 py-2 text-left" style={{ color: "#1B3A6B" }}>Notes</th>
+                          <th className="px-4 py-2 text-left" style={{ color: "#1B3A6B" }}>Employee</th>
+                          <th className="px-4 py-2 text-center" style={{ color: "#1B3A6B" }}>Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-50 bg-white">
+                        {items.map(t => {
+                          const product  = products.find(p => p.id === t.product_id);
+                          const location = locations.find(l => l.id === t.location_id);
+                          const isIn     = t.transaction_type === "inward";
+                          const isEditing = editingId === t.id;
+                          return (
+                            <tr key={t.id} className={`transition hover:bg-blue-50/20 ${isEditing ? "bg-orange-50/40" : ""}`}>
+                              <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">
+                                {new Date(t.created_at).toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", hour12: true })}
+                              </td>
+                              <td className="px-4 py-3 font-semibold max-w-xs" style={{ color: "#1B3A6B" }}>
+                                <span className="line-clamp-2 leading-snug">
+                                  {product?.product_name || <span className="text-gray-300 italic font-normal">Unknown product</span>}
+                                </span>
+                              </td>
+                              <td className="px-4 py-3 text-center">
+                                <span className="inline-block px-2.5 py-0.5 rounded-full text-xs font-bold" style={{
+                                  background: isIn ? "#E6F5F1" : "#FEF2F2",
+                                  color: isIn ? "#0D7A5F" : "#DC2626",
+                                }}>
+                                  {isIn ? "▲ IN" : "▼ OUT"}
+                                </span>
+                              </td>
+                              <td className="px-4 py-3 text-center">
+                                <span className="font-black tabular-nums text-gray-800">{t.quantity}</span>
+                              </td>
+                              <td className="px-4 py-3 text-center">
+                                <span className="inline-block px-2.5 py-0.5 rounded-full text-xs font-bold tabular-nums" style={{ background: "#EBF0FA", color: "#1B3A6B" }}>
+                                  {location?.name || "—"}
+                                </span>
+                              </td>
+                              <td className="px-4 py-3 text-xs text-gray-600 max-w-[140px] truncate">{t.party || "—"}</td>
+                              <td className="px-4 py-3 text-xs text-gray-500 max-w-[160px] truncate">{t.notes || "—"}</td>
+                              <td className="px-4 py-3 text-xs text-gray-400">{t.created_by_email || "System"}</td>
+                              <td className="px-4 py-3">
+                                <div className="flex items-center justify-center gap-1.5 flex-wrap">
+                                  <button
+                                    onClick={() => handleEditClick(t)}
+                                    className="text-xs px-2.5 py-1 rounded-md font-medium transition"
+                                    style={{ background: "#EBF0FA", color: "#1B3A6B" }}
+                                  >Edit</button>
+                                  {isAdmin && (
+                                    <button
+                                      onClick={() => setDeleteConfirm(t)}
+                                      className="text-xs px-2.5 py-1 rounded-md font-medium bg-red-50 text-red-600 hover:bg-red-100 transition"
+                                    >Delete</button>
+                                  )}
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
 
-      {/* ── PAGINATION ── */}
+      {/* ── PAGINATION — same style as Products ── */}
       {!loading && totalPages > 1 && (
         <div className="bg-white rounded-2xl shadow-sm border border-gray-100 px-5 py-3.5 flex justify-between items-center mt-5">
           <button
