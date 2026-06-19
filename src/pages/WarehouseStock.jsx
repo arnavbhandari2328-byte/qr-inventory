@@ -1,628 +1,568 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { supabase } from "../supabase";
 
-// ── same catalog helpers as OfficeStock ───────────────────────────────────────
-function inferMaterial(name) {
-  const n = name.toUpperCase();
-  if (n.includes("316L")) return "SS 316L";
-  if (n.includes("316"))  return "SS 316";
-  if (n.includes("304L")) return "SS 304L";
-  if (n.includes("304"))  return "SS 304";
-  if (n.includes("202"))  return "SS 202";
-  if (n.includes("201"))  return "SS 201";
-  if (n.includes("310"))  return "SS 310";
-  if (n.includes("321"))  return "SS 321";
-  if (n.includes("409"))  return "SS 409";
-  if (n.includes("430"))  return "SS 430";
-  if (n.includes("MS") || n.includes("MILD STEEL")) return "MS";
-  if (n.includes("GI") || n.includes("GALVANISED") || n.includes("GALVANIZED")) return "GI";
-  if (n.includes("CARBON STEEL") || n.includes("CS")) return "Carbon Steel";
-  return "Other";
-}
+/* ─────────────────────────────────────────
+   NIVEE BRAND COLORS  (mirrors Products.jsx)
+   Primary : Deep Steel Blue  #1B3A6B
+   Accent  : Nivee Orange     #E8630A
+   Surface : Warm White       #F8F7F4
+───────────────────────────────────────── */
 
-function inferCategory(name) {
-  const n = name.toUpperCase();
-  if (n.includes("SEAMLESS")) return "Seamless";
-  if (n.includes("SCH 160") || n.includes("SCH-160") || n.includes("SCH160")) return "SCH 160";
-  if (n.includes("SCH 80")  || n.includes("SCH-80")  || n.includes("SCH80"))  return "SCH 80";
-  if (n.includes("SCH 40")  || n.includes("SCH-40")  || n.includes("SCH40"))  return "SCH 40";
-  if (n.includes("SCH 20")  || n.includes("SCH-20")  || n.includes("SCH20"))  return "SCH 20";
-  if (n.includes("SCH 10")  || n.includes("SCH-10")  || n.includes("SCH10"))  return "SCH 10";
-  if (n.includes("SCH 5")   || n.includes("SCH-5")   || n.includes("SCH05") || n.includes("SCH-05")) return "SCH 5";
-  const swg = n.match(/(\d+)\s*SWG/);
-  if (swg) return `SWG ${swg[1]}`;
-  if (n.includes("POLISH") || n.includes("POLISHED")) return "Polish Pipe";
-  if (n.includes("SQUARE")) return "Square Rod";
-  if (n.includes("RECTANGLE") || n.includes("RECTANGULAR") || n.includes("RECTANGE")) return "Rectangular Pipe";
-  if (n.includes("ROUND BAR") || n.includes("ROUND ROD") || n.includes("BRIGHT ROD") || n.includes("BRIGHT BAR")) return "Round Bar";
-  if (n.includes("FLAT BAR") || n.includes("FLAT ROD")) return "Flat Bar";
-  if (n.includes("ANGLE")) return "Angle";
-  if (n.includes("CHANNEL")) return "Channel";
-  if (
-    n.includes("SHEET") || n.includes("PLATE") ||
-    n.includes(" MAT ") || n.includes(" MAT$") || n.endsWith(" MAT") ||
-    n.includes("NO.4") || n.includes("NO.2") || n.includes("NO.8") ||
-    n.includes("2B FINISH") || n.includes("BA FINISH") || n.includes("HAIRLINE")
-  ) return "Sheet / Plate";
-  if (n.includes("COIL") || n.includes("STRIP")) return "Coil / Strip";
-  if (n.includes("ERW")) return "ERW";
-  if (n.includes("PIPE")) return "Pipe (General)";
-  return "General";
-}
+const CATEGORIES = [
+  { key: "seamless",  label: "Seamless Pipes",       icon: "⬤",  color: "#1B3A6B", light: "#EBF0FA", prefixes: ["NM-NBSMLS","NM-SMLS"] },
+  { key: "polish",    label: "Polish Pipes (ERW)",    icon: "◉",  color: "#E8630A", light: "#FEF0E7", prefixes: ["NM-PP"] },
+  { key: "nb",        label: "NB / GI Pipes",         icon: "◎",  color: "#0D7A5F", light: "#E6F5F1", prefixes: ["NM-NB"] },
+  { key: "nonpolish", label: "Non-Polish Pipes",      icon: "○",  color: "#7C3AED", light: "#F3EFFE", prefixes: ["NM-NMPR","NM-NPS","NM-NPR"] },
+  { key: "sheets",    label: "Sheets / Plates",       icon: "▭",  color: "#B45309", light: "#FEF3E2", prefixes: ["NM-SH","NM-SNO"] },
+  { key: "valves",    label: "Valves",                icon: "⬡",  color: "#0369A1", light: "#E0F2FE", prefixes: ["NM-VLV","NM-VALVE"] },
+  { key: "fittings",  label: "Fittings & Flanges",    icon: "◈",  color: "#BE185D", light: "#FCE7F3", prefixes: ["NM-FIT","NM-FLG","NM-FLNG","NM-ELB","NM-TEE","NM-RED","NM-CAP","NM-CPL"] },
+  { key: "other",     label: "Others",                icon: "◇",  color: "#374151", light: "#F3F4F6", prefixes: [] },
+];
 
-function parseInchFraction(raw) {
-  if (raw.includes("/")) {
-    const si = raw.indexOf("/");
-    const den = parseInt(raw.slice(si + 1), 10);
-    const num = parseInt(raw.slice(si - 1, si), 10);
-    const whole = raw.slice(0, si - 1) ? parseInt(raw.slice(0, si - 1), 10) : 0;
-    if (!isNaN(whole) && !isNaN(num) && !isNaN(den) && den !== 0) return whole + num / den;
+const VALVE_KEYWORDS   = ["valve","gate valve","ball valve","butterfly valve","globe valve","check valve","needle valve","solenoid valve"];
+const FITTING_KEYWORDS = ["flange","elbow","tee","reducer","coupling","cap","fitting","union","bushing","nipple","socket","stub","olet","weldolet","sockolet"];
+
+function getCategory(product_id, product_name) {
+  const pid   = (product_id   || "").toUpperCase();
+  const pname = (product_name || "").toLowerCase();
+  for (const cat of CATEGORIES) {
+    if (cat.key === "other") continue;
+    if (cat.prefixes.some(p => pid.startsWith(p))) return cat;
   }
-  return parseFloat(raw) || 0;
+  if (VALVE_KEYWORDS.some(k => pname.includes(k)))   return CATEGORIES.find(c => c.key === "valves");
+  if (FITTING_KEYWORDS.some(k => pname.includes(k))) return CATEGORIES.find(c => c.key === "fittings");
+  const up = pname.toUpperCase();
+  if (up.includes("SHEET") || up.includes("PLATE")) return CATEGORIES.find(c => c.key === "sheets");
+  return CATEGORIES[CATEGORIES.length - 1];
+}
+
+const GRADE_PATTERNS = [
+  { re: /\b316[Ll]?\b/i,        label: "Grade 316"  },
+  { re: /\b304[Ll]?\b/i,        label: "Grade 304"  },
+  { re: /\b202\b/i,             label: "Grade 202"  },
+  { re: /\b201\b/i,             label: "Grade 201"  },
+  { re: /\b310[Ss]?\b/i,        label: "Grade 310"  },
+  { re: /\b321\b/i,             label: "Grade 321"  },
+  { re: /SCH[-\s]?80/i,         label: "SCH-80"     },
+  { re: /SCH[-\s]?40/i,         label: "SCH-40"     },
+  { re: /SCH[-\s]?20/i,         label: "SCH-20"     },
+  { re: /SCH[-\s]?10/i,         label: "SCH-10"     },
+  { re: /\b10[\s-]?SWG\b/i,     label: "10 SWG"    },
+  { re: /\b12[\s-]?SWG\b/i,     label: "12 SWG"    },
+  { re: /\b14[\s-]?SWG\b/i,     label: "14 SWG"    },
+  { re: /\b16[\s-]?SWG\b/i,     label: "16 SWG"    },
+  { re: /\b18[\s-]?SWG\b/i,     label: "18 SWG"    },
+  { re: /\b20[\s-]?SWG\b/i,     label: "20 SWG"    },
+  { re: /\b22[\s-]?SWG\b/i,     label: "22 SWG"    },
+  { re: /\bSWG\b/i,             label: "SWG"        },
+  { re: /\bHEAVY\b/i,           label: "Heavy"      },
+  { re: /\bMEDIUM\b/i,          label: "Medium"     },
+  { re: /\bLIGHT\b/i,           label: "Light"      },
+  { re: /\bA106\b/i,            label: "A106"       },
+  { re: /\bA53\b/i,             label: "A53"        },
+  { re: /\bIS[-\s]?2062\b/i,    label: "IS2062"     },
+  { re: /\bIS[-\s]?1239\b/i,    label: "IS1239"     },
+  { re: /\bIS[-\s]?3589\b/i,    label: "IS3589"     },
+];
+
+const VALVE_TYPE_PATTERNS = [
+  { re: /ball\s*valve/i,       label: "Ball Valve"      },
+  { re: /gate\s*valve/i,       label: "Gate Valve"      },
+  { re: /butterfly\s*valve/i,  label: "Butterfly Valve" },
+  { re: /globe\s*valve/i,      label: "Globe Valve"     },
+  { re: /check\s*valve/i,      label: "Check Valve"     },
+  { re: /needle\s*valve/i,     label: "Needle Valve"    },
+  { re: /solenoid\s*valve/i,   label: "Solenoid Valve"  },
+  { re: /valve/i,              label: "Valve (Other)"   },
+];
+
+const FITTING_TYPE_PATTERNS = [
+  { re: /flange/i,    label: "Flanges"   },
+  { re: /elbow/i,     label: "Elbows"    },
+  { re: /tee/i,       label: "Tees"      },
+  { re: /reducer/i,   label: "Reducers"  },
+  { re: /coupling/i,  label: "Couplings" },
+  { re: /cap\b/i,     label: "Caps"      },
+  { re: /union/i,     label: "Unions"    },
+  { re: /nipple/i,    label: "Nipples"   },
+  { re: /socket/i,    label: "Sockets"   },
+  { re: /olet/i,      label: "Olets"     },
+];
+
+const GRADE_ORDER = [
+  "Grade 201","Grade 202","Grade 304","Grade 316","Grade 310","Grade 321",
+  "SCH-10","SCH-20","SCH-40","SCH-80",
+  "10 SWG","12 SWG","14 SWG","16 SWG","18 SWG","20 SWG","22 SWG","SWG",
+  "Heavy","Medium","Light",
+  "A106","A53","IS2062","IS1239","IS3589","Standard",
+  "Ball Valve","Butterfly Valve","Check Valve","Gate Valve","Globe Valve","Needle Valve","Solenoid Valve","Valve (Other)",
+  "Caps","Couplings","Elbows","Flanges","Nipples","Olets","Reducers","Sockets","Tees","Unions",
+];
+
+function gradeSort(a, b) {
+  const ai = GRADE_ORDER.indexOf(a);
+  const bi = GRADE_ORDER.indexOf(b);
+  if (ai === -1 && bi === -1) return a.localeCompare(b);
+  if (ai === -1) return 1;
+  if (bi === -1) return -1;
+  return ai - bi;
+}
+
+function extractGrade(name, catKey) {
+  if (catKey === "valves") {
+    for (const { re, label } of VALVE_TYPE_PATTERNS) { if (re.test(name)) return label; }
+    return "Valve (Other)";
+  }
+  if (catKey === "fittings") {
+    for (const { re, label } of FITTING_TYPE_PATTERNS) { if (re.test(name)) return label; }
+    return "Fitting (Other)";
+  }
+  for (const { re, label } of GRADE_PATTERNS) { if (re.test(name)) return label; }
+  return "Standard";
 }
 
 function extractSizeKey(name) {
-  const n = name.trim();
-  const inch = n.match(/(\d+(?:\/\d+)?)\s*"/i);
-  if (inch) return parseInchFraction(inch[1]);
-  const nb = n.match(/(\d+(?:\.\d+)?)\s*NB/i);
-  if (nb) return parseFloat(nb[1]);
-  const mm = n.match(/(\d+(?:\.\d+)?)\s*(?:X\s|MM)/i);
-  if (mm) return parseFloat(mm[1]);
-  const any = n.match(/(\d+(?:\.\d+)?)/);
-  if (any) return parseFloat(any[1]);
-  return 0;
+  const s = (name || "").toLowerCase();
+  const nbMatch = s.match(/(\d+(?:\.\d+)?)\s*(?:nb|mm)/);
+  if (nbMatch) return parseFloat(nbMatch[1]);
+  const fracs = { "1/4":0.25,"3/8":0.375,"1/2":0.5,"3/4":0.75,"1/8":0.125 };
+  for (const [k,v] of Object.entries(fracs)) { if (s.includes(k)) return v; }
+  const numMatch = s.match(/(\d+(?:\.\d+)?)/);
+  return numMatch ? parseFloat(numMatch[1]) : 9999;
 }
 
-function sortItemsBySize(items) {
-  return [...items].sort((a, b) => {
-    const sa = extractSizeKey(a.product_name || a.name || "");
-    const sb = extractSizeKey(b.product_name || b.name || "");
-    if (sa !== sb) return sa - sb;
-    return (a.product_name || a.name || "").localeCompare(b.product_name || b.name || "");
-  });
-}
-
-function buildCatalog(items) {
-  const catalog = {};
-  items.forEach(item => {
-    const itemName = item.product_name || item.name || "";
-    const mat = inferMaterial(itemName);
-    const cat = inferCategory(itemName);
-    if (!catalog[mat]) catalog[mat] = {};
-    if (!catalog[mat][cat]) catalog[mat][cat] = [];
-    catalog[mat][cat].push(item);
-  });
-  return catalog;
-}
-
-const CATEGORY_ORDER = [
-  "SCH 5","SCH 10","SCH 20","SCH 40","SCH 80","SCH 160","Seamless",
-  "SWG 20","SWG 18","SWG 16","SWG 14","SWG 12","SWG 10",
-  "ERW","Polish Pipe","Square Rod","Rectangular Pipe","Round Bar",
-  "Flat Bar","Angle","Channel","Sheet / Plate","Coil / Strip","Pipe (General)","General",
-];
-
-function sortCategoryKeys(keys) {
-  return [...keys].sort((a, b) => {
-    const ia = CATEGORY_ORDER.indexOf(a);
-    const ib = CATEGORY_ORDER.indexOf(b);
-    if (ia === -1 && ib === -1) return a.localeCompare(b);
-    if (ia === -1) return 1;
-    if (ib === -1) return -1;
-    return ia - ib;
-  });
-}
-// ── end helpers ───────────────────────────────────────────────────────────────
-
-// Compute stock for a product at a specific location from transactions array
-function calcStock(productId, transactions, locationId) {
-  return transactions
-    .filter(t => t.product_id === productId && t.location_id === locationId)
-    .reduce((sum, t) => {
-      const qty = Number(t.quantity || 0);
-      const type = (t.transaction_type || "").toLowerCase();
-      return sum + (type === "inward" ? qty : -qty);
-    }, 0);
-}
-
-// Total stock across all warehouse locations
-function calcTotalStock(productId, transactions, locationIds) {
-  return locationIds.reduce((sum, lid) => sum + calcStock(productId, transactions, lid), 0);
+function safeStock(v) {
+  const n = Number(v) || 0;
+  return Object.is(n, -0) ? 0 : n;
 }
 
 export default function WarehouseStock() {
-  const [products, setProducts]         = useState([]);
-  const [transactions, setTransactions] = useState([]);
-  // Non-office warehouse/godown locations
-  const [locations, setLocations]       = useState([]);
-  const [search, setSearch]             = useState("");
-  const [openMaterials, setOpenMaterials]   = useState({});
-  const [openCategories, setOpenCategories] = useState({});
+  const [products, setProducts]     = useState([]);
+  const [stockMap, setStockMap]     = useState({});   // { productId: { locationId: qty } }
+  const [locations, setLocations]   = useState([]);   // warehouse-only locations
+  const [search, setSearch]         = useState("");
+  const [loading, setLoading]       = useState(true);
+  const [openCats, setOpenCats]     = useState({});
+  const [openGrades, setOpenGrades] = useState({});
 
-  // new item form
-  const [showAddItem, setShowAddItem]   = useState(false);
-  const [newItem, setNewItem]           = useState({ name: "", unit: "Pcs", low_stock_alert: "", openingQty: "", openingRate: "", openingLocId: "" });
-  const [addingItem, setAddingItem]     = useState(false);
+  // Add stock modal
+  const [stockModal, setStockModal] = useState(null); // { product, mode: locationId }
+  const [stockForm, setStockForm]   = useState({ quantity:"", notes:"", party:"", type:"inward" });
+  const [saving, setSaving]         = useState(false);
 
-  // stock panel
-  const [panelOpen, setPanelOpen]       = useState(false);
-  const [panelItem, setPanelItem]       = useState(null);
-  const [form, setForm]                 = useState({ location_id: "", type: "inward", qty: "", rate: "", party: "", date: "" });
-  const [saving, setSaving]             = useState(false);
+  useEffect(() => { loadAll(); }, []);
 
-  useEffect(() => {
-    loadAll();
+  const loadAll = async () => {
+    setLoading(true);
+    try { await Promise.all([loadLocations(), loadProducts(), loadStockFromTransactions()]); }
+    finally { setLoading(false); }
+  };
 
-    const channel = supabase
-      .channel("warehouse-transactions-realtime")
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "transactions" },
-        () => { loadAll(); }
-      )
-      .subscribe();
-
-    return () => { supabase.removeChannel(channel); };
-  }, []);
-
-  async function loadAll() {
-    // Step 1: fetch all non-office locations
-    const { data: loc } = await supabase
+  const loadLocations = async () => {
+    const { data, error } = await supabase
       .from("locations")
       .select("*")
       .not("name", "ilike", "office");
+    if (!error) setLocations(data || []);
+  };
 
-    const warehouseLocs = loc || [];
-    const warehouseLocIds = warehouseLocs.map(l => l.id);
-    setLocations(warehouseLocs);
-
-    if (warehouseLocIds.length === 0) {
-      setProducts([]);
-      setTransactions([]);
-      return;
-    }
-
-    // Step 2: fetch all transactions for warehouse locations
-    const { data: txns } = await supabase
-      .from("transactions")
-      .select("*")
-      .in("location_id", warehouseLocIds)
-      .order("created_at");
-
-    const txnsData = txns || [];
-    setTransactions(txnsData);
-
-    // Step 3: collect unique product IDs that have warehouse transactions
-    const productIds = [...new Set(txnsData.map(t => t.product_id).filter(Boolean))];
-
-    if (productIds.length === 0) {
-      setProducts([]);
-      return;
-    }
-
-    // Step 4: fetch those products
-    const { data: prod } = await supabase
+  const loadProducts = async () => {
+    const { data, error } = await supabase
       .from("products")
       .select("*")
-      .in("id", productIds);
+      .order("product_name", { ascending: true });
+    if (!error) setProducts(data || []);
+  };
 
-    setProducts(prod || []);
-  }
-
-  async function handleAddItem() {
-    if (!newItem.name.trim()) { alert("Enter an item name."); return; }
-    const locId = newItem.openingLocId || locations[0]?.id;
-    if (!locId) { alert("No warehouse location found."); return; }
-    setAddingItem(true);
-    try {
-      const productId = newItem.name.trim().toUpperCase().replace(/\s+/g, "-");
-      const { data: inserted, error } = await supabase.from("products").insert([{
-        product_id: productId,
-        product_name: newItem.name.trim(),
-        unit: newItem.unit || "Pcs",
-        low_stock_alert: Number(newItem.low_stock_alert || 0),
-      }]).select("*").single();
-      if (error) throw error;
-
-      if (newItem.openingQty && Number(newItem.openingQty) > 0) {
-        const { data: { user } } = await supabase.auth.getUser();
-        const { error: txErr } = await supabase.from("transactions").insert([{
-          product_id: inserted.id,
-          location_id: locId,
-          transaction_type: "inward",
-          quantity: Number(newItem.openingQty),
-          rate: Number(newItem.openingRate || 0),
-          party: "Opening Stock",
-          created_by_email: user?.email || "",
-          created_at: new Date().toISOString(),
-        }]);
-        if (txErr) throw txErr;
-      }
-
-      setNewItem({ name: "", unit: "Pcs", low_stock_alert: "", openingQty: "", openingRate: "", openingLocId: "" });
-      setShowAddItem(false);
-      loadAll();
-    } catch (err) {
-      alert("Error: " + err.message);
-    } finally {
-      setAddingItem(false);
+  // ── Load stock from ALL transactions, same logic as Products.jsx ────────────
+  // We fetch every transaction (paginated) and build a full stockMap,
+  // then when rendering we look up only warehouse location IDs.
+  // This guarantees numbers match Products page exactly.
+  const loadStockFromTransactions = async () => {
+    const map = {};
+    let from = 0;
+    const PAGE_SIZE = 1000;
+    while (true) {
+      const { data, error } = await supabase
+        .from("transactions")
+        .select("product_id, location_id, transaction_type, quantity")
+        .range(from, from + PAGE_SIZE - 1);
+      if (error || !data || data.length === 0) break;
+      data.forEach(({ product_id, location_id, transaction_type, quantity }) => {
+        if (!map[product_id]) map[product_id] = {};
+        if (!map[product_id][location_id]) map[product_id][location_id] = 0;
+        const q = Number(quantity) || 0;
+        if (transaction_type === "inward")  map[product_id][location_id] += q;
+        else if (transaction_type === "outward") map[product_id][location_id] -= q;
+      });
+      if (data.length < PAGE_SIZE) break;
+      from += PAGE_SIZE;
     }
-  }
+    setStockMap(map);
+  };
 
-  function openPanel(item) {
-    setPanelItem(item);
-    const today = new Date().toISOString().split("T")[0];
-    setForm({ location_id: locations[0]?.id || "", type: "inward", qty: "", rate: "", party: "", date: today });
-    setPanelOpen(true);
-  }
+  // ── Stock helpers ────────────────────────────────────────────────────────────
+  const stockByLocation = useCallback(
+    (uuid, locId) => safeStock(stockMap[uuid]?.[locId]),
+    [stockMap]
+  );
 
-  async function handleAddStock() {
-    if (!form.qty || !form.location_id) { alert("Fill in Location and Quantity."); return; }
+  // Total warehouse stock = sum across all warehouse location IDs
+  const warehouseTotal = useCallback(
+    (uuid) => {
+      const locIds = locations.map(l => l.id);
+      const total = locIds.reduce((s, lid) => s + (stockMap[uuid]?.[lid] ?? 0), 0);
+      return safeStock(total);
+    },
+    [stockMap, locations]
+  );
+
+  // ── Add stock ────────────────────────────────────────────────────────────────
+  const submitStock = async () => {
+    if (!stockForm.quantity || !stockModal) return;
+    const qty = Number(stockForm.quantity);
+    if (isNaN(qty) || qty < 0) return;
     setSaving(true);
-    try {
-      const { data: { user } } = await supabase.auth.getUser();
-      const ts = form.date ? new Date(form.date + "T12:00:00+05:30").toISOString() : new Date().toISOString();
-      const { error } = await supabase.from("transactions").insert([{
-        product_id: panelItem.id,
-        location_id: form.location_id,
-        transaction_type: form.type,
-        quantity: Number(form.qty),
-        rate: Number(form.rate || 0),
-        party: form.party || "",
-        created_by_email: user?.email || "",
-        created_at: ts,
+    const loc = locations.find(l => l.id === stockModal.locId);
+    if (loc) {
+      await supabase.from("transactions").insert([{
+        product_id: stockModal.product.id,
+        location_id: loc.id,
+        transaction_type: stockForm.type,
+        quantity: qty,
+        notes: stockForm.notes || null,
+        party: stockForm.party || null,
       }]);
-      if (error) throw error;
-      setPanelOpen(false);
-      await loadAll();
-    } catch (err) {
-      alert("Error: " + err.message);
-    } finally {
-      setSaving(false);
     }
-  }
+    setSaving(false);
+    setStockModal(null);
+    setStockForm({ quantity:"", notes:"", party:"", type:"inward" });
+    await loadStockFromTransactions();
+  };
 
-  const locationIds = locations.map(l => l.id);
+  // ── Filter + group (same logic as Products.jsx) ──────────────────────────────
+  const filtered = products
+    .filter(p =>
+      (p.product_name||"").toLowerCase().includes(search.toLowerCase()) ||
+      (p.product_id||"").toLowerCase().includes(search.toLowerCase())
+    )
+    .filter(p => warehouseTotal(p.id) !== 0 || search) // only show products that have warehouse stock (unless searching)
+    .sort((a,b) => (a.product_name||"").localeCompare(b.product_name||""));
 
-  const filteredProducts = search
-    ? products.filter(p =>
-        (p.product_name || "").toLowerCase().includes(search.toLowerCase()) ||
-        (p.product_id || "").toLowerCase().includes(search.toLowerCase())
-      )
-    : products;
+  const grouped = {};
+  filtered.forEach(p => {
+    const cat   = getCategory(p.product_id, p.product_name);
+    const grade = extractGrade(p.product_name, cat.key);
+    if (!grouped[cat.key]) grouped[cat.key] = { cat, grades: {} };
+    if (!grouped[cat.key].grades[grade]) grouped[cat.key].grades[grade] = [];
+    grouped[cat.key].grades[grade].push(p);
+  });
+  Object.values(grouped).forEach(({ grades }) => {
+    Object.keys(grades).forEach(g => {
+      grades[g].sort((a,b) => extractSizeKey(a.product_name) - extractSizeKey(b.product_name));
+    });
+  });
 
-  const catalog = buildCatalog(filteredProducts);
-  const materialKeys = Object.keys(catalog).sort();
+  const catOrder = CATEGORIES.map(c => c.key).filter(k => grouped[k]);
+  const lowStockCount = products.filter(p => p.low_stock_alert && warehouseTotal(p.id) <= Number(p.low_stock_alert) && warehouseTotal(p.id) > 0).length;
 
-  const toggleMaterial = (mat) => setOpenMaterials(prev => ({ ...prev, [mat]: !prev[mat] }));
-  const toggleCategory = (key) => setOpenCategories(prev => ({ ...prev, [key]: !prev[key] }));
+  const toggleCat   = (key) => setOpenCats(prev   => ({ ...prev, [key]: !prev[key] }));
+  const toggleGrade = (key) => setOpenGrades(prev  => ({ ...prev, [key]: !prev[key] }));
 
   return (
-    <div className="p-6">
+    <div style={{ background:"#F8F7F4", minHeight:"100vh" }} className="p-4 md:p-6 max-w-screen-xl mx-auto">
+
       {/* HEADER */}
-      <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
+      <div className="flex flex-wrap items-start justify-between gap-3 mb-6">
         <div>
-          <h1 className="text-3xl font-bold">🏭 Warehouse Stock</h1>
-          <p className="text-gray-500 text-sm mt-1">Live stock across Warehouse &amp; Godown locations</p>
-        </div>
-        <button
-          onClick={() => {
-            setNewItem({ name: "", unit: "Pcs", low_stock_alert: "", openingQty: "", openingRate: "", openingLocId: locations[0]?.id || "" });
-            setShowAddItem(true);
-          }}
-          className="bg-blue-600 hover:bg-blue-700 text-white font-bold px-5 py-2.5 rounded-xl shadow transition-colors"
-        >
-          + Add New Item
-        </button>
-      </div>
-
-      {/* ADD ITEM MODAL */}
-      {showAddItem && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 px-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6">
-            <h2 className="text-xl font-bold mb-4">Add New Warehouse Item</h2>
-            <div className="space-y-4">
-              <div>
-                <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Item Name</label>
-                <input
-                  value={newItem.name}
-                  onChange={e => setNewItem(n => ({ ...n, name: e.target.value }))}
-                  placeholder="e.g. SS 304 PIPE SCH-10 25NB"
-                  className="w-full border border-gray-300 rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-blue-400"
-                />
-                {newItem.name && (
-                  <p className="text-xs text-gray-400 mt-1">
-                    Auto-category: <span className="font-semibold text-blue-600">{inferMaterial(newItem.name)} → {inferCategory(newItem.name)}</span>
-                  </p>
-                )}
-              </div>
-
-              <div className="flex gap-3">
-                <div className="flex-1">
-                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Unit</label>
-                  <input
-                    value={newItem.unit}
-                    onChange={e => setNewItem(n => ({ ...n, unit: e.target.value }))}
-                    placeholder="Pcs, Kg, Mtr..."
-                    className="w-full border border-gray-300 rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-blue-400"
-                  />
-                </div>
-                <div className="flex-1">
-                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Low Alert Qty</label>
-                  <input
-                    type="number" min="0"
-                    value={newItem.low_stock_alert}
-                    onChange={e => setNewItem(n => ({ ...n, low_stock_alert: e.target.value }))}
-                    placeholder="0"
-                    className="w-full border border-gray-300 rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-blue-400"
-                  />
-                </div>
-              </div>
-
-              <div className="border border-dashed border-gray-300 rounded-xl p-4 space-y-3 bg-gray-50">
-                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Opening Stock <span className="text-gray-400 normal-case font-normal">optional</span></p>
-                <div>
-                  <label className="block text-xs text-gray-500 mb-1">Location</label>
-                  <select
-                    value={newItem.openingLocId}
-                    onChange={e => setNewItem(n => ({ ...n, openingLocId: e.target.value }))}
-                    className="w-full border border-gray-300 rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white"
-                  >
-                    {locations.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
-                  </select>
-                </div>
-                <div className="flex gap-3">
-                  <div className="flex-1">
-                    <label className="block text-xs text-gray-500 mb-1">Qty</label>
-                    <input
-                      type="number" min="0"
-                      value={newItem.openingQty}
-                      onChange={e => setNewItem(n => ({ ...n, openingQty: e.target.value }))}
-                      placeholder="0"
-                      className="w-full border border-gray-300 rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white"
-                    />
-                  </div>
-                  <div className="flex-1">
-                    <label className="block text-xs text-gray-500 mb-1">Rate (₹)</label>
-                    <input
-                      type="number" min="0"
-                      value={newItem.openingRate}
-                      onChange={e => setNewItem(n => ({ ...n, openingRate: e.target.value }))}
-                      placeholder="0"
-                      className="w-full border border-gray-300 rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white"
-                    />
-                  </div>
-                </div>
-              </div>
+          <div className="flex items-center gap-3 mb-1">
+            <div style={{ background:"#1B3A6B", borderRadius:10 }} className="w-9 h-9 flex items-center justify-center">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2">
+                <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+                <polyline points="9 22 9 12 15 12 15 22"/>
+              </svg>
             </div>
-            <div className="flex gap-3 mt-6">
-              <button
-                onClick={handleAddItem}
-                disabled={addingItem}
-                className="flex-1 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-bold py-3 rounded-xl"
-              >
-                {addingItem ? "Adding..." : "✅ Add Item"}
-              </button>
-              <button
-                onClick={() => setShowAddItem(false)}
-                className="flex-1 bg-gray-200 hover:bg-gray-300 text-gray-700 font-bold py-3 rounded-xl"
-              >
-                Cancel
-              </button>
-            </div>
+            <h1 style={{ color:"#1B3A6B" }} className="text-2xl font-black tracking-tight">Warehouse Stock</h1>
+          </div>
+          <div className="ml-12 flex flex-col gap-0.5">
+            <p className="text-sm text-gray-500">
+              <span className="font-semibold text-gray-700">{filtered.length}</span> products with stock
+              {locations.length > 0 && <> · <span className="text-gray-400">{locations.map(l=>l.name).join(", ")}</span></>}
+              {lowStockCount > 0 && <> · <span style={{ color:"#E8630A" }} className="font-semibold">{lowStockCount} low stock</span></>}
+            </p>
           </div>
         </div>
-      )}
+      </div>
 
       {/* SEARCH */}
-      <div className="mb-5">
+      <div className="relative mb-5">
+        <svg className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
         <input
-          placeholder="Search products..."
+          placeholder="Search by product ID or name…"
           value={search}
           onChange={e => setSearch(e.target.value)}
-          className="border border-gray-300 p-2.5 rounded-xl w-full max-w-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+          className="w-full border border-gray-200 pl-10 pr-4 py-2.5 rounded-xl text-sm focus:outline-none bg-white shadow-sm"
         />
       </div>
 
-      {/* CATALOG TREE */}
-      <div className="space-y-3">
-        {materialKeys.length === 0 ? (
-          <div className="bg-white rounded-xl shadow p-12 text-center">
-            <div className="text-4xl mb-3">📭</div>
-            <p className="text-gray-400 text-lg font-medium">No warehouse items yet</p>
-            <p className="text-gray-400 text-sm mt-1">Click "+ Add New Item" or log a transaction with a Warehouse / Godown location</p>
-          </div>
-        ) : materialKeys.map(mat => {
-          const isMaterialOpen = openMaterials[mat] !== false;
-          const catKeys = sortCategoryKeys(Object.keys(catalog[mat]));
-          const totalInMat = catKeys.reduce((s, c) => s + catalog[mat][c].length, 0);
-
-          return (
-            <div key={mat} className="bg-white rounded-xl shadow overflow-hidden border border-gray-100">
-              <button
-                onClick={() => toggleMaterial(mat)}
-                className="w-full flex items-center justify-between px-5 py-4 bg-gradient-to-r from-blue-700 to-blue-800 text-white hover:from-blue-800 hover:to-blue-900 transition-all"
-              >
-                <div className="flex items-center gap-3">
-                  <span className="text-lg font-bold">{mat}</span>
-                  <span className="text-xs bg-white/20 px-2 py-0.5 rounded-full font-medium">
-                    {totalInMat} items · {catKeys.length} categories
-                  </span>
-                </div>
-                <span className="text-xl font-light">{isMaterialOpen ? "▲" : "▼"}</span>
-              </button>
-
-              {isMaterialOpen && (
-                <div className="divide-y divide-gray-100">
-                  {catKeys.map(cat => {
-                    const catKey = mat + "||" + cat;
-                    const isCatOpen = openCategories[catKey] !== false;
-                    const catItems = sortItemsBySize(catalog[mat][cat]);
-
-                    return (
-                      <div key={cat}>
-                        <button
-                          onClick={() => toggleCategory(catKey)}
-                          className="w-full flex items-center justify-between px-6 py-3 bg-blue-50 hover:bg-blue-100 transition-colors text-left"
-                        >
-                          <div className="flex items-center gap-2">
-                            <span className="text-sm font-bold text-blue-800">{cat}</span>
-                            <span className="text-xs bg-blue-200 text-blue-800 px-2 py-0.5 rounded-full">{catItems.length} item{catItems.length !== 1 ? "s" : ""}</span>
-                          </div>
-                          <span className="text-blue-400 text-sm">{isCatOpen ? "▲" : "▼"}</span>
-                        </button>
-
-                        {isCatOpen && (
-                          <div className="overflow-x-auto">
-                            <table className="w-full text-sm">
-                              <thead className="bg-gray-50 text-gray-500 text-xs uppercase tracking-wide">
-                                <tr>
-                                  <th className="px-6 py-2 text-left font-semibold">Item Name</th>
-                                  {locations.map(l => (
-                                    <th key={l.id} className="px-4 py-2 text-center font-semibold">{l.name}</th>
-                                  ))}
-                                  <th className="px-4 py-2 text-center font-semibold">Total</th>
-                                  <th className="px-4 py-2 text-center font-semibold">Status</th>
-                                  <th className="px-4 py-2 text-center font-semibold">Action</th>
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {catItems.map((item, idx) => {
-                                  const total = calcTotalStock(item.id, transactions, locationIds);
-                                  const low = item.low_stock_alert && total > 0 && total <= item.low_stock_alert;
-                                  const stockColor = total === 0 ? "text-red-500" : low ? "text-orange-500" : "text-green-600";
-                                  return (
-                                    <tr
-                                      key={item.id}
-                                      className={`border-t border-gray-100 ${idx % 2 === 1 ? "bg-gray-50/50" : "bg-white"} hover:bg-blue-50/30 transition-colors`}
-                                    >
-                                      <td className="px-6 py-3">
-                                        <div className="font-medium text-gray-800">{item.product_name || item.name}</div>
-                                        {low && <span className="text-xs bg-orange-100 text-orange-700 font-semibold px-2 py-0.5 rounded-full">⚠ Low Stock</span>}
-                                      </td>
-                                      {locations.map(l => {
-                                        const locQty = calcStock(item.id, transactions, l.id);
-                                        return (
-                                          <td key={l.id} className={`px-4 py-3 text-center font-semibold tabular-nums ${locQty === 0 ? "text-gray-400" : "text-gray-700"}`}>
-                                            {locQty} <span className="text-xs text-gray-400">{item.unit || "Pcs"}</span>
-                                          </td>
-                                        );
-                                      })}
-                                      <td className={`px-4 py-3 text-center font-bold tabular-nums text-lg ${stockColor}`}>
-                                        {total} <span className="text-xs font-normal">{item.unit || "Pcs"}</span>
-                                      </td>
-                                      <td className="px-4 py-3 text-center">
-                                        {total === 0 ? (
-                                          <span className="text-xs bg-red-100 text-red-600 font-semibold px-2 py-0.5 rounded-full">Out of Stock</span>
-                                        ) : low ? (
-                                          <span className="text-xs bg-orange-100 text-orange-700 font-semibold px-2 py-0.5 rounded-full">⚠ Low</span>
-                                        ) : (
-                                          <span className="text-xs bg-green-100 text-green-700 font-semibold px-2 py-0.5 rounded-full">✅ In Stock</span>
-                                        )}
-                                      </td>
-                                      <td className="px-4 py-3 text-center">
-                                        <button
-                                          onClick={() => openPanel(item)}
-                                          className="bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold px-3 py-1.5 rounded-lg transition-colors"
-                                        >
-                                          + Stock
-                                        </button>
-                                      </td>
-                                    </tr>
-                                  );
-                                })}
-                              </tbody>
-                            </table>
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          );
-        })}
+      {/* CATEGORY PILLS */}
+      <div className="flex flex-wrap gap-2 mb-5">
+        {CATEGORIES.filter(c => grouped[c.key]).map(c => (
+          <button
+            key={c.key}
+            onClick={() => toggleCat(c.key)}
+            style={{
+              background: openCats[c.key] === false ? c.light : c.color,
+              color: openCats[c.key] === false ? c.color : "#fff",
+              border:`1.5px solid ${c.color}`
+            }}
+            className="px-3 py-1 rounded-full text-xs font-bold transition-all"
+          >
+            {c.icon} {c.label} ({Object.values(grouped[c.key]?.grades||{}).flat().length})
+          </button>
+        ))}
       </div>
 
-      {/* SLIDE-IN STOCK PANEL */}
-      {panelOpen && panelItem && (
-        <div className="fixed inset-0 z-50 flex">
-          <div className="flex-1 bg-black/40" onClick={() => setPanelOpen(false)} />
-          <div className="w-full max-w-md bg-white shadow-2xl flex flex-col">
-            <div className="px-6 py-5 bg-gradient-to-r from-blue-700 to-blue-800 text-white">
-              <h2 className="text-lg font-bold">+ Add Stock Movement</h2>
-              <p className="text-blue-200 text-sm mt-1 truncate">{panelItem.product_name || panelItem.name}</p>
-              <p className="text-blue-300 text-xs mt-0.5">🏭 Warehouse / Godown</p>
-            </div>
+      {loading ? (
+        <div className="flex items-center justify-center py-20 text-gray-400">
+          <svg className="animate-spin mr-2" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
+          Loading warehouse stock…
+        </div>
+      ) : filtered.length === 0 ? (
+        <div className="text-center py-20 text-gray-400">
+          <svg className="mx-auto mb-3 opacity-40" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+          <p className="font-semibold">No warehouse stock found</p>
+          <p className="text-sm mt-1">{search ? "Try a different search term" : "Add inward transactions for warehouse locations to see stock here"}</p>
+        </div>
+      ) : (
+        <div className="space-y-4">
+          {catOrder.map(catKey => {
+            const { cat, grades } = grouped[catKey];
+            const totalProducts   = Object.values(grades).flat().length;
+            const totalQty        = Object.values(grades).flat().reduce((s,p) => s + warehouseTotal(p.id), 0);
+            const isOpen          = openCats[catKey] !== false;
 
-            {/* Stock per location summary */}
-            <div className="px-6 pt-4">
-              <div className="bg-gray-50 rounded-xl p-3 space-y-1">
-                {locations.map(l => {
-                  const locQty = calcStock(panelItem.id, transactions, l.id);
-                  return (
-                    <div key={l.id} className="flex justify-between text-sm">
-                      <span className="text-gray-600">{l.name}</span>
-                      <span className={`font-semibold tabular-nums ${locQty === 0 ? "text-gray-400" : "text-gray-700"}`}>
-                        {locQty} {panelItem.unit || "Pcs"}
-                      </span>
-                    </div>
-                  );
-                })}
-                <div className="flex justify-between text-sm border-t border-gray-200 pt-1 mt-1">
-                  <span className="font-semibold text-gray-700">Total</span>
-                  <span className={`font-bold tabular-nums ${
-                    calcTotalStock(panelItem.id, transactions, locationIds) === 0 ? "text-red-500" : "text-green-600"
-                  }`}>
-                    {calcTotalStock(panelItem.id, transactions, locationIds)} {panelItem.unit || "Pcs"}
-                  </span>
-                </div>
-              </div>
-            </div>
-
-            <div className="flex-1 overflow-y-auto p-6 space-y-4">
-              <div>
-                <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Location</label>
-                <select
-                  value={form.location_id}
-                  onChange={e => setForm(f => ({ ...f, location_id: e.target.value }))}
-                  className="w-full border border-gray-300 rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white"
+            return (
+              <div key={catKey} className="rounded-2xl overflow-hidden shadow-sm" style={{ border:`1.5px solid ${cat.color}22` }}>
+                <button
+                  onClick={() => toggleCat(catKey)}
+                  className="w-full flex items-center justify-between px-5 py-4 transition-colors text-left"
+                  style={{ background: cat.light }}
                 >
-                  {locations.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
-                </select>
+                  <div className="flex items-center gap-3">
+                    <div className="w-9 h-9 rounded-xl flex items-center justify-center text-white font-black text-lg shadow-sm" style={{ background: cat.color }}>
+                      {cat.icon}
+                    </div>
+                    <div>
+                      <p className="font-black text-base" style={{ color: cat.color }}>{cat.label}</p>
+                      <p className="text-xs text-gray-500 mt-0.5">
+                        {totalProducts} products · {totalQty.toLocaleString()} units · {Object.keys(grades).length} group{Object.keys(grades).length !== 1 ? "s" : ""}
+                      </p>
+                    </div>
+                  </div>
+                  <svg
+                    className="transition-transform"
+                    style={{ transform: isOpen ? "rotate(180deg)" : "rotate(0deg)", color: cat.color }}
+                    width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"
+                  >
+                    <path d="m6 9 6 6 6-6"/>
+                  </svg>
+                </button>
+
+                {isOpen && (
+                  <div className="bg-white">
+                    {Object.keys(grades).sort(gradeSort).map(grade => {
+                      const gradeKey    = `${catKey}-${grade}`;
+                      const isGradeOpen = openGrades[gradeKey] !== false;
+                      const items       = grades[grade];
+                      const gradeQty    = items.reduce((s,p) => s + warehouseTotal(p.id), 0);
+
+                      return (
+                        <div key={grade} className="border-t border-gray-50">
+                          <button
+                            onClick={() => toggleGrade(gradeKey)}
+                            className="w-full flex items-center justify-between px-5 py-3 hover:bg-gray-50 transition text-left"
+                            style={{ background:"#FAFAF9" }}
+                          >
+                            <div className="flex items-center gap-2.5">
+                              <span className="inline-flex items-center px-2.5 py-0.5 rounded-md text-xs font-bold text-white" style={{ background: cat.color }}>{grade}</span>
+                              <span className="text-sm font-semibold text-gray-600">{items.length} item{items.length !== 1 ? "s" : ""}</span>
+                              <span className="text-xs text-gray-400">· {gradeQty.toLocaleString()} units</span>
+                            </div>
+                            <svg
+                              className="transition-transform text-gray-400"
+                              style={{ transform: isGradeOpen ? "rotate(180deg)" : "rotate(0deg)" }}
+                              width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"
+                            >
+                              <path d="m6 9 6 6 6-6"/>
+                            </svg>
+                          </button>
+
+                          {isGradeOpen && (
+                            <div className="overflow-x-auto">
+                              <table className="w-full text-sm">
+                                <thead>
+                                  <tr style={{ background: cat.light }} className="text-xs font-bold uppercase tracking-wide">
+                                    <th className="px-4 py-2.5 text-left" style={{ color: cat.color }}>Product ID</th>
+                                    <th className="px-4 py-2.5 text-left" style={{ color: cat.color }}>Name</th>
+                                    {locations.map(l => (
+                                      <th key={l.id} className="px-4 py-2.5 text-center" style={{ color: cat.color }}>
+                                        {l.name}
+                                      </th>
+                                    ))}
+                                    <th className="px-4 py-2.5 text-center" style={{ color: cat.color }}>Total</th>
+                                    <th className="px-4 py-2.5 text-center" style={{ color: cat.color }}>Alert</th>
+                                    <th className="px-4 py-2.5 text-center" style={{ color: cat.color }}>Actions</th>
+                                  </tr>
+                                </thead>
+                                <tbody className="divide-y divide-gray-50">
+                                  {items.map(p => {
+                                    const total  = warehouseTotal(p.id);
+                                    const isLow  = p.low_stock_alert && total > 0 && total <= Number(p.low_stock_alert);
+                                    return (
+                                      <tr key={p.id} className={`transition hover:bg-orange-50/20 ${isLow ? "bg-red-50/40" : ""}`}>
+                                        <td className="px-4 py-3 font-mono text-xs text-gray-400">
+                                          {p.product_id || "—"}
+                                        </td>
+                                        <td className="px-4 py-3 font-semibold" style={{ color:"#1B3A6B" }}>
+                                          {p.product_name}
+                                          {isLow && (
+                                            <span className="ml-2 inline-block px-1.5 py-0.5 rounded text-xs font-bold bg-red-100 text-red-600">⚠ Low</span>
+                                          )}
+                                        </td>
+                                        {locations.map(l => {
+                                          const locQty = stockByLocation(p.id, l.id);
+                                          return (
+                                            <td key={l.id} className="px-4 py-3 text-center">
+                                              <span
+                                                className="inline-block px-2.5 py-0.5 rounded-full text-xs font-bold tabular-nums"
+                                                style={{ background:"#E6F5F1", color:"#0D7A5F" }}
+                                              >
+                                                {locQty}
+                                              </span>
+                                            </td>
+                                          );
+                                        })}
+                                        <td className="px-4 py-3 text-center">
+                                          <span className="font-black tabular-nums text-gray-800">{total}</span>
+                                        </td>
+                                        <td className="px-4 py-3 text-center">
+                                          <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${isLow ? "bg-red-100 text-red-600" : "bg-gray-100 text-gray-500"}`}>
+                                            {p.low_stock_alert || "—"}
+                                          </span>
+                                        </td>
+                                        <td className="px-4 py-3">
+                                          <div className="flex items-center justify-center gap-1.5 flex-wrap">
+                                            {/* Per-location stock buttons */}
+                                            {locations.length === 1 ? (
+                                              <button
+                                                onClick={() => { setStockModal({ product: p, locId: locations[0].id }); setStockForm({ quantity:"", notes:"", party:"", type:"inward" }); }}
+                                                className="text-xs px-2.5 py-1 rounded-md font-medium"
+                                                style={{ background:"#EBF0FA", color:"#1B3A6B" }}
+                                              >
+                                                + Stock
+                                              </button>
+                                            ) : (
+                                              <div className="relative group">
+                                                <button className="text-xs px-2.5 py-1 rounded-md font-medium" style={{ background:"#EBF0FA", color:"#1B3A6B" }}>
+                                                  + Stock ▾
+                                                </button>
+                                                <div className="absolute right-0 top-full mt-1 bg-white border border-gray-100 rounded-xl shadow-xl z-10 hidden group-hover:block min-w-[140px] overflow-hidden">
+                                                  {locations.map(loc => (
+                                                    <button
+                                                      key={loc.id}
+                                                      onClick={e => { e.stopPropagation(); setStockModal({ product: p, locId: loc.id }); setStockForm({ quantity:"", notes:"", party:"", type:"inward" }); }}
+                                                      className="block w-full text-left px-4 py-2.5 text-xs hover:bg-orange-50 capitalize font-medium text-gray-700"
+                                                    >
+                                                      {loc.name}
+                                                    </button>
+                                                  ))}
+                                                </div>
+                                              </div>
+                                            )}
+                                          </div>
+                                        </td>
+                                      </tr>
+                                    );
+                                  })}
+                                </tbody>
+                              </table>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
-              <div>
-                <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Type</label>
-                <div className="flex rounded-xl overflow-hidden border border-gray-300">
-                  <button onClick={() => setForm(f => ({ ...f, type: "inward" }))} className={`flex-1 py-2.5 text-sm font-bold transition-colors ${form.type === "inward" ? "bg-green-600 text-white" : "bg-white text-gray-500 hover:bg-gray-50"}`}>🟢 IN</button>
-                  <button onClick={() => setForm(f => ({ ...f, type: "outward" }))} className={`flex-1 py-2.5 text-sm font-bold transition-colors ${form.type === "outward" ? "bg-red-500 text-white" : "bg-white text-gray-500 hover:bg-gray-50"}`}>🔴 OUT</button>
-                </div>
-              </div>
-              <div>
-                <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Quantity</label>
-                <input type="number" min="0" value={form.qty} onChange={e => setForm(f => ({ ...f, qty: e.target.value }))} placeholder="e.g. 50" className="w-full border border-gray-300 rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-blue-400" />
-              </div>
-              <div>
-                <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Rate (₹) <span className="text-gray-400 normal-case font-normal">optional</span></label>
-                <input type="number" min="0" value={form.rate} onChange={e => setForm(f => ({ ...f, rate: e.target.value }))} placeholder="e.g. 200" className="w-full border border-gray-300 rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-blue-400" />
-              </div>
-              <div>
-                <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Date</label>
-                <input type="date" value={form.date} onChange={e => setForm(f => ({ ...f, date: e.target.value }))} className="w-full border border-gray-300 rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-blue-400" />
-              </div>
-              <div>
-                <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Party / Remark <span className="text-gray-400 normal-case font-normal">optional</span></label>
-                <input value={form.party} onChange={e => setForm(f => ({ ...f, party: e.target.value }))} placeholder="Note..." className="w-full border border-gray-300 rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-blue-400" />
-              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* ADD STOCK MODAL */}
+      {stockModal && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 px-4" onClick={() => setStockModal(null)}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6" onClick={e => e.stopPropagation()}>
+            <h3 className="font-black text-lg mb-1" style={{ color:"#1B3A6B" }}>Stock Movement</h3>
+            <p className="text-sm text-gray-500 mb-1">{stockModal.product.product_name}</p>
+            <p className="text-xs font-semibold mb-4" style={{ color:"#0D7A5F" }}>
+              📦 {locations.find(l => l.id === stockModal.locId)?.name || "Warehouse"}
+            </p>
+
+            {/* IN / OUT toggle */}
+            <div className="flex rounded-xl overflow-hidden border border-gray-200 mb-4">
+              <button
+                onClick={() => setStockForm(f => ({ ...f, type:"inward" }))}
+                className={`flex-1 py-2.5 text-sm font-bold transition-colors ${stockForm.type === "inward" ? "bg-green-600 text-white" : "bg-white text-gray-500 hover:bg-gray-50"}`}
+              >
+                ▲ IN
+              </button>
+              <button
+                onClick={() => setStockForm(f => ({ ...f, type:"outward" }))}
+                className={`flex-1 py-2.5 text-sm font-bold transition-colors ${stockForm.type === "outward" ? "bg-red-500 text-white" : "bg-white text-gray-500 hover:bg-gray-50"}`}
+              >
+                ▼ OUT
+              </button>
             </div>
 
-            <div className="px-6 py-4 border-t bg-gray-50 flex gap-3">
-              <button onClick={handleAddStock} disabled={saving} className="flex-1 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-bold py-3 rounded-xl transition-colors">
-                {saving ? "Saving..." : "✅ Save"}
+            <div className="space-y-3">
+              <input
+                type="number"
+                placeholder="Quantity *"
+                value={stockForm.quantity}
+                onChange={e => setStockForm({ ...stockForm, quantity: e.target.value })}
+                className="w-full border border-gray-200 px-4 py-2.5 rounded-xl text-sm focus:outline-none"
+              />
+              <input
+                placeholder="Party name (optional)"
+                value={stockForm.party}
+                onChange={e => setStockForm({ ...stockForm, party: e.target.value })}
+                className="w-full border border-gray-200 px-4 py-2.5 rounded-xl text-sm focus:outline-none"
+              />
+              <textarea
+                placeholder="Notes (optional)"
+                value={stockForm.notes}
+                onChange={e => setStockForm({ ...stockForm, notes: e.target.value })}
+                rows={2}
+                className="w-full border border-gray-200 px-4 py-2.5 rounded-xl text-sm focus:outline-none resize-none"
+              />
+            </div>
+            <div className="flex gap-2 mt-4">
+              <button
+                onClick={() => setStockModal(null)}
+                className="flex-1 border border-gray-200 py-2.5 rounded-xl text-sm font-semibold text-gray-600 hover:bg-gray-50"
+              >
+                Cancel
               </button>
-              <button onClick={() => setPanelOpen(false)} className="flex-1 bg-gray-200 hover:bg-gray-300 text-gray-700 font-bold py-3 rounded-xl transition-colors">Cancel</button>
+              <button
+                onClick={submitStock}
+                disabled={saving || !stockForm.quantity}
+                className="flex-1 py-2.5 rounded-xl text-sm font-bold text-white disabled:opacity-50"
+                style={{ background:"#E8630A" }}
+              >
+                {saving ? "Saving…" : "Confirm"}
+              </button>
             </div>
           </div>
         </div>
