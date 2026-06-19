@@ -151,8 +151,9 @@ export default function Products() {
   const [products, setProducts]     = useState([]);
   const [stockMap, setStockMap]     = useState({});
   const [locations, setLocations]   = useState([]);
-  const [latestTally, setLatestTally] = useState(null); // global latest tally from tally_logs
+  const [latestTally, setLatestTally] = useState(null);
   const [search, setSearch]         = useState("");
+  const [activeCat, setActiveCat]   = useState(null); // null = show all
   const [loading, setLoading]       = useState(true);
   const [openCats, setOpenCats]     = useState({});
   const [openGrades, setOpenGrades] = useState({});
@@ -172,11 +173,9 @@ export default function Products() {
   const [editForm, setEditForm]     = useState({});
   const [deleteConfirm, setDeleteConfirm] = useState(null);
 
-  // Tally All modal
   const [showTallyAll, setShowTallyAll] = useState(false);
   const [tallyAllConfirming, setTallyAllConfirming] = useState(false);
 
-  // Bulk upload
   const [showBulk, setShowBulk]     = useState(false);
   const [bulkRows, setBulkRows]     = useState([]);
   const [bulkErrors, setBulkErrors] = useState([]);
@@ -201,7 +200,6 @@ export default function Products() {
     if (!error) setLocations(data || []);
   };
 
-  // Reads from tally_logs — global tally events (not per-product)
   const loadLatestTally = async () => {
     const { data, error } = await supabase
       .from("tally_logs")
@@ -209,9 +207,7 @@ export default function Products() {
       .order("tallied_at", { ascending: false })
       .limit(1)
       .single();
-    if (!error && data) {
-      setLatestTally(data);
-    }
+    if (!error && data) setLatestTally(data);
   };
 
   const loadStockFromTransactions = async () => {
@@ -243,7 +239,6 @@ export default function Products() {
   const officeStock    = (uuid) => stockByLocation(uuid, getLocId("office"));
   const warehouseStock = (uuid) => stockByLocation(uuid, getLocId("warehouse"));
 
-  // ── Tally All: record a new global tally event in tally_logs ─────────────────
   const handleTallyAll = async () => {
     setTallyAllConfirming(true);
     const now = new Date().toISOString();
@@ -258,7 +253,6 @@ export default function Products() {
     setShowTallyAll(false);
   };
 
-  // ── Ledger ───────────────────────────────────────────────────────────────────
   const openLedger = async (product) => {
     setSelectedProduct(product);
     setLedgerLoading(true);
@@ -275,7 +269,6 @@ export default function Products() {
     setLedgerLoading(false);
   };
 
-  // ── Add single product ───────────────────────────────────────────────────────
   const handleAddProduct = async () => {
     if (!form.product_name.trim()) return;
     setSaving(true);
@@ -288,7 +281,6 @@ export default function Products() {
     if (!error) { setForm({ product_id:"", product_name:"", low_stock_alert:"" }); setShowAddForm(false); await loadProducts(); }
   };
 
-  // ── Bulk upload ──────────────────────────────────────────────────────────────
   const downloadTemplate = () => {
     const ws = XLSX.utils.json_to_sheet([{
       product_id: "NM-PP-001",
@@ -380,7 +372,6 @@ export default function Products() {
     await loadAll();
   };
 
-  // ── Delete ───────────────────────────────────────────────────────────────────
   const handleDelete = async (id) => {
     await supabase.from("products").delete().eq("id", id);
     setDeleteConfirm(null);
@@ -410,7 +401,6 @@ export default function Products() {
     await loadStockFromTransactions();
   };
 
-  // ── Export: Excel ────────────────────────────────────────────────────────────
   const handleExportExcel = () => {
     if (!products.length) return;
     const rows = [];
@@ -438,7 +428,6 @@ export default function Products() {
     XLSX.writeFile(wb, `Nivee_Products_${new Date().toISOString().slice(0,10)}.xlsx`);
   };
 
-  // ── Export: Tally XML ────────────────────────────────────────────────────────
   const handleExportTally = () => {
     if (!products.length) return;
     const esc = (s) => String(s || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
@@ -454,7 +443,6 @@ export default function Products() {
     a.click();
   };
 
-  // ── Export: PDF ──────────────────────────────────────────────────────────────
   function hexToRgb(hex) {
     const r = parseInt(hex.slice(1,3),16), g = parseInt(hex.slice(3,5),16), b = parseInt(hex.slice(5,7),16);
     return { r, g, b };
@@ -559,6 +547,17 @@ export default function Products() {
   });
 
   const catOrder = CATEGORIES.map(c => c.key).filter(k => grouped[k]);
+
+  // Category counts for pills (based on ALL products, not filtered)
+  const catCounts = {};
+  products.forEach(p => {
+    const cat = getCategory(p.product_id, p.product_name);
+    catCounts[cat.key] = (catCounts[cat.key] || 0) + 1;
+  });
+
+  // If activeCat is set, only show that category
+  const visibleCatOrder = activeCat ? catOrder.filter(k => k === activeCat) : catOrder;
+
   const lowStockCount = products.filter(p => p.low_stock_alert && totalStock(p.id) <= Number(p.low_stock_alert)).length;
   const toggleCat   = (key) => setOpenCats(prev   => ({ ...prev, [key]: !prev[key] }));
   const toggleGrade = (key) => setOpenGrades(prev  => ({ ...prev, [key]: !prev[key] }));
@@ -580,7 +579,6 @@ export default function Products() {
               <span className="font-semibold text-gray-700">{products.length}</span> products
               {lowStockCount > 0 && <> · <span style={{ color:"#E8630A" }} className="font-semibold">{lowStockCount} low stock</span></>}
             </p>
-            {/* ── Latest Tally Banner ── */}
             {latestTally ? (
               <p className="text-xs flex items-center gap-1.5">
                 <span className="inline-flex items-center gap-1 bg-green-50 text-green-700 border border-green-200 px-2.5 py-0.5 rounded-full font-semibold">
@@ -595,32 +593,26 @@ export default function Products() {
           </div>
         </div>
         <div className="flex gap-2 flex-wrap">
-          {/* Excel */}
           <button onClick={handleExportExcel} style={{ background:"#0D7A5F" }} className="flex items-center gap-2 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:opacity-90 transition shadow-sm">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
             Excel
           </button>
-          {/* Tally XML */}
           <button onClick={handleExportTally} style={{ background:"#7C3AED" }} className="flex items-center gap-2 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:opacity-90 transition shadow-sm">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
             Tally XML
           </button>
-          {/* PDF */}
           <button onClick={handleExportPDF} style={{ background:"#DC2626" }} className="flex items-center gap-2 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:opacity-90 transition shadow-sm">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
             PDF
           </button>
-          {/* ✓ Tally All */}
           <button onClick={() => setShowTallyAll(true)} style={{ background:"#5B21B6" }} className="flex items-center gap-2 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:opacity-90 transition shadow-sm">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>
             ✓ Tally All
           </button>
-          {/* Bulk Upload */}
           <button onClick={() => setShowBulk(v => !v)} style={{ background: showBulk ? "#6B7280" : "#0369A1" }} className="flex items-center gap-2 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:opacity-90 transition shadow-sm">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
             {showBulk ? "✕ Close" : "Bulk Upload"}
           </button>
-          {/* Add Product */}
           <button onClick={() => setShowAddForm(v => !v)} style={{ background: showAddForm ? "#6B7280" : "#E8630A" }} className="flex items-center gap-2 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:opacity-90 transition shadow-sm">
             {showAddForm ? "✕ Cancel" : "+ Add Product"}
           </button>
@@ -717,15 +709,42 @@ export default function Products() {
       )}
 
       {/* ── SEARCH ── */}
-      <div className="relative mb-5">
+      <div className="relative mb-4">
         <svg className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
         <input
           value={search}
           onChange={e => setSearch(e.target.value)}
-          placeholder="Search products by name or ID…"
+          placeholder="Search by product ID or name…"
           className="w-full pl-9 pr-4 py-2.5 border border-gray-200 rounded-xl text-sm bg-white shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
         />
       </div>
+
+      {/* ── CATEGORY FILTER PILLS ── */}
+      {!loading && catOrder.length > 0 && (
+        <div className="flex flex-wrap gap-2 mb-5">
+          {catOrder.map(catKey => {
+            const cat = CATEGORIES.find(c => c.key === catKey);
+            const count = catCounts[catKey] || 0;
+            const isActive = activeCat === catKey;
+            return (
+              <button
+                key={catKey}
+                onClick={() => setActiveCat(isActive ? null : catKey)}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-semibold transition-all border"
+                style={{
+                  background: isActive ? cat.color : "white",
+                  color: isActive ? "white" : cat.color,
+                  borderColor: cat.color,
+                  boxShadow: isActive ? `0 2px 8px ${cat.color}40` : "none",
+                }}
+              >
+                <span style={{ fontSize: "0.7rem" }}>{cat.icon}</span>
+                {cat.label} <span style={{ opacity: 0.8 }}>({count})</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
 
       {/* ── LOADING ── */}
       {loading && (
@@ -745,7 +764,7 @@ export default function Products() {
       )}
 
       {/* ── CATEGORY GROUPS ── */}
-      {!loading && catOrder.map(catKey => {
+      {!loading && visibleCatOrder.map(catKey => {
         const { cat, grades } = grouped[catKey];
         const allItems = Object.values(grades).flat();
         const catTotal = allItems.reduce((s,p) => s + totalStock(p.id), 0);
@@ -798,7 +817,7 @@ export default function Products() {
                             <th className="px-4 py-2.5 text-center text-xs font-bold text-gray-400 w-24">Warehouse</th>
                             <th className="px-4 py-2.5 text-center text-xs font-bold text-gray-400 w-20">Total</th>
                             <th className="px-4 py-2.5 text-center text-xs font-bold text-gray-400 w-20">Alert</th>
-                            <th className="px-4 py-2.5 text-center text-xs font-bold text-gray-400 w-36">Actions</th>
+                            <th className="px-4 py-2.5 text-center text-xs font-bold text-gray-400 w-44">Actions</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -846,21 +865,38 @@ export default function Products() {
                                   <div className="flex items-center justify-center gap-1.5">
                                     {isEditing ? (
                                       <>
-                                        <button onClick={() => saveEdit(p.id)} style={{ background:"#1B3A6B" }} className="text-white px-2.5 py-1 rounded text-xs font-bold hover:opacity-80 transition">Save</button>
-                                        <button onClick={() => setEditingId(null)} className="text-gray-500 px-2.5 py-1 rounded text-xs font-semibold border border-gray-200 hover:bg-gray-50 transition">Cancel</button>
+                                        <button onClick={() => saveEdit(p.id)} style={{ background:"#1B3A6B" }} className="text-white px-3 py-1.5 rounded-lg text-xs font-bold hover:opacity-80 transition">Save</button>
+                                        <button onClick={() => setEditingId(null)} className="text-gray-500 px-3 py-1.5 rounded-lg text-xs font-semibold border border-gray-200 hover:bg-gray-50 transition">Cancel</button>
                                       </>
                                     ) : (
                                       <>
-                                        {/* IN */}
-                                        <button onClick={() => setStockModal({ product: p, mode: "office" })} title="Add to Office" className="w-6 h-6 rounded flex items-center justify-center bg-green-100 text-green-700 hover:bg-green-200 transition text-xs font-bold">+O</button>
-                                        <button onClick={() => setStockModal({ product: p, mode: "warehouse" })} title="Add to Warehouse" className="w-6 h-6 rounded flex items-center justify-center bg-blue-100 text-blue-700 hover:bg-blue-200 transition text-xs font-bold">+W</button>
+                                        {/* +O Office */}
+                                        <button
+                                          onClick={() => setStockModal({ product: p, mode: "office" })}
+                                          title="Add to Office"
+                                          className="inline-flex items-center justify-center px-2.5 py-1.5 rounded-lg bg-green-100 text-green-700 hover:bg-green-200 transition text-xs font-bold whitespace-nowrap"
+                                        >+O</button>
+                                        {/* +W Warehouse */}
+                                        <button
+                                          onClick={() => setStockModal({ product: p, mode: "warehouse" })}
+                                          title="Add to Warehouse"
+                                          className="inline-flex items-center justify-center px-2.5 py-1.5 rounded-lg bg-blue-100 text-blue-700 hover:bg-blue-200 transition text-xs font-bold whitespace-nowrap"
+                                        >+W</button>
                                         {/* Edit */}
-                                        <button onClick={() => startEdit(p)} title="Edit" className="w-6 h-6 rounded flex items-center justify-center bg-gray-100 text-gray-600 hover:bg-gray-200 transition">
-                                          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                                        <button
+                                          onClick={() => startEdit(p)}
+                                          title="Edit"
+                                          className="inline-flex items-center justify-center w-7 h-7 rounded-lg bg-gray-100 text-gray-600 hover:bg-gray-200 transition"
+                                        >
+                                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
                                         </button>
                                         {/* Delete */}
-                                        <button onClick={() => setDeleteConfirm(p.id)} title="Delete" className="w-6 h-6 rounded flex items-center justify-center bg-red-50 text-red-400 hover:bg-red-100 transition">
-                                          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/></svg>
+                                        <button
+                                          onClick={() => setDeleteConfirm(p.id)}
+                                          title="Delete"
+                                          className="inline-flex items-center justify-center w-7 h-7 rounded-lg bg-red-50 text-red-400 hover:bg-red-100 transition"
+                                        >
+                                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/></svg>
                                         </button>
                                       </>
                                     )}
