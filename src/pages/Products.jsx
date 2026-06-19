@@ -151,7 +151,7 @@ export default function Products() {
   const [products, setProducts]     = useState([]);
   const [stockMap, setStockMap]     = useState({});
   const [locations, setLocations]   = useState([]);
-  const [tallyMap, setTallyMap]     = useState({});
+  const [latestTally, setLatestTally] = useState(null); // global latest tally from tally_logs
   const [search, setSearch]         = useState("");
   const [loading, setLoading]       = useState(true);
   const [openCats, setOpenCats]     = useState({});
@@ -187,7 +187,7 @@ export default function Products() {
 
   const loadAll = async () => {
     setLoading(true);
-    try { await Promise.all([loadProducts(), loadLocations(), loadStockFromTransactions(), loadTallyMap()]); }
+    try { await Promise.all([loadProducts(), loadLocations(), loadStockFromTransactions(), loadLatestTally()]); }
     finally { setLoading(false); }
   };
 
@@ -201,17 +201,16 @@ export default function Products() {
     if (!error) setLocations(data || []);
   };
 
-  const loadTallyMap = async () => {
+  // Reads from tally_logs — global tally events (not per-product)
+  const loadLatestTally = async () => {
     const { data, error } = await supabase
-      .from("product_tally")
-      .select("product_id, tallied_at")
-      .order("tallied_at", { ascending: false });
+      .from("tally_logs")
+      .select("tallied_at, tallied_by, location_type")
+      .order("tallied_at", { ascending: false })
+      .limit(1)
+      .single();
     if (!error && data) {
-      const map = {};
-      data.forEach(({ product_id, tallied_at }) => {
-        if (!map[product_id]) map[product_id] = tallied_at;
-      });
-      setTallyMap(map);
+      setLatestTally(data);
     }
   };
 
@@ -244,18 +243,17 @@ export default function Products() {
   const officeStock    = (uuid) => stockByLocation(uuid, getLocId("office"));
   const warehouseStock = (uuid) => stockByLocation(uuid, getLocId("warehouse"));
 
-  // ── Tally All: mark every visible product as tallied ────────────────────────
+  // ── Tally All: record a new global tally event in tally_logs ─────────────────
   const handleTallyAll = async () => {
     setTallyAllConfirming(true);
     const now = new Date().toISOString();
-    const rows = filtered.map(p => ({ product_id: p.id, tallied_at: now }));
-    const CHUNK = 50;
-    for (let i = 0; i < rows.length; i += CHUNK) {
-      await supabase.from("product_tally").insert(rows.slice(i, i + CHUNK));
-    }
-    const newMap = { ...tallyMap };
-    filtered.forEach(p => { newMap[p.id] = now; });
-    setTallyMap(newMap);
+    const { data: { user } } = await supabase.auth.getUser();
+    await supabase.from("tally_logs").insert([{
+      tallied_at: now,
+      tallied_by: user?.email || "unknown",
+      location_type: "office",
+    }]);
+    setLatestTally({ tallied_at: now, tallied_by: user?.email || "unknown", location_type: "office" });
     setTallyAllConfirming(false);
     setShowTallyAll(false);
   };
@@ -391,7 +389,7 @@ export default function Products() {
             Warehouse:   warehouseStock(p.id),
             Total:       totalStock(p.id),
             Low_Alert:   p.low_stock_alert || "",
-            Last_Tallied: tallyMap[p.id] ? formatDateTime(tallyMap[p.id]) : "",
+            Last_Tallied: latestTally ? formatDateTime(latestTally.tallied_at) : "",
           });
         });
       });
@@ -459,6 +457,7 @@ export default function Products() {
       y += 10;
       Object.keys(grades).sort(gradeSort).forEach(grade => {
         const items = grades[grade];
+        const tallyLabel = latestTally ? formatDateTime(latestTally.tallied_at) : "—";
         const rows = items.map(p => [
           p.product_id || "—",
           p.product_name,
@@ -466,7 +465,7 @@ export default function Products() {
           warehouseStock(p.id),
           totalStock(p.id),
           p.low_stock_alert || "—",
-          tallyMap[p.id] ? formatDateTime(tallyMap[p.id]) : "—",
+          tallyLabel,
         ]);
         doc.autoTable({
           startY: y,
@@ -538,10 +537,24 @@ export default function Products() {
             </div>
             <h1 style={{ color:"#1B3A6B" }} className="text-2xl font-black tracking-tight">Products Catalog</h1>
           </div>
-          <p className="text-sm text-gray-500 ml-12">
-            <span className="font-semibold text-gray-700">{products.length}</span> products
-            {lowStockCount > 0 && <> · <span style={{ color:"#E8630A" }} className="font-semibold">{lowStockCount} low stock</span></>}
-          </p>
+          <div className="ml-12 flex flex-col gap-0.5">
+            <p className="text-sm text-gray-500">
+              <span className="font-semibold text-gray-700">{products.length}</span> products
+              {lowStockCount > 0 && <> · <span style={{ color:"#E8630A" }} className="font-semibold">{lowStockCount} low stock</span></>}
+            </p>
+            {/* ── Latest Tally Banner ── */}
+            {latestTally ? (
+              <p className="text-xs flex items-center gap-1.5">
+                <span className="inline-flex items-center gap-1 bg-green-50 text-green-700 border border-green-200 px-2.5 py-0.5 rounded-full font-semibold">
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>
+                  Last Tallied: {formatDateTime(latestTally.tallied_at)}
+                </span>
+                <span className="text-gray-400">by {latestTally.tallied_by}</span>
+              </p>
+            ) : (
+              <p className="text-xs text-gray-400 italic">No tally recorded yet</p>
+            )}
+          </div>
         </div>
         <div className="flex gap-2 flex-wrap">
           {/* Excel */}
@@ -559,7 +572,7 @@ export default function Products() {
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
             PDF
           </button>
-          {/* ✓ Tally All — single button for all products */}
+          {/* ✓ Tally All */}
           <button onClick={() => setShowTallyAll(true)} style={{ background:"#5B21B6" }} className="flex items-center gap-2 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:opacity-90 transition shadow-sm">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>
             ✓ Tally All
@@ -724,7 +737,6 @@ export default function Products() {
                                     <th className="px-4 py-2.5 text-center" style={{ color: cat.color }}>Warehouse</th>
                                     <th className="px-4 py-2.5 text-center" style={{ color: cat.color }}>Total</th>
                                     <th className="px-4 py-2.5 text-center" style={{ color: cat.color }}>Alert</th>
-                                    <th className="px-4 py-2.5 text-center" style={{ color: cat.color }}>Last Tallied</th>
                                     <th className="px-4 py-2.5 text-center" style={{ color: cat.color }}>Actions</th>
                                   </tr>
                                 </thead>
@@ -735,7 +747,6 @@ export default function Products() {
                                     const total     = totalStock(p.id);
                                     const isLow     = p.low_stock_alert && total <= Number(p.low_stock_alert);
                                     const isEditing = editingId === p.id;
-                                    const lastTally = tallyMap[p.id];
                                     return (
                                       <tr key={p.id} className={`transition hover:bg-orange-50/20 ${isLow ? "bg-red-50/40" : ""}`}>
                                         <td className="px-4 py-3 font-mono text-xs text-gray-400">
@@ -761,13 +772,6 @@ export default function Products() {
                                           {isEditing
                                             ? <input value={editForm.low_stock_alert} type="number" onChange={e => setEditForm({ ...editForm, low_stock_alert: e.target.value })} className="border rounded px-2 py-1 w-16 text-center text-xs" />
                                             : <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${isLow ? "bg-red-100 text-red-600" : "bg-gray-100 text-gray-500"}`}>{p.low_stock_alert || "—"}</span>}
-                                        </td>
-                                        <td className="px-4 py-3 text-center">
-                                          <div className="flex flex-col items-center gap-0.5">
-                                            {lastTally
-                                              ? <span className="text-xs text-green-700 font-semibold bg-green-50 px-2 py-0.5 rounded-full whitespace-nowrap">{formatDateTime(lastTally)}</span>
-                                              : <span className="text-xs text-gray-400">Never</span>}
-                                          </div>
                                         </td>
                                         <td className="px-4 py-3">
                                           <div className="flex items-center justify-center gap-1.5 flex-wrap">
@@ -821,17 +825,19 @@ export default function Products() {
               <div className="w-10 h-10 rounded-xl flex items-center justify-center text-white text-lg" style={{ background:"#5B21B6" }}>✓</div>
               <div>
                 <h3 className="font-black text-base" style={{ color:"#5B21B6" }}>Tally All Products</h3>
-                <p className="text-xs text-gray-500 mt-0.5">Marks all {filtered.length} visible products as tallied now</p>
+                <p className="text-xs text-gray-500 mt-0.5">Records a new tally event for all products now</p>
               </div>
             </div>
             <div className="bg-purple-50 rounded-xl p-4 mb-4">
-              <p className="text-sm text-gray-700">This will record <span className="font-bold">{formatDateTime(new Date().toISOString())}</span> as the tally timestamp for all <span className="font-bold text-purple-700">{filtered.length} products</span> currently shown.</p>
-              {search && <p className="text-xs text-amber-600 mt-2 font-medium">⚠ You have an active search filter — only matching products will be tallied.</p>}
+              <p className="text-sm text-gray-700">This will record <span className="font-bold">{formatDateTime(new Date().toISOString())}</span> as the latest tally timestamp.</p>
+              {latestTally && (
+                <p className="text-xs text-gray-500 mt-2">Previous tally: <span className="font-semibold">{formatDateTime(latestTally.tallied_at)}</span></p>
+              )}
             </div>
             <div className="flex gap-2">
               <button onClick={() => setShowTallyAll(false)} className="flex-1 border border-gray-200 py-2.5 rounded-xl text-sm font-semibold text-gray-600 hover:bg-gray-50">Cancel</button>
               <button onClick={handleTallyAll} disabled={tallyAllConfirming} className="flex-1 py-2.5 rounded-xl text-sm font-bold text-white disabled:opacity-50" style={{ background:"#5B21B6" }}>
-                {tallyAllConfirming ? "Saving…" : `Tally ${filtered.length} Products`}
+                {tallyAllConfirming ? "Saving…" : "Confirm Tally"}
               </button>
             </div>
           </div>
@@ -855,9 +861,9 @@ export default function Products() {
               <div><p className="text-xs text-gray-500 font-semibold">WAREHOUSE</p><p className="font-black text-xl" style={{ color:"#0D7A5F" }}>{warehouseStock(selectedProduct.id)}</p></div>
               <div className="border-l border-blue-200" />
               <div><p className="text-xs text-gray-500 font-semibold">TOTAL</p><p className="font-black text-xl text-gray-800">{totalStock(selectedProduct.id)}</p></div>
-              {tallyMap[selectedProduct.id] && (
+              {latestTally && (
                 <><div className="border-l border-blue-200" />
-                <div><p className="text-xs text-gray-500 font-semibold">LAST TALLIED</p><p className="font-semibold text-sm text-purple-700">{formatDateTime(tallyMap[selectedProduct.id])}</p></div></>
+                <div><p className="text-xs text-gray-500 font-semibold">LAST TALLIED</p><p className="font-semibold text-sm text-purple-700">{formatDateTime(latestTally.tallied_at)}</p></div></>
               )}
             </div>
             <div className="overflow-y-auto flex-1">
