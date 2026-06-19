@@ -22,7 +22,6 @@ const CATEGORIES = [
   { key: "other",     label: "Others",               icon: "◇",  color: "#374151", light: "#F3F4F6", prefixes: [] },
 ];
 
-// Keywords that identify valves by name when no prefix matches
 const VALVE_KEYWORDS    = ["valve","gate valve","ball valve","butterfly valve","globe valve","check valve","needle valve","solenoid valve"];
 const FITTING_KEYWORDS  = ["flange","elbow","tee","reducer","coupling","cap","fitting","union","bushing","nipple","socket","stub","olet","weldolet","sockolet"];
 
@@ -33,7 +32,6 @@ function getCategory(product_id, product_name) {
     if (cat.key === "other") continue;
     if (cat.prefixes.some(p => pid.startsWith(p))) return cat;
   }
-  // Keyword matching on name
   if (VALVE_KEYWORDS.some(k => pname.includes(k)))   return CATEGORIES.find(c => c.key === "valves");
   if (FITTING_KEYWORDS.some(k => pname.includes(k))) return CATEGORIES.find(c => c.key === "fittings");
   const pnameUpper = pname.toUpperCase();
@@ -41,7 +39,6 @@ function getCategory(product_id, product_name) {
   return CATEGORIES[CATEGORIES.length - 1];
 }
 
-// ── Grade extraction — order matters (most specific first) ──────────────────
 const GRADE_PATTERNS = [
   { re: /\b316[Ll]?\b/i,          label: "Grade 316"  },
   { re: /\b304[Ll]?\b/i,          label: "Grade 304"  },
@@ -71,7 +68,6 @@ const GRADE_PATTERNS = [
   { re: /\bIS[-\s]?3589\b/i,      label: "IS3589"     },
 ];
 
-// For valves/fittings — group by type instead of steel grade
 const VALVE_TYPE_PATTERNS = [
   { re: /ball\s*valve/i,       label: "Ball Valve"       },
   { re: /gate\s*valve/i,       label: "Gate Valve"       },
@@ -103,7 +99,6 @@ const GRADE_ORDER = [
   "Heavy","Medium","Light",
   "A106","A53","IS2062","IS1239","IS3589",
   "Standard",
-  // valve / fitting types (alphabetical after steel)
   "Ball Valve","Butterfly Valve","Check Valve","Gate Valve","Globe Valve","Needle Valve","Solenoid Valve","Valve (Other)",
   "Caps","Couplings","Elbows","Flanges","Nipples","Olets","Reducers","Sockets","Tees","Unions",
 ];
@@ -118,17 +113,14 @@ function gradeSort(a, b) {
 }
 
 function extractGrade(name, catKey) {
-  // For valves — group by valve type
   if (catKey === "valves") {
     for (const { re, label } of VALVE_TYPE_PATTERNS) { if (re.test(name)) return label; }
     return "Valve (Other)";
   }
-  // For fittings — group by fitting type
   if (catKey === "fittings") {
     for (const { re, label } of FITTING_TYPE_PATTERNS) { if (re.test(name)) return label; }
     return "Fitting (Other)";
   }
-  // For pipes/sheets — group by steel grade / SWG / schedule
   for (const { re, label } of GRADE_PATTERNS) { if (re.test(name)) return label; }
   return "Standard";
 }
@@ -159,7 +151,7 @@ export default function Products() {
   const [products, setProducts]     = useState([]);
   const [stockMap, setStockMap]     = useState({});
   const [locations, setLocations]   = useState([]);
-  const [tallyMap, setTallyMap]     = useState({});   // { productId: iso_string }
+  const [tallyMap, setTallyMap]     = useState({});
   const [search, setSearch]         = useState("");
   const [loading, setLoading]       = useState(true);
   const [openCats, setOpenCats]     = useState({});
@@ -180,13 +172,13 @@ export default function Products() {
   const [editForm, setEditForm]     = useState({});
   const [deleteConfirm, setDeleteConfirm] = useState(null);
 
-  // Tally modal
-  const [tallyModal, setTallyModal] = useState(null);  // product object
-  const [tallyConfirming, setTallyConfirming] = useState(false);
+  // Tally All modal
+  const [showTallyAll, setShowTallyAll] = useState(false);
+  const [tallyAllConfirming, setTallyAllConfirming] = useState(false);
 
   // Bulk upload
   const [showBulk, setShowBulk]     = useState(false);
-  const [bulkRows, setBulkRows]     = useState([]);   // parsed preview rows
+  const [bulkRows, setBulkRows]     = useState([]);
   const [bulkErrors, setBulkErrors] = useState([]);
   const [bulkSaving, setBulkSaving] = useState(false);
   const fileRef = useRef(null);
@@ -210,8 +202,6 @@ export default function Products() {
   };
 
   const loadTallyMap = async () => {
-    // Fetch latest tally record per product from product_tally table
-    // Table: product_tally(id, product_id uuid, tallied_at timestamptz, tallied_by text)
     const { data, error } = await supabase
       .from("product_tally")
       .select("product_id, tallied_at")
@@ -219,7 +209,7 @@ export default function Products() {
     if (!error && data) {
       const map = {};
       data.forEach(({ product_id, tallied_at }) => {
-        if (!map[product_id]) map[product_id] = tallied_at; // first = latest due to desc order
+        if (!map[product_id]) map[product_id] = tallied_at;
       });
       setTallyMap(map);
     }
@@ -254,19 +244,20 @@ export default function Products() {
   const officeStock    = (uuid) => stockByLocation(uuid, getLocId("office"));
   const warehouseStock = (uuid) => stockByLocation(uuid, getLocId("warehouse"));
 
-  // ── Tally: record timestamp ──────────────────────────────────────────────────
-  const handleTally = async (product) => {
-    setTallyConfirming(true);
+  // ── Tally All: mark every visible product as tallied ────────────────────────
+  const handleTallyAll = async () => {
+    setTallyAllConfirming(true);
     const now = new Date().toISOString();
-    const { error } = await supabase.from("product_tally").insert([{
-      product_id: product.id,
-      tallied_at: now,
-    }]);
-    if (!error) {
-      setTallyMap(prev => ({ ...prev, [product.id]: now }));
+    const rows = filtered.map(p => ({ product_id: p.id, tallied_at: now }));
+    const CHUNK = 50;
+    for (let i = 0; i < rows.length; i += CHUNK) {
+      await supabase.from("product_tally").insert(rows.slice(i, i + CHUNK));
     }
-    setTallyConfirming(false);
-    setTallyModal(null);
+    const newMap = { ...tallyMap };
+    filtered.forEach(p => { newMap[p.id] = now; });
+    setTallyMap(newMap);
+    setTallyAllConfirming(false);
+    setShowTallyAll(false);
   };
 
   // ── Ledger ───────────────────────────────────────────────────────────────────
@@ -568,6 +559,11 @@ export default function Products() {
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
             PDF
           </button>
+          {/* ✓ Tally All — single button for all products */}
+          <button onClick={() => setShowTallyAll(true)} style={{ background:"#5B21B6" }} className="flex items-center gap-2 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:opacity-90 transition shadow-sm">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+            ✓ Tally All
+          </button>
           {/* Bulk Upload */}
           <button onClick={() => setShowBulk(v => !v)} style={{ background: showBulk ? "#6B7280" : "#0369A1" }} className="flex items-center gap-2 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:opacity-90 transition shadow-sm">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
@@ -782,11 +778,6 @@ export default function Products() {
                                               </>
                                             ) : (
                                               <>
-                                                {/* Tally button per row */}
-                                                <button onClick={e => { e.stopPropagation(); setTallyModal(p); }}
-                                                  className="text-xs px-2.5 py-1 rounded-md font-medium" style={{ background:"#F3EFFE", color:"#7C3AED" }}>
-                                                  ✓ Tally
-                                                </button>
                                                 <div className="relative group">
                                                   <button className="text-xs px-2.5 py-1 rounded-md font-medium" style={{ background:"#EBF0FA", color:"#1B3A6B" }}>+ Stock ▾</button>
                                                   <div className="absolute right-0 top-full mt-1 bg-white border border-gray-100 rounded-xl shadow-xl z-10 hidden group-hover:block min-w-[140px] overflow-hidden">
@@ -822,34 +813,25 @@ export default function Products() {
         </div>
       )}
 
-      {/* TALLY CONFIRM MODAL */}
-      {tallyModal && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 px-4" onClick={() => setTallyModal(null)}>
+      {/* TALLY ALL CONFIRM MODAL */}
+      {showTallyAll && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 px-4" onClick={() => setShowTallyAll(false)}>
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6" onClick={e => e.stopPropagation()}>
             <div className="flex items-center gap-3 mb-4">
-              <div className="w-10 h-10 rounded-xl flex items-center justify-center text-white text-lg" style={{ background:"#7C3AED" }}>✓</div>
+              <div className="w-10 h-10 rounded-xl flex items-center justify-center text-white text-lg" style={{ background:"#5B21B6" }}>✓</div>
               <div>
-                <h3 className="font-black text-base" style={{ color:"#7C3AED" }}>Mark as Tallied</h3>
-                <p className="text-xs text-gray-500 mt-0.5">This will record the current date &amp; time</p>
+                <h3 className="font-black text-base" style={{ color:"#5B21B6" }}>Tally All Products</h3>
+                <p className="text-xs text-gray-500 mt-0.5">Marks all {filtered.length} visible products as tallied now</p>
               </div>
             </div>
             <div className="bg-purple-50 rounded-xl p-4 mb-4">
-              <p className="text-sm font-semibold text-gray-800">{tallyModal.product_name}</p>
-              <p className="text-xs text-gray-500 font-mono mt-0.5">{tallyModal.product_id || "No ID"}</p>
-              <div className="flex gap-4 mt-3">
-                <div><p className="text-xs text-gray-400">Office</p><p className="font-black text-base" style={{ color:"#1B3A6B" }}>{officeStock(tallyModal.id)}</p></div>
-                <div><p className="text-xs text-gray-400">Warehouse</p><p className="font-black text-base" style={{ color:"#0D7A5F" }}>{warehouseStock(tallyModal.id)}</p></div>
-                <div><p className="text-xs text-gray-400">Total</p><p className="font-black text-base text-gray-800">{totalStock(tallyModal.id)}</p></div>
-              </div>
-              {tallyMap[tallyModal.id] && (
-                <p className="text-xs text-gray-400 mt-3">Previously tallied: <span className="font-semibold text-gray-600">{formatDateTime(tallyMap[tallyModal.id])}</span></p>
-              )}
+              <p className="text-sm text-gray-700">This will record <span className="font-bold">{formatDateTime(new Date().toISOString())}</span> as the tally timestamp for all <span className="font-bold text-purple-700">{filtered.length} products</span> currently shown.</p>
+              {search && <p className="text-xs text-amber-600 mt-2 font-medium">⚠ You have an active search filter — only matching products will be tallied.</p>}
             </div>
-            <p className="text-xs text-gray-400 mb-4 text-center">Tally timestamp: <span className="font-semibold text-gray-600">{formatDateTime(new Date().toISOString())}</span></p>
             <div className="flex gap-2">
-              <button onClick={() => setTallyModal(null)} className="flex-1 border border-gray-200 py-2.5 rounded-xl text-sm font-semibold text-gray-600 hover:bg-gray-50">Cancel</button>
-              <button onClick={() => handleTally(tallyModal)} disabled={tallyConfirming} className="flex-1 py-2.5 rounded-xl text-sm font-bold text-white disabled:opacity-50" style={{ background:"#7C3AED" }}>
-                {tallyConfirming ? "Saving…" : "Confirm Tally"}
+              <button onClick={() => setShowTallyAll(false)} className="flex-1 border border-gray-200 py-2.5 rounded-xl text-sm font-semibold text-gray-600 hover:bg-gray-50">Cancel</button>
+              <button onClick={handleTallyAll} disabled={tallyAllConfirming} className="flex-1 py-2.5 rounded-xl text-sm font-bold text-white disabled:opacity-50" style={{ background:"#5B21B6" }}>
+                {tallyAllConfirming ? "Saving…" : `Tally ${filtered.length} Products`}
               </button>
             </div>
           </div>
