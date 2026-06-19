@@ -1,6 +1,8 @@
 import { useEffect, useState, useCallback } from "react";
 import { supabase } from "../supabase";
 import * as XLSX from "xlsx";
+import jsPDF from "jspdf";
+import "jspdf-autotable";
 
 /* ─────────────────────────────────────────
    NIVEE BRAND COLORS
@@ -29,23 +31,59 @@ function getCategory(product_id, product_name) {
   return CATEGORIES[CATEGORIES.length - 1];
 }
 
+// ── Grade extraction — order matters (most specific first) ──────────────────
 const GRADE_PATTERNS = [
-  { re: /SCH[-\s]?80/i,     label: "SCH-80"  },
-  { re: /SCH[-\s]?40/i,     label: "SCH-40"  },
-  { re: /SCH[-\s]?20/i,     label: "SCH-20"  },
-  { re: /SCH[-\s]?10/i,     label: "SCH-10"  },
-  { re: /\b18[\s-]?SWG\b/i, label: "18 SWG" },
-  { re: /\b16[\s-]?SWG\b/i, label: "16 SWG" },
-  { re: /\b14[\s-]?SWG\b/i, label: "14 SWG" },
-  { re: /\bHEAVY\b/i,       label: "Heavy"   },
-  { re: /\bMEDIUM\b/i,      label: "Medium"  },
-  { re: /\bLIGHT\b/i,       label: "Light"   },
-  { re: /\bA106\b/i,        label: "A106"    },
-  { re: /\bA53\b/i,         label: "A53"     },
-  { re: /\bIS2062\b/i,      label: "IS2062"  },
-  { re: /\bIS1239\b/i,      label: "IS1239"  },
-  { re: /\bIS3589\b/i,      label: "IS3589"  },
+  // Steel grades
+  { re: /\b316[Ll]?\b/i,          label: "Grade 316"  },
+  { re: /\b304[Ll]?\b/i,          label: "Grade 304"  },
+  { re: /\b202\b/i,               label: "Grade 202"  },
+  { re: /\b201\b/i,               label: "Grade 201"  },
+  { re: /\b310[Ss]?\b/i,          label: "Grade 310"  },
+  { re: /\b321\b/i,               label: "Grade 321"  },
+  // Schedules
+  { re: /SCH[-\s]?80/i,           label: "SCH-80"     },
+  { re: /SCH[-\s]?40/i,           label: "SCH-40"     },
+  { re: /SCH[-\s]?20/i,           label: "SCH-20"     },
+  { re: /SCH[-\s]?10/i,           label: "SCH-10"     },
+  // SWG — from thickest gauge (smallest number) to thinnest
+  { re: /\b10[\s-]?SWG\b/i,       label: "10 SWG"    },
+  { re: /\b12[\s-]?SWG\b/i,       label: "12 SWG"    },
+  { re: /\b14[\s-]?SWG\b/i,       label: "14 SWG"    },
+  { re: /\b16[\s-]?SWG\b/i,       label: "16 SWG"    },
+  { re: /\b18[\s-]?SWG\b/i,       label: "18 SWG"    },
+  { re: /\b20[\s-]?SWG\b/i,       label: "20 SWG"    },
+  { re: /\b22[\s-]?SWG\b/i,       label: "22 SWG"    },
+  { re: /\bSWG\b/i,               label: "SWG"        },
+  // Thickness / weight grades
+  { re: /\bHEAVY\b/i,             label: "Heavy"      },
+  { re: /\bMEDIUM\b/i,            label: "Medium"     },
+  { re: /\bLIGHT\b/i,             label: "Light"      },
+  // Standards
+  { re: /\bA106\b/i,              label: "A106"       },
+  { re: /\bA53\b/i,               label: "A53"        },
+  { re: /\bIS[-\s]?2062\b/i,      label: "IS2062"     },
+  { re: /\bIS[-\s]?1239\b/i,      label: "IS1239"     },
+  { re: /\bIS[-\s]?3589\b/i,      label: "IS3589"     },
 ];
+
+// Grade sort order for display
+const GRADE_ORDER = [
+  "Grade 201","Grade 202","Grade 304","Grade 316","Grade 310","Grade 321",
+  "SCH-10","SCH-20","SCH-40","SCH-80",
+  "10 SWG","12 SWG","14 SWG","16 SWG","18 SWG","20 SWG","22 SWG","SWG",
+  "Heavy","Medium","Light",
+  "A106","A53","IS2062","IS1239","IS3589",
+  "Standard",
+];
+
+function gradeSort(a, b) {
+  const ai = GRADE_ORDER.indexOf(a);
+  const bi = GRADE_ORDER.indexOf(b);
+  if (ai === -1 && bi === -1) return a.localeCompare(b);
+  if (ai === -1) return 1;
+  if (bi === -1) return -1;
+  return ai - bi;
+}
 
 function extractGrade(name) {
   for (const { re, label } of GRADE_PATTERNS) { if (re.test(name)) return label; }
@@ -195,14 +233,171 @@ export default function Products() {
     await loadStockFromTransactions();
   };
 
+  // ── Export: Excel ────────────────────────────────────────────────────────────
   const handleExportExcel = () => {
     if (!products.length) return;
-    const data = products.map(p => ({ Product_ID: p.product_id, Product_Name: p.product_name, Office: officeStock(p.id), Warehouse: warehouseStock(p.id), Total: totalStock(p.id), Low_Alert: p.low_stock_alert }));
-    const ws = XLSX.utils.json_to_sheet(data);
+    const rows = [];
+    catOrder.forEach(catKey => {
+      const { cat, grades } = grouped[catKey];
+      Object.keys(grades).sort(gradeSort).forEach(grade => {
+        grades[grade].forEach(p => {
+          rows.push({
+            Category:    cat.label,
+            Grade:       grade,
+            Product_ID:  p.product_id || "",
+            Product_Name: p.product_name,
+            Office:      officeStock(p.id),
+            Warehouse:   warehouseStock(p.id),
+            Total:       totalStock(p.id),
+            Low_Alert:   p.low_stock_alert || "",
+          });
+        });
+      });
+    });
+    const ws = XLSX.utils.json_to_sheet(rows);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Products");
-    XLSX.writeFile(wb, "Products_Report.xlsx");
+    XLSX.writeFile(wb, `Nivee_Products_${new Date().toISOString().slice(0,10)}.xlsx`);
   };
+
+  // ── Export: Tally XML ────────────────────────────────────────────────────────
+  const handleExportTally = () => {
+    if (!products.length) return;
+    const esc = (s) => String(s || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+    const stockItems = products.map(p => {
+      const total = totalStock(p.id);
+      return `
+    <STOCKITEM NAME="${esc(p.product_name)}" RESERVEDNAME="">
+      <PARENT></PARENT>
+      <CATEGORY></CATEGORY>
+      <BASEUNITS>NOS</BASEUNITS>
+      <OPENINGBALANCE>${total}</OPENINGBALANCE>
+      <OPENINGRATE>0</OPENINGRATE>
+      <OPENINGVALUE>0</OPENINGVALUE>
+      <BATCHALLOCATIONS.LIST></BATCHALLOCATIONS.LIST>
+    </STOCKITEM>`;
+    }).join("");
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<ENVELOPE>
+  <HEADER>
+    <TALLYREQUEST>Import Data</TALLYREQUEST>
+  </HEADER>
+  <BODY>
+    <IMPORTDATA>
+      <REQUESTDESC>
+        <REPORTNAME>Stock Items</REPORTNAME>
+        <STATICVARIABLES>
+          <SVCURRENTCOMPANY>Nivee Metal</SVCURRENTCOMPANY>
+        </STATICVARIABLES>
+      </REQUESTDESC>
+      <REQUESTDATA>
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">${stockItems}
+        </TALLYMESSAGE>
+      </REQUESTDATA>
+    </IMPORTDATA>
+  </BODY>
+</ENVELOPE>`;
+    const blob = new Blob([xml], { type: "text/xml" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `Nivee_Tally_${new Date().toISOString().slice(0,10)}.xml`;
+    a.click();
+  };
+
+  // ── Export: PDF ──────────────────────────────────────────────────────────────
+  const handleExportPDF = () => {
+    if (!products.length) return;
+    const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
+    const pageW = doc.internal.pageSize.getWidth();
+
+    // Header
+    doc.setFillColor(27, 58, 107);
+    doc.rect(0, 0, pageW, 18, "F");
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(13);
+    doc.setFont("helvetica", "bold");
+    doc.text("NIVEE METAL — Products Catalog", 14, 12);
+    doc.setFontSize(8);
+    doc.setFont("helvetica", "normal");
+    doc.text(`Generated: ${new Date().toLocaleDateString("en-IN", { day:"2-digit", month:"short", year:"numeric" })}`, pageW - 14, 12, { align: "right" });
+
+    let y = 24;
+
+    catOrder.forEach(catKey => {
+      const { cat, grades } = grouped[catKey];
+      const allItems = Object.values(grades).flat();
+      const catTotal = allItems.reduce((s,p) => s + totalStock(p.id), 0);
+
+      // Category header band
+      const rgb = hexToRgb(cat.color);
+      doc.setFillColor(rgb.r, rgb.g, rgb.b);
+      doc.rect(0, y, pageW, 8, "F");
+      doc.setTextColor(255, 255, 255);
+      doc.setFontSize(9);
+      doc.setFont("helvetica", "bold");
+      doc.text(`${cat.label}  (${allItems.length} products · ${catTotal.toLocaleString()} units)`, 14, y + 5.5);
+      y += 10;
+
+      Object.keys(grades).sort(gradeSort).forEach(grade => {
+        const items = grades[grade];
+        const rows = items.map(p => [
+          p.product_id || "—",
+          p.product_name,
+          officeStock(p.id),
+          warehouseStock(p.id),
+          totalStock(p.id),
+          p.low_stock_alert || "—",
+        ]);
+
+        doc.autoTable({
+          startY: y,
+          head: [[
+            { content: `Grade: ${grade}`, colSpan: 6, styles: { fillColor: hexToRgbArr(cat.color, 0.15), textColor: hexToRgbArr(cat.color), fontStyle: "bold", fontSize: 8 } }
+          ], [
+            "Product ID", "Name", "Office", "Warehouse", "Total", "Alert"
+          ]],
+          body: rows,
+          theme: "grid",
+          styles: { fontSize: 7.5, cellPadding: 2, overflow: "linebreak" },
+          headStyles: { fillColor: hexToRgbArr(cat.color), textColor: [255,255,255], fontStyle: "bold", fontSize: 7.5 },
+          alternateRowStyles: { fillColor: [250, 250, 250] },
+          columnStyles: {
+            0: { cellWidth: 28, font: "courier" },
+            1: { cellWidth: "auto" },
+            2: { cellWidth: 20, halign: "center" },
+            3: { cellWidth: 24, halign: "center" },
+            4: { cellWidth: 18, halign: "center", fontStyle: "bold" },
+            5: { cellWidth: 18, halign: "center" },
+          },
+          margin: { left: 10, right: 10 },
+          didDrawPage: (data) => {
+            // footer page number
+            doc.setFontSize(7);
+            doc.setTextColor(150);
+            doc.text(`Page ${doc.internal.getNumberOfPages()}`, pageW / 2, doc.internal.pageSize.getHeight() - 6, { align: "center" });
+          },
+        });
+        y = doc.lastAutoTable.finalY + 4;
+        if (y > doc.internal.pageSize.getHeight() - 20) { doc.addPage(); y = 14; }
+      });
+      y += 4;
+    });
+
+    doc.save(`Nivee_Products_${new Date().toISOString().slice(0,10)}.pdf`);
+  };
+
+  // ── Helpers for PDF color ────────────────────────────────────────────────────
+  function hexToRgb(hex) {
+    const r = parseInt(hex.slice(1,3),16), g = parseInt(hex.slice(3,5),16), b = parseInt(hex.slice(5,7),16);
+    return { r, g, b };
+  }
+  function hexToRgbArr(hex, alpha) {
+    const { r, g, b } = hexToRgb(hex);
+    if (alpha !== undefined) {
+      return [Math.round(255 - (255-r)*alpha), Math.round(255-(255-g)*alpha), Math.round(255-(255-b)*alpha)];
+    }
+    return [r, g, b];
+  }
 
   const filtered = products
     .filter(p => (p.product_name||"").toLowerCase().includes(search.toLowerCase()) || (p.product_id||"").toLowerCase().includes(search.toLowerCase()))
@@ -243,10 +438,22 @@ export default function Products() {
           </p>
         </div>
         <div className="flex gap-2 flex-wrap">
+          {/* Excel */}
           <button onClick={handleExportExcel} style={{ background:"#0D7A5F" }} className="flex items-center gap-2 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:opacity-90 transition shadow-sm">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-            Export Excel
+            Excel
           </button>
+          {/* Tally */}
+          <button onClick={handleExportTally} style={{ background:"#7C3AED" }} className="flex items-center gap-2 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:opacity-90 transition shadow-sm">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+            Tally
+          </button>
+          {/* PDF */}
+          <button onClick={handleExportPDF} style={{ background:"#DC2626" }} className="flex items-center gap-2 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:opacity-90 transition shadow-sm">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><path d="M9 13h1a2 2 0 0 1 0 4H9v-4zm4 0h2m-2 2h1.5m-.5 2h1"/></svg>
+            PDF
+          </button>
+          {/* Add */}
           <button onClick={() => setShowAddForm(v => !v)} style={{ background: showAddForm ? "#6B7280" : "#E8630A" }} className="flex items-center gap-2 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:opacity-90 transition shadow-sm">
             {showAddForm ? "✕ Cancel" : "+ Add Product"}
           </button>
@@ -315,7 +522,7 @@ export default function Products() {
                     </div>
                     <div>
                       <p className="font-black text-base" style={{ color: cat.color }}>{cat.label}</p>
-                      <p className="text-xs text-gray-500 mt-0.5">{totalProducts} products · {totalQty.toLocaleString()} units total</p>
+                      <p className="text-xs text-gray-500 mt-0.5">{totalProducts} products · {totalQty.toLocaleString()} units total · {Object.keys(grades).length} grade{Object.keys(grades).length !== 1 ? 's' : ''}</p>
                     </div>
                   </div>
                   <svg className="transition-transform" style={{ transform: isOpen ? "rotate(180deg)" : "rotate(0deg)", color: cat.color }} width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="m6 9 6 6 6-6"/></svg>
@@ -323,18 +530,19 @@ export default function Products() {
 
                 {isOpen && (
                   <div className="bg-white">
-                    {Object.keys(grades).sort().map(grade => {
+                    {Object.keys(grades).sort(gradeSort).map(grade => {
                       const gradeKey   = `${catKey}-${grade}`;
                       const isGradeOpen = openGrades[gradeKey] !== false;
                       const items      = grades[grade];
+                      const gradeQty   = items.reduce((s,p) => s + totalStock(p.id), 0);
 
                       return (
                         <div key={grade} className="border-t border-gray-50">
                           <button onClick={() => toggleGrade(gradeKey)} className="w-full flex items-center justify-between px-5 py-3 hover:bg-gray-50 transition text-left" style={{ background:"#FAFAF9" }}>
                             <div className="flex items-center gap-2.5">
                               <span className="inline-flex items-center px-2.5 py-0.5 rounded-md text-xs font-bold text-white" style={{ background: cat.color }}>{grade}</span>
-                              <span className="text-sm font-semibold text-gray-600">{items.length} items</span>
-                              <span className="text-xs text-gray-400">· {items.reduce((s,p) => s+totalStock(p.id),0).toLocaleString()} units</span>
+                              <span className="text-sm font-semibold text-gray-600">{items.length} item{items.length !== 1 ? 's' : ''}</span>
+                              <span className="text-xs text-gray-400">· {gradeQty.toLocaleString()} units</span>
                             </div>
                             <svg className="transition-transform text-gray-400" style={{ transform: isGradeOpen ? "rotate(180deg)" : "rotate(0deg)" }} width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="m6 9 6 6 6-6"/></svg>
                           </button>
