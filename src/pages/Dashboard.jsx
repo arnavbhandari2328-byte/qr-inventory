@@ -8,6 +8,73 @@ import * as XLSX from "xlsx";
 import jsPDF from "jspdf";
 import "jspdf-autotable";
 
+/* ─────────────────────────────────────────────────────────────────────────────
+   CATEGORY CONFIG — mirrors Products.jsx exactly so pie chart matches
+   ───────────────────────────────────────────────────────────────────────────── */
+const CATEGORIES = [
+  { key: "seamless",  label: "Seamless Pipes",       color: "#1B3A6B", prefixes: ["NM-NBSMLS","NM-SMLS"] },
+  { key: "polish",    label: "Polish Pipes (ERW)",    color: "#E8630A", prefixes: ["NM-PP"] },
+  { key: "nb",        label: "NB / GI Pipes",        color: "#0D7A5F", prefixes: ["NM-NB"] },
+  { key: "nonpolish", label: "Non-Polish Pipes",     color: "#7C3AED", prefixes: ["NM-NMPR","NM-NPS","NM-NPR"] },
+  { key: "sheets",    label: "Sheets / Plates",      color: "#B45309", prefixes: ["NM-SH","NM-SNO"] },
+  { key: "valves",    label: "Valves",               color: "#0369A1", prefixes: ["NM-VLV","NM-VALVE"] },
+  { key: "fittings",  label: "Fittings & Flanges",   color: "#BE185D", prefixes: ["NM-FIT","NM-FLG","NM-FLNG","NM-ELB","NM-TEE","NM-RED","NM-CAP","NM-CPL"] },
+  { key: "other",     label: "Others",               color: "#374151", prefixes: [] },
+];
+
+const VALVE_KEYWORDS   = ["valve","gate valve","ball valve","butterfly valve","globe valve","check valve","needle valve","solenoid valve"];
+const FITTING_KEYWORDS = ["flange","elbow","tee","reducer","coupling","cap","fitting","union","bushing","nipple","socket","stub","olet","weldolet","sockolet"];
+
+function getCategory(product_id, product_name) {
+  const pid   = (product_id   || "").toUpperCase();
+  const pname = (product_name || "").toLowerCase();
+  for (const cat of CATEGORIES) {
+    if (cat.key === "other") continue;
+    if (cat.prefixes.some(p => pid.startsWith(p))) return cat;
+  }
+  if (VALVE_KEYWORDS.some(k => pname.includes(k)))   return CATEGORIES.find(c => c.key === "valves");
+  if (FITTING_KEYWORDS.some(k => pname.includes(k))) return CATEGORIES.find(c => c.key === "fittings");
+  const pnameU = pname.toUpperCase();
+  if (pnameU.includes("SHEET") || pnameU.includes("PLATE")) return CATEGORIES.find(c => c.key === "sheets");
+  return CATEGORIES[CATEGORIES.length - 1];
+}
+
+function safeStock(v) {
+  const n = Number(v) || 0;
+  return Object.is(n, -0) ? 0 : n;
+}
+
+/* ─── Load ALL transactions and build stockMap[productUUID][locationId] ─────
+   This is identical to Products.jsx loadStockFromTransactions() so numbers
+   will always match exactly.                                                 */
+async function loadLiveStockMap() {
+  const map = {};
+  let from = 0;
+  const PAGE_SIZE = 1000;
+  while (true) {
+    const { data, error } = await supabase
+      .from("transactions")
+      .select("product_id, location_id, transaction_type, quantity")
+      .range(from, from + PAGE_SIZE - 1);
+    if (error || !data || data.length === 0) break;
+    data.forEach(({ product_id, location_id, transaction_type, quantity }) => {
+      if (!map[product_id]) map[product_id] = {};
+      if (!map[product_id][location_id]) map[product_id][location_id] = 0;
+      const q = Number(quantity) || 0;
+      if (transaction_type === "inward")  map[product_id][location_id] += q;
+      else if (transaction_type === "outward") map[product_id][location_id] -= q;
+    });
+    if (data.length < PAGE_SIZE) break;
+    from += PAGE_SIZE;
+  }
+  return map;
+}
+
+/* Total stock for a product across all locations */
+function totalForProduct(stockMap, uuid) {
+  return safeStock(Object.values(stockMap[uuid] || {}).reduce((s, v) => s + v, 0));
+}
+
 export default function Dashboard() {
   const [stats, setStats] = useState({
     totalProducts: 0,
@@ -24,7 +91,7 @@ export default function Dashboard() {
   });
 
   const [loading, setLoading] = useState(true);
-  const [modalType, setModalType] = useState(null); // 'low' | 'high' | 'hero' | 'dead'
+  const [modalType, setModalType] = useState(null);
   const [selectedCategory, setSelectedCategory] = useState(null);
   const [deadDays, setDeadDays] = useState(30);
 
@@ -32,25 +99,14 @@ export default function Dashboard() {
   const [aiResponse, setAiResponse] = useState("");
   const [isAsking, setIsAsking] = useState(false);
 
-  // ── Ledger state ────────────────────────────────────────────────────────────
+  // ── Ledger state ─────────────────────────────────────────────────────────────
   const [ledgerProduct, setLedgerProduct] = useState(null);
   const [ledger, setLedger] = useState([]);
   const [ledgerLoading, setLedgerLoading] = useState(false);
   const [locations, setLocations] = useState([]);
-  const [stockSummary, setStockSummary] = useState({});
+  const [ledgerStockMap, setLedgerStockMap] = useState({});
 
-  /* ── Brand colors (mirrors Products.jsx) ────────────────────────── */
-  const COLORS = ["#F59E0B", "#3B82F6", "#10B981", "#EC4899", "#F97316", "#8B5CF6"];
-  const CATEGORY_COLORS = {
-    "Seamless Pipe":   "#F59E0B",
-    "Polish Pipe":     "#3B82F6",
-    "NB Pipe":         "#10B981",
-    "Sheets":          "#EC4899",
-    "Non-Polish Pipe": "#F97316",
-    "Others":          "#8B5CF6"
-  };
-
-  useEffect(() => { fetchDashboardData(); loadLocations(); loadStockSummary(); }, []);
+  useEffect(() => { fetchDashboardData(); loadLocations(); }, []);
   useEffect(() => { fetchDashboardData(); }, [deadDays]);
 
   useEffect(() => {
@@ -66,22 +122,15 @@ export default function Dashboard() {
     setLocations(data || []);
   };
 
-  const loadStockSummary = async () => {
-    const { data } = await supabase.from("stock_summary").select("*");
-    const summary = {};
-    (data || []).forEach(row => {
-      if (!summary[row.product_id]) summary[row.product_id] = {};
-      const qty = row.current_stock ?? row.total_stock ?? 0;
-      summary[row.product_id][row.location_name] = qty;
-    });
-    setStockSummary(summary);
+  // ── Stock by location for ledger modal (uses live stockMap) ──────────────────
+  const stockByLocation = (productId, locationName) => {
+    const loc = locations.find(l => l.name?.toLowerCase() === locationName.toLowerCase());
+    if (!loc) return 0;
+    return safeStock(ledgerStockMap[productId]?.[loc.id]);
   };
 
-  const stockByLocation = (productId, locationName) =>
-    stockSummary[productId]?.[locationName] ?? 0;
-
   const totalStockForProduct = (productId) =>
-    Object.values(stockSummary[productId] || {}).reduce((s, v) => s + v, 0);
+    totalForProduct(ledgerStockMap, productId);
 
   // ── Open ledger modal ────────────────────────────────────────────────────────
   const openLedger = async (product) => {
@@ -89,21 +138,24 @@ export default function Dashboard() {
     setLedger([]);
     setLedgerLoading(true);
     try {
-      const { data: productTrans, error } = await supabase
-        .from("transactions")
-        .select("*, locations(name)")
-        .eq("product_id", product.id)
-        .order("created_at", { ascending: true });
+      const [{ data: productTrans, error }, freshMap] = await Promise.all([
+        supabase
+          .from("transactions")
+          .select("*, locations(name)")
+          .eq("product_id", product.id)
+          .order("created_at", { ascending: true }),
+        loadLiveStockMap(),
+      ]);
       if (error) throw error;
+      setLedgerStockMap(freshMap);
 
       let balance = 0;
       const calculated = (productTrans || []).map(t => {
         if (t.transaction_type === "inward") balance += Number(t.quantity);
         else balance -= Number(t.quantity);
-        return { ...t, location_name: t.locations?.name || "", balance };
+        return { ...t, location_name: t.locations?.name || "", balance: safeStock(balance) };
       });
       setLedger(calculated);
-      await loadStockSummary();
     } catch (err) {
       console.error("Failed to load ledger:", err.message);
     } finally {
@@ -111,32 +163,18 @@ export default function Dashboard() {
     }
   };
 
-  // ── Categorise a product by its NM- product_id prefix ───────────────────────
-  function categoriseProduct(nmProductId, nmProductName) {
-    const pId   = (nmProductId   || "").toUpperCase();
-    const pName = (nmProductName || "").toUpperCase();
-    if (pId.startsWith("NM-PP"))                           return "Polish Pipe";
-    if (pId.startsWith("NM-NBSMLS") || pId.startsWith("NM-SMLS")) return "Seamless Pipe";
-    if (pId.startsWith("NM-NB"))                           return "NB Pipe";
-    if (pId.startsWith("NM-SH") || pId.startsWith("NM-SNO") ||
-        pName.includes("SHEET") || pName.includes("PLATE")) return "Sheets";
-    if (pId.startsWith("NM-NMPR") || pId.startsWith("NM-NPS") || pId.startsWith("NM-NPR")) return "Non-Polish Pipe";
-    return "Others";
-  }
-
+  // ── Main dashboard fetch ─────────────────────────────────────────────────────
   const fetchDashboardData = async () => {
     try {
-      // 1. Products master list (uuid = id, human code = product_id)
+      // 1. Products master list
       const { data: productsData } = await supabase
         .from("products")
         .select("id, product_id, product_name, low_stock_alert, high_stock_alert");
 
-      // 2. Stock summary — keyed by product uuid
-      const { data: stockSummaryData } = await supabase
-        .from("stock_summary")
-        .select("*");
+      // 2. Live stock map — built from raw transactions, identical to Products.jsx
+      const stockMap = await loadLiveStockMap();
 
-      // 3. Recent 5 transactions (for display)
+      // 3. Recent 5 transactions
       const { data: recentTrans } = await supabase
         .from("transactions")
         .select("*, products(product_name, product_id), locations(name)")
@@ -167,59 +205,39 @@ export default function Dashboard() {
 
       const activeProductIds = new Set((recentOutward || []).map(t => t.product_id));
 
-      // ── Build stockMap keyed by product UUID ──────────────────────────────
-      const stockMap = {};
-      (stockSummaryData || []).forEach(row => {
-        const qty = row.current_stock ?? row.total_stock ?? 0;
-        stockMap[row.product_id] = (stockMap[row.product_id] || 0) + qty;
-      });
-      // Ensure all products appear even with zero stock
+      // ── Compute per-product totals ──────────────────────────────────────────
+      // totalForProduct() reads from stockMap (live transactions) — same as Products.jsx totalStock()
+      let grandTotal = 0;
+
+      const catTotals = {};
+      const categoryProductsMap = {};
+      CATEGORIES.forEach(c => { catTotals[c.key] = 0; categoryProductsMap[c.key] = []; });
+
       (productsData || []).forEach(p => {
-        if (!(p.id in stockMap)) stockMap[p.id] = 0;
-      });
+        const stock = totalForProduct(stockMap, p.id);
+        grandTotal += stock;
 
-      // ── Build productInfo map: uuid → { product_id (NM-…), product_name } ──
-      const productInfo = {};
-      (productsData || []).forEach(p => {
-        productInfo[p.id] = { product_id: p.product_id, product_name: p.product_name };
-      });
-
-      // ── Pie chart: category totals ────────────────────────────────────────
-      let totalStock = 0;
-      const catTotals = {
-        "Polish Pipe": 0, "Seamless Pipe": 0, "NB Pipe": 0,
-        "Sheets": 0, "Non-Polish Pipe": 0, "Others": 0,
-      };
-      const categoryProductsMap = {
-        "Polish Pipe": [], "Seamless Pipe": [], "NB Pipe": [],
-        "Sheets": [], "Non-Polish Pipe": [], "Others": [],
-      };
-
-      Object.entries(stockMap).forEach(([uuid, stock]) => {
-        totalStock += stock;
-        const info = productInfo[uuid];
-        if (!info) return; // skip orphan rows
-        const cat = categoriseProduct(info.product_id, info.product_name);
-        catTotals[cat] += stock;
-        categoryProductsMap[cat].push({
-          id: uuid,
-          product_id:   info.product_id   || "",
-          product_name: info.product_name || "",
+        const cat = getCategory(p.product_id, p.product_name);
+        catTotals[cat.key] += stock;
+        categoryProductsMap[cat.key].push({
+          id: p.id,
+          product_id:   p.product_id   || "",
+          product_name: p.product_name || "",
           currentStock: stock,
         });
       });
 
-      // Sort products within each category by product_id
-      Object.keys(categoryProductsMap).forEach(cat => {
-        categoryProductsMap[cat].sort((a, b) => a.product_id.localeCompare(b.product_id));
+      // Sort products within each category
+      Object.keys(categoryProductsMap).forEach(key => {
+        categoryProductsMap[key].sort((a, b) => a.product_id.localeCompare(b.product_id));
       });
 
-      // Build pie data — only include categories that have stock > 0
-      const pieData = Object.entries(catTotals)
-        .filter(([, v]) => v > 0)
-        .map(([name, value]) => ({ name, value }));
+      // Pie data — use category label for display, only include categories with stock > 0
+      const pieData = CATEGORIES
+        .filter(c => catTotals[c.key] > 0)
+        .map(c => ({ name: c.label, value: catTotals[c.key], color: c.color, key: c.key }));
 
-      // ── Last 7 days activity bar chart ────────────────────────────────────
+      // ── Last 7 days activity bar chart ──────────────────────────────────────
       const last7Days = [];
       for (let i = 6; i >= 0; i--) {
         const d = new Date();
@@ -247,32 +265,32 @@ export default function Dashboard() {
       });
       const activityData = last7Days.map(label => dailyMap[label]);
 
-      // ── Low / High alerts ─────────────────────────────────────────────────
-      // FIX: low_stock_alert must be > 0 AND currentStock STRICTLY LESS THAN the alert level
+      // ── Low / High alerts ───────────────────────────────────────────────────
+      // Uses <= threshold, matching Products.jsx: totalStock(p.id) <= Number(p.low_stock_alert)
       const lowList  = [];
       const highList = [];
       (productsData || []).forEach(p => {
-        const currentStock = stockMap[p.id] ?? 0;
-        if (p.low_stock_alert  > 0 && currentStock <  p.low_stock_alert)  lowList.push({ ...p, currentStock });
-        if (p.high_stock_alert > 0 && currentStock >= p.high_stock_alert)  highList.push({ ...p, currentStock });
+        const currentStock = totalForProduct(stockMap, p.id);
+        if (p.low_stock_alert  > 0 && currentStock <= Number(p.low_stock_alert))  lowList.push({ ...p, currentStock });
+        if (p.high_stock_alert > 0 && currentStock >= Number(p.high_stock_alert)) highList.push({ ...p, currentStock });
       });
 
-      // ── Hero products: top 10 by total outward ────────────────────────────
+      // ── Hero products: top 10 by total outward ──────────────────────────────
       const heroProducts = (productsData || [])
-        .map(p => ({ ...p, totalOutward: outwardMap[p.id] || 0, currentStock: stockMap[p.id] ?? 0 }))
+        .map(p => ({ ...p, totalOutward: outwardMap[p.id] || 0, currentStock: totalForProduct(stockMap, p.id) }))
         .filter(p => p.totalOutward > 0)
         .sort((a, b) => b.totalOutward - a.totalOutward)
         .slice(0, 10);
 
-      // ── Dead stock ────────────────────────────────────────────────────────
+      // ── Dead stock ──────────────────────────────────────────────────────────
       const deadStockProducts = (productsData || [])
-        .map(p => ({ ...p, currentStock: stockMap[p.id] ?? 0 }))
+        .map(p => ({ ...p, currentStock: totalForProduct(stockMap, p.id) }))
         .filter(p => p.currentStock > 0 && !activeProductIds.has(p.id))
         .sort((a, b) => b.currentStock - a.currentStock);
 
       setStats({
         totalProducts: productsData?.length || 0,
-        totalStock,
+        totalStock: grandTotal,
         lowAlerts:  lowList.length,
         highAlerts: highList.length,
         recentTransactions: recentTrans || [],
@@ -329,9 +347,9 @@ export default function Dashboard() {
     }
   };
 
-  // ── Custom pie label ──────────────────────────────────────────────────────
-  const renderPieLabel = ({ cx, cy, midAngle, innerRadius, outerRadius, name, percent }) => {
-    if (percent < 0.04) return null; // hide tiny slices
+  // ── Custom pie label ──────────────────────────────────────────────────────────
+  const renderPieLabel = ({ cx, cy, midAngle, outerRadius, name, percent }) => {
+    if (percent < 0.04) return null;
     const RADIAN = Math.PI / 180;
     const radius = outerRadius + 28;
     const x = cx + radius * Math.cos(-midAngle * RADIAN);
@@ -352,8 +370,13 @@ export default function Dashboard() {
     </div>
   );
 
-  const categoryProducts = selectedCategory ? (stats.categoryProductsMap[selectedCategory] || []) : [];
-  const categoryColor    = selectedCategory ? (CATEGORY_COLORS[selectedCategory] || "#8B5CF6") : "#8B5CF6";
+  const selectedCategoryObj = selectedCategory
+    ? CATEGORIES.find(c => c.label === selectedCategory || c.key === selectedCategory)
+    : null;
+  const categoryProducts = selectedCategoryObj
+    ? (stats.categoryProductsMap[selectedCategoryObj.key] || [])
+    : [];
+  const categoryColor = selectedCategoryObj?.color || "#8B5CF6";
 
   return (
     <div style={{ background: "#F8F7F4", minHeight: "100vh" }} className="p-4 md:p-6 max-w-screen-xl mx-auto">
@@ -484,7 +507,7 @@ export default function Dashboard() {
                     {stats.pieData.map((entry, index) => (
                       <Cell
                         key={`cell-${index}`}
-                        fill={CATEGORY_COLORS[entry.name] || COLORS[index % COLORS.length]}
+                        fill={entry.color}
                         style={{ cursor: "pointer", outline: "none" }}
                       />
                     ))}
@@ -534,7 +557,7 @@ export default function Dashboard() {
                       <span className="font-black tabular-nums" style={{ color: "#E8630A" }}>{p.totalOutward.toLocaleString()}</span>
                     </td>
                     <td className="px-5 py-3 text-right">
-                      <span className={`font-bold tabular-nums ${p.currentStock === 0 ? "text-red-500" : p.low_stock_alert > 0 && p.currentStock < p.low_stock_alert ? "text-orange-500" : "text-green-600"}`}>
+                      <span className={`font-bold tabular-nums ${p.currentStock === 0 ? "text-red-500" : p.low_stock_alert > 0 && p.currentStock <= p.low_stock_alert ? "text-orange-500" : "text-green-600"}`}>
                         {p.currentStock}
                       </span>
                     </td>
@@ -693,7 +716,7 @@ export default function Dashboard() {
       {(modalType === "hero" || modalType === "dead") && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 px-4" onClick={() => setModalType(null)}>
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[80vh] flex flex-col overflow-hidden" onClick={e => e.stopPropagation()}>
-            <div className={`px-6 py-4 flex items-center justify-between`} style={{ background: modalType === "hero" ? "linear-gradient(90deg,#F59E0B,#E8630A)" : "linear-gradient(90deg,#4B5563,#374151)" }}>
+            <div className="px-6 py-4 flex items-center justify-between" style={{ background: modalType === "hero" ? "linear-gradient(90deg,#F59E0B,#E8630A)" : "linear-gradient(90deg,#4B5563,#374151)" }}>
               <div>
                 <h2 className="text-lg font-black text-white">{modalType === "hero" ? "🏆 All Hero Products" : "💤 All Dead Stock"}</h2>
                 <p className="text-white/70 text-xs mt-0.5">
