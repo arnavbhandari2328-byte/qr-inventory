@@ -151,7 +151,7 @@ export default function Products() {
   const [products, setProducts]     = useState([]);
   const [stockMap, setStockMap]     = useState({});
   const [locations, setLocations]   = useState([]);
-  const [latestTally, setLatestTally] = useState(null);
+  const [latestTally, setLatestTally] = useState(null); // global latest tally from tally_logs
   const [search, setSearch]         = useState("");
   const [loading, setLoading]       = useState(true);
   const [openCats, setOpenCats]     = useState({});
@@ -172,9 +172,11 @@ export default function Products() {
   const [editForm, setEditForm]     = useState({});
   const [deleteConfirm, setDeleteConfirm] = useState(null);
 
+  // Tally All modal
   const [showTallyAll, setShowTallyAll] = useState(false);
   const [tallyAllConfirming, setTallyAllConfirming] = useState(false);
 
+  // Bulk upload
   const [showBulk, setShowBulk]     = useState(false);
   const [bulkRows, setBulkRows]     = useState([]);
   const [bulkErrors, setBulkErrors] = useState([]);
@@ -199,6 +201,7 @@ export default function Products() {
     if (!error) setLocations(data || []);
   };
 
+  // Reads from tally_logs — global tally events (not per-product)
   const loadLatestTally = async () => {
     const { data, error } = await supabase
       .from("tally_logs")
@@ -206,7 +209,9 @@ export default function Products() {
       .order("tallied_at", { ascending: false })
       .limit(1)
       .single();
-    if (!error && data) setLatestTally(data);
+    if (!error && data) {
+      setLatestTally(data);
+    }
   };
 
   const loadStockFromTransactions = async () => {
@@ -238,6 +243,7 @@ export default function Products() {
   const officeStock    = (uuid) => stockByLocation(uuid, getLocId("office"));
   const warehouseStock = (uuid) => stockByLocation(uuid, getLocId("warehouse"));
 
+  // ── Tally All: record a new global tally event in tally_logs ─────────────────
   const handleTallyAll = async () => {
     setTallyAllConfirming(true);
     const now = new Date().toISOString();
@@ -252,6 +258,7 @@ export default function Products() {
     setShowTallyAll(false);
   };
 
+  // ── Ledger ───────────────────────────────────────────────────────────────────
   const openLedger = async (product) => {
     setSelectedProduct(product);
     setLedgerLoading(true);
@@ -268,6 +275,7 @@ export default function Products() {
     setLedgerLoading(false);
   };
 
+  // ── Add single product ───────────────────────────────────────────────────────
   const handleAddProduct = async () => {
     if (!form.product_name.trim()) return;
     setSaving(true);
@@ -280,6 +288,7 @@ export default function Products() {
     if (!error) { setForm({ product_id:"", product_name:"", low_stock_alert:"" }); setShowAddForm(false); await loadProducts(); }
   };
 
+  // ── Bulk upload ──────────────────────────────────────────────────────────────
   const downloadTemplate = () => {
     const ws = XLSX.utils.json_to_sheet([{
       product_id: "NM-PP-001",
@@ -306,7 +315,7 @@ export default function Products() {
         const errors = [];
         const rows = raw.map((r, i) => {
           const name = String(r.product_name || r.Product_Name || r["Product Name"] || "").trim();
-          if (!name) errors.push(`Row ${i + 2}: product_name is required`);
+          if (!name) errors.push(`Row ${i+2}: product_name is required`);
           const stockVal = r.stock !== undefined ? r.stock : r.Stock !== undefined ? r.Stock : r["Stock"] !== undefined ? r["Stock"] : "";
           const stockNum = stockVal !== "" ? Number(stockVal) || 0 : null;
           const lowVal = r.low_alert !== undefined ? r.low_alert : r.Low_Alert !== undefined ? r.Low_Alert : r["Low Alert"] !== undefined ? r["Low Alert"] : r.low_stock_alert !== undefined ? r.low_stock_alert : "";
@@ -315,12 +324,12 @@ export default function Products() {
           const highNum = highVal !== "" ? Number(highVal) || null : null;
           const locationName = String(r.location || r.Location || r["Location"] || "").trim().toLowerCase() || null;
           return {
-            product_id: String(r.product_id || r.Product_ID || r["Product ID"] || "").trim() || null,
-            product_name: name,
+            product_id:      String(r.product_id || r.Product_ID || r["Product ID"] || "").trim() || null,
+            product_name:    name,
             low_stock_alert: lowNum,
             high_stock_alert: highNum,
-            _stock: stockNum,
-            _location: locationName,
+            _stock:          stockNum,
+            _location:       locationName,
           };
         }).filter(r => r.product_name);
         setBulkRows(rows);
@@ -371,6 +380,7 @@ export default function Products() {
     await loadAll();
   };
 
+  // ── Delete ───────────────────────────────────────────────────────────────────
   const handleDelete = async (id) => {
     await supabase.from("products").delete().eq("id", id);
     setDeleteConfirm(null);
@@ -400,6 +410,7 @@ export default function Products() {
     await loadStockFromTransactions();
   };
 
+  // ── Export: Excel ────────────────────────────────────────────────────────────
   const handleExportExcel = () => {
     if (!products.length) return;
     const rows = [];
@@ -408,10 +419,14 @@ export default function Products() {
       Object.keys(grades).sort(gradeSort).forEach(grade => {
         grades[grade].forEach(p => {
           rows.push({
-            Category: cat.label, Grade: grade,
-            Product_ID: p.product_id || "", Product_Name: p.product_name,
-            Office: officeStock(p.id), Warehouse: warehouseStock(p.id), Total: totalStock(p.id),
-            Low_Alert: p.low_stock_alert || "",
+            Category:    cat.label,
+            Grade:       grade,
+            Product_ID:  p.product_id || "",
+            Product_Name: p.product_name,
+            Office:      officeStock(p.id),
+            Warehouse:   warehouseStock(p.id),
+            Total:       totalStock(p.id),
+            Low_Alert:   p.low_stock_alert || "",
             Last_Tallied: latestTally ? formatDateTime(latestTally.tallied_at) : "",
           });
         });
@@ -423,6 +438,7 @@ export default function Products() {
     XLSX.writeFile(wb, `Nivee_Products_${new Date().toISOString().slice(0,10)}.xlsx`);
   };
 
+  // ── Export: Tally XML ────────────────────────────────────────────────────────
   const handleExportTally = () => {
     if (!products.length) return;
     const esc = (s) => String(s || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
@@ -438,6 +454,7 @@ export default function Products() {
     a.click();
   };
 
+  // ── Export: PDF ──────────────────────────────────────────────────────────────
   function hexToRgb(hex) {
     const r = parseInt(hex.slice(1,3),16), g = parseInt(hex.slice(3,5),16), b = parseInt(hex.slice(5,7),16);
     return { r, g, b };
@@ -479,25 +496,38 @@ export default function Products() {
       Object.keys(grades).sort(gradeSort).forEach(grade => {
         const items = grades[grade];
         const tallyLabel = latestTally ? formatDateTime(latestTally.tallied_at) : "—";
-        const rows = items.map(p => [p.product_id || "—", p.product_name, officeStock(p.id), warehouseStock(p.id), totalStock(p.id), p.low_stock_alert || "—", tallyLabel]);
+        const rows = items.map(p => [
+          p.product_id || "—",
+          p.product_name,
+          officeStock(p.id),
+          warehouseStock(p.id),
+          totalStock(p.id),
+          p.low_stock_alert || "—",
+          tallyLabel,
+        ]);
         doc.autoTable({
           startY: y,
-          head: [[{ content: `${grade}`, colSpan: 7, styles: { fillColor: hexToRgbArr(cat.color, 0.15), textColor: hexToRgbArr(cat.color), fontStyle: "bold", fontSize: 8 } }],
-            ["Product ID", "Name", "Office", "Warehouse", "Total", "Alert", "Last Tallied"]],
+          head: [[
+            { content: `${grade}`, colSpan: 7, styles: { fillColor: hexToRgbArr(cat.color, 0.15), textColor: hexToRgbArr(cat.color), fontStyle: "bold", fontSize: 8 } }
+          ], ["Product ID", "Name", "Office", "Warehouse", "Total", "Alert", "Last Tallied"]],
           body: rows,
           theme: "grid",
           styles: { fontSize: 7, cellPadding: 2, overflow: "linebreak" },
           headStyles: { fillColor: hexToRgbArr(cat.color), textColor: [255,255,255], fontStyle: "bold", fontSize: 7 },
           alternateRowStyles: { fillColor: [250, 250, 250] },
           columnStyles: {
-            0: { cellWidth: 26, font: "courier" }, 1: { cellWidth: "auto" },
-            2: { cellWidth: 18, halign: "center" }, 3: { cellWidth: 22, halign: "center" },
-            4: { cellWidth: 16, halign: "center", fontStyle: "bold" }, 5: { cellWidth: 16, halign: "center" },
+            0: { cellWidth: 26, font: "courier" },
+            1: { cellWidth: "auto" },
+            2: { cellWidth: 18, halign: "center" },
+            3: { cellWidth: 22, halign: "center" },
+            4: { cellWidth: 16, halign: "center", fontStyle: "bold" },
+            5: { cellWidth: 16, halign: "center" },
             6: { cellWidth: 34, halign: "center" },
           },
           margin: { left: 10, right: 10 },
           didDrawPage: () => {
-            doc.setFontSize(7); doc.setTextColor(150);
+            doc.setFontSize(7);
+            doc.setTextColor(150);
             doc.text(`Page ${doc.internal.getNumberOfPages()}`, pageW / 2, doc.internal.pageSize.getHeight() - 6, { align: "center" });
           },
         });
@@ -509,6 +539,7 @@ export default function Products() {
     doc.save(`Nivee_Products_${new Date().toISOString().slice(0,10)}.pdf`);
   };
 
+  // ── Grouped data ─────────────────────────────────────────────────────────────
   const filtered = products
     .filter(p => (p.product_name||"").toLowerCase().includes(search.toLowerCase()) || (p.product_id||"").toLowerCase().includes(search.toLowerCase()))
     .sort((a,b) => (a.product_name||"").localeCompare(b.product_name||""));
@@ -535,7 +566,7 @@ export default function Products() {
   return (
     <div style={{ background:"#F8F7F4", minHeight:"100vh" }} className="p-4 md:p-6 max-w-screen-xl mx-auto">
 
-      {/* ── HEADER ── */}
+      {/* HEADER */}
       <div className="flex flex-wrap items-start justify-between gap-3 mb-6">
         <div>
           <div className="flex items-center gap-3 mb-1">
@@ -549,6 +580,7 @@ export default function Products() {
               <span className="font-semibold text-gray-700">{products.length}</span> products
               {lowStockCount > 0 && <> · <span style={{ color:"#E8630A" }} className="font-semibold">{lowStockCount} low stock</span></>}
             </p>
+            {/* ── Latest Tally Banner ── */}
             {latestTally ? (
               <p className="text-xs flex items-center gap-1.5">
                 <span className="inline-flex items-center gap-1 bg-green-50 text-green-700 border border-green-200 px-2.5 py-0.5 rounded-full font-semibold">
@@ -563,26 +595,32 @@ export default function Products() {
           </div>
         </div>
         <div className="flex gap-2 flex-wrap">
+          {/* Excel */}
           <button onClick={handleExportExcel} style={{ background:"#0D7A5F" }} className="flex items-center gap-2 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:opacity-90 transition shadow-sm">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
             Excel
           </button>
+          {/* Tally XML */}
           <button onClick={handleExportTally} style={{ background:"#7C3AED" }} className="flex items-center gap-2 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:opacity-90 transition shadow-sm">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
             Tally XML
           </button>
+          {/* PDF */}
           <button onClick={handleExportPDF} style={{ background:"#DC2626" }} className="flex items-center gap-2 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:opacity-90 transition shadow-sm">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
             PDF
           </button>
+          {/* ✓ Tally All */}
           <button onClick={() => setShowTallyAll(true)} style={{ background:"#5B21B6" }} className="flex items-center gap-2 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:opacity-90 transition shadow-sm">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>
             ✓ Tally All
           </button>
+          {/* Bulk Upload */}
           <button onClick={() => setShowBulk(v => !v)} style={{ background: showBulk ? "#6B7280" : "#0369A1" }} className="flex items-center gap-2 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:opacity-90 transition shadow-sm">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
             {showBulk ? "✕ Close" : "Bulk Upload"}
           </button>
+          {/* Add Product */}
           <button onClick={() => setShowAddForm(v => !v)} style={{ background: showAddForm ? "#6B7280" : "#E8630A" }} className="flex items-center gap-2 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:opacity-90 transition shadow-sm">
             {showAddForm ? "✕ Cancel" : "+ Add Product"}
           </button>
