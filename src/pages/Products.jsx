@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { supabase } from "../supabase";
 import * as XLSX from "xlsx";
 import jsPDF from "jspdf";
@@ -12,40 +12,47 @@ import "jspdf-autotable";
 ───────────────────────────────────────── */
 
 const CATEGORIES = [
-  { key: "seamless",  label: "Seamless Pipes",     icon: "⬤",  color: "#1B3A6B", light: "#EBF0FA", prefixes: ["NM-NBSMLS","NM-SMLS"] },
-  { key: "polish",    label: "Polish Pipes (ERW)",  icon: "◉",  color: "#E8630A", light: "#FEF0E7", prefixes: ["NM-PP"] },
-  { key: "nb",        label: "NB / GI Pipes",      icon: "◎",  color: "#0D7A5F", light: "#E6F5F1", prefixes: ["NM-NB"] },
-  { key: "nonpolish", label: "Non-Polish Pipes",   icon: "○",  color: "#7C3AED", light: "#F3EFFE", prefixes: ["NM-NMPR","NM-NPS","NM-NPR"] },
-  { key: "sheets",    label: "Sheets / Plates",    icon: "▭",  color: "#B45309", light: "#FEF3E2", prefixes: ["NM-SH","NM-SNO"] },
-  { key: "other",     label: "Others",             icon: "◇",  color: "#374151", light: "#F3F4F6", prefixes: [] },
+  { key: "seamless",  label: "Seamless Pipes",       icon: "⬤",  color: "#1B3A6B", light: "#EBF0FA", prefixes: ["NM-NBSMLS","NM-SMLS"] },
+  { key: "polish",    label: "Polish Pipes (ERW)",    icon: "◉",  color: "#E8630A", light: "#FEF0E7", prefixes: ["NM-PP"] },
+  { key: "nb",        label: "NB / GI Pipes",        icon: "◎",  color: "#0D7A5F", light: "#E6F5F1", prefixes: ["NM-NB"] },
+  { key: "nonpolish", label: "Non-Polish Pipes",     icon: "○",  color: "#7C3AED", light: "#F3EFFE", prefixes: ["NM-NMPR","NM-NPS","NM-NPR"] },
+  { key: "sheets",    label: "Sheets / Plates",      icon: "▭",  color: "#B45309", light: "#FEF3E2", prefixes: ["NM-SH","NM-SNO"] },
+  { key: "valves",    label: "Valves",               icon: "⬡",  color: "#0369A1", light: "#E0F2FE", prefixes: ["NM-VLV","NM-VALVE","NM-VLV"] },
+  { key: "fittings",  label: "Fittings & Flanges",   icon: "◈",  color: "#BE185D", light: "#FCE7F3", prefixes: ["NM-FIT","NM-FLG","NM-FLNG","NM-ELB","NM-TEE","NM-RED","NM-CAP","NM-CPL"] },
+  { key: "other",     label: "Others",               icon: "◇",  color: "#374151", light: "#F3F4F6", prefixes: [] },
 ];
+
+// Keywords that identify valves by name when no prefix matches
+const VALVE_KEYWORDS    = ["valve","gate valve","ball valve","butterfly valve","globe valve","check valve","needle valve","solenoid valve"];
+const FITTING_KEYWORDS  = ["flange","elbow","tee","reducer","coupling","cap","fitting","union","bushing","nipple","socket","stub","olet","weldolet","sockolet"];
 
 function getCategory(product_id, product_name) {
   const pid   = (product_id   || "").toUpperCase();
-  const pname = (product_name || "").toUpperCase();
+  const pname = (product_name || "").toLowerCase();
   for (const cat of CATEGORIES) {
     if (cat.key === "other") continue;
     if (cat.prefixes.some(p => pid.startsWith(p))) return cat;
-    if (cat.key === "sheets" && (pname.includes("SHEET") || pname.includes("PLATE"))) return cat;
   }
+  // Keyword matching on name
+  if (VALVE_KEYWORDS.some(k => pname.includes(k)))   return CATEGORIES.find(c => c.key === "valves");
+  if (FITTING_KEYWORDS.some(k => pname.includes(k))) return CATEGORIES.find(c => c.key === "fittings");
+  const pnameUpper = pname.toUpperCase();
+  if (pnameUpper.includes("SHEET") || pnameUpper.includes("PLATE")) return CATEGORIES.find(c => c.key === "sheets");
   return CATEGORIES[CATEGORIES.length - 1];
 }
 
 // ── Grade extraction — order matters (most specific first) ──────────────────
 const GRADE_PATTERNS = [
-  // Steel grades
   { re: /\b316[Ll]?\b/i,          label: "Grade 316"  },
   { re: /\b304[Ll]?\b/i,          label: "Grade 304"  },
   { re: /\b202\b/i,               label: "Grade 202"  },
   { re: /\b201\b/i,               label: "Grade 201"  },
   { re: /\b310[Ss]?\b/i,          label: "Grade 310"  },
   { re: /\b321\b/i,               label: "Grade 321"  },
-  // Schedules
   { re: /SCH[-\s]?80/i,           label: "SCH-80"     },
   { re: /SCH[-\s]?40/i,           label: "SCH-40"     },
   { re: /SCH[-\s]?20/i,           label: "SCH-20"     },
   { re: /SCH[-\s]?10/i,           label: "SCH-10"     },
-  // SWG — from thickest gauge (smallest number) to thinnest
   { re: /\b10[\s-]?SWG\b/i,       label: "10 SWG"    },
   { re: /\b12[\s-]?SWG\b/i,       label: "12 SWG"    },
   { re: /\b14[\s-]?SWG\b/i,       label: "14 SWG"    },
@@ -54,11 +61,9 @@ const GRADE_PATTERNS = [
   { re: /\b20[\s-]?SWG\b/i,       label: "20 SWG"    },
   { re: /\b22[\s-]?SWG\b/i,       label: "22 SWG"    },
   { re: /\bSWG\b/i,               label: "SWG"        },
-  // Thickness / weight grades
   { re: /\bHEAVY\b/i,             label: "Heavy"      },
   { re: /\bMEDIUM\b/i,            label: "Medium"     },
   { re: /\bLIGHT\b/i,             label: "Light"      },
-  // Standards
   { re: /\bA106\b/i,              label: "A106"       },
   { re: /\bA53\b/i,               label: "A53"        },
   { re: /\bIS[-\s]?2062\b/i,      label: "IS2062"     },
@@ -66,7 +71,31 @@ const GRADE_PATTERNS = [
   { re: /\bIS[-\s]?3589\b/i,      label: "IS3589"     },
 ];
 
-// Grade sort order for display
+// For valves/fittings — group by type instead of steel grade
+const VALVE_TYPE_PATTERNS = [
+  { re: /ball\s*valve/i,       label: "Ball Valve"       },
+  { re: /gate\s*valve/i,       label: "Gate Valve"       },
+  { re: /butterfly\s*valve/i,  label: "Butterfly Valve"  },
+  { re: /globe\s*valve/i,      label: "Globe Valve"      },
+  { re: /check\s*valve/i,      label: "Check Valve"      },
+  { re: /needle\s*valve/i,     label: "Needle Valve"     },
+  { re: /solenoid\s*valve/i,   label: "Solenoid Valve"   },
+  { re: /valve/i,              label: "Valve (Other)"    },
+];
+
+const FITTING_TYPE_PATTERNS = [
+  { re: /flange/i,     label: "Flanges"      },
+  { re: /elbow/i,      label: "Elbows"       },
+  { re: /tee/i,        label: "Tees"         },
+  { re: /reducer/i,    label: "Reducers"     },
+  { re: /coupling/i,   label: "Couplings"    },
+  { re: /cap\b/i,      label: "Caps"         },
+  { re: /union/i,      label: "Unions"       },
+  { re: /nipple/i,     label: "Nipples"      },
+  { re: /socket/i,     label: "Sockets"      },
+  { re: /olet/i,       label: "Olets"        },
+];
+
 const GRADE_ORDER = [
   "Grade 201","Grade 202","Grade 304","Grade 316","Grade 310","Grade 321",
   "SCH-10","SCH-20","SCH-40","SCH-80",
@@ -74,6 +103,9 @@ const GRADE_ORDER = [
   "Heavy","Medium","Light",
   "A106","A53","IS2062","IS1239","IS3589",
   "Standard",
+  // valve / fitting types (alphabetical after steel)
+  "Ball Valve","Butterfly Valve","Check Valve","Gate Valve","Globe Valve","Needle Valve","Solenoid Valve","Valve (Other)",
+  "Caps","Couplings","Elbows","Flanges","Nipples","Olets","Reducers","Sockets","Tees","Unions",
 ];
 
 function gradeSort(a, b) {
@@ -85,7 +117,18 @@ function gradeSort(a, b) {
   return ai - bi;
 }
 
-function extractGrade(name) {
+function extractGrade(name, catKey) {
+  // For valves — group by valve type
+  if (catKey === "valves") {
+    for (const { re, label } of VALVE_TYPE_PATTERNS) { if (re.test(name)) return label; }
+    return "Valve (Other)";
+  }
+  // For fittings — group by fitting type
+  if (catKey === "fittings") {
+    for (const { re, label } of FITTING_TYPE_PATTERNS) { if (re.test(name)) return label; }
+    return "Fitting (Other)";
+  }
+  // For pipes/sheets — group by steel grade / SWG / schedule
   for (const { re, label } of GRADE_PATTERNS) { if (re.test(name)) return label; }
   return "Standard";
 }
@@ -105,10 +148,18 @@ function safeStock(v) {
   return Object.is(n, -0) ? 0 : n;
 }
 
+function formatDateTime(iso) {
+  if (!iso) return null;
+  const d = new Date(iso);
+  return d.toLocaleDateString("en-IN", { day:"2-digit", month:"short", year:"numeric" })
+    + " " + d.toLocaleTimeString("en-IN", { hour:"2-digit", minute:"2-digit", hour12:true });
+}
+
 export default function Products() {
   const [products, setProducts]     = useState([]);
   const [stockMap, setStockMap]     = useState({});
   const [locations, setLocations]   = useState([]);
+  const [tallyMap, setTallyMap]     = useState({});   // { productId: iso_string }
   const [search, setSearch]         = useState("");
   const [loading, setLoading]       = useState(true);
   const [openCats, setOpenCats]     = useState({});
@@ -129,11 +180,22 @@ export default function Products() {
   const [editForm, setEditForm]     = useState({});
   const [deleteConfirm, setDeleteConfirm] = useState(null);
 
+  // Tally modal
+  const [tallyModal, setTallyModal] = useState(null);  // product object
+  const [tallyConfirming, setTallyConfirming] = useState(false);
+
+  // Bulk upload
+  const [showBulk, setShowBulk]     = useState(false);
+  const [bulkRows, setBulkRows]     = useState([]);   // parsed preview rows
+  const [bulkErrors, setBulkErrors] = useState([]);
+  const [bulkSaving, setBulkSaving] = useState(false);
+  const fileRef = useRef(null);
+
   useEffect(() => { loadAll(); }, []);
 
   const loadAll = async () => {
     setLoading(true);
-    try { await Promise.all([loadProducts(), loadLocations(), loadStockFromTransactions()]); }
+    try { await Promise.all([loadProducts(), loadLocations(), loadStockFromTransactions(), loadTallyMap()]); }
     finally { setLoading(false); }
   };
 
@@ -145,6 +207,22 @@ export default function Products() {
   const loadLocations = async () => {
     const { data, error } = await supabase.from("locations").select("*");
     if (!error) setLocations(data || []);
+  };
+
+  const loadTallyMap = async () => {
+    // Fetch latest tally record per product from product_tally table
+    // Table: product_tally(id, product_id uuid, tallied_at timestamptz, tallied_by text)
+    const { data, error } = await supabase
+      .from("product_tally")
+      .select("product_id, tallied_at")
+      .order("tallied_at", { ascending: false });
+    if (!error && data) {
+      const map = {};
+      data.forEach(({ product_id, tallied_at }) => {
+        if (!map[product_id]) map[product_id] = tallied_at; // first = latest due to desc order
+      });
+      setTallyMap(map);
+    }
   };
 
   const loadStockFromTransactions = async () => {
@@ -176,6 +254,22 @@ export default function Products() {
   const officeStock    = (uuid) => stockByLocation(uuid, getLocId("office"));
   const warehouseStock = (uuid) => stockByLocation(uuid, getLocId("warehouse"));
 
+  // ── Tally: record timestamp ──────────────────────────────────────────────────
+  const handleTally = async (product) => {
+    setTallyConfirming(true);
+    const now = new Date().toISOString();
+    const { error } = await supabase.from("product_tally").insert([{
+      product_id: product.id,
+      tallied_at: now,
+    }]);
+    if (!error) {
+      setTallyMap(prev => ({ ...prev, [product.id]: now }));
+    }
+    setTallyConfirming(false);
+    setTallyModal(null);
+  };
+
+  // ── Ledger ───────────────────────────────────────────────────────────────────
   const openLedger = async (product) => {
     setSelectedProduct(product);
     setLedgerLoading(true);
@@ -192,6 +286,7 @@ export default function Products() {
     setLedgerLoading(false);
   };
 
+  // ── Add single product ───────────────────────────────────────────────────────
   const handleAddProduct = async () => {
     if (!form.product_name.trim()) return;
     setSaving(true);
@@ -204,6 +299,61 @@ export default function Products() {
     if (!error) { setForm({ product_id:"", product_name:"", low_stock_alert:"" }); setShowAddForm(false); await loadProducts(); }
   };
 
+  // ── Bulk upload ──────────────────────────────────────────────────────────────
+  const downloadTemplate = () => {
+    const ws = XLSX.utils.json_to_sheet([
+      { product_id: "NM-PP-001", product_name: "Example Product 25NB 304", low_stock_alert: 10 },
+    ]);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Products");
+    XLSX.writeFile(wb, "Nivee_Bulk_Upload_Template.xlsx");
+  };
+
+  const handleBulkFile = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      try {
+        const wb = XLSX.read(evt.target.result, { type: "binary" });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const raw = XLSX.utils.sheet_to_json(ws, { defval: "" });
+        const errors = [];
+        const rows = raw.map((r, i) => {
+          const name = String(r.product_name || r.Product_Name || r["Product Name"] || "").trim();
+          if (!name) errors.push(`Row ${i+2}: product_name is required`);
+          return {
+            product_id:      String(r.product_id || r.Product_ID || r["Product ID"] || "").trim() || null,
+            product_name:    name,
+            low_stock_alert: r.low_stock_alert || r.Low_Alert ? Number(r.low_stock_alert || r.Low_Alert) || null : null,
+          };
+        }).filter(r => r.product_name);
+        setBulkRows(rows);
+        setBulkErrors(errors);
+      } catch {
+        setBulkErrors(["Could not parse file. Please use the template."]);
+        setBulkRows([]);
+      }
+    };
+    reader.readAsBinaryString(file);
+  };
+
+  const handleBulkSave = async () => {
+    if (!bulkRows.length) return;
+    setBulkSaving(true);
+    const CHUNK = 50;
+    for (let i = 0; i < bulkRows.length; i += CHUNK) {
+      await supabase.from("products").upsert(bulkRows.slice(i, i + CHUNK), { onConflict: "product_name" });
+    }
+    setBulkSaving(false);
+    setShowBulk(false);
+    setBulkRows([]);
+    setBulkErrors([]);
+    if (fileRef.current) fileRef.current.value = "";
+    await loadProducts();
+  };
+
+  // ── Delete ───────────────────────────────────────────────────────────────────
   const handleDelete = async (id) => {
     await supabase.from("products").delete().eq("id", id);
     setDeleteConfirm(null);
@@ -250,6 +400,7 @@ export default function Products() {
             Warehouse:   warehouseStock(p.id),
             Total:       totalStock(p.id),
             Low_Alert:   p.low_stock_alert || "",
+            Last_Tallied: tallyMap[p.id] ? formatDateTime(tallyMap[p.id]) : "",
           });
         });
       });
@@ -266,37 +417,9 @@ export default function Products() {
     const esc = (s) => String(s || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
     const stockItems = products.map(p => {
       const total = totalStock(p.id);
-      return `
-    <STOCKITEM NAME="${esc(p.product_name)}" RESERVEDNAME="">
-      <PARENT></PARENT>
-      <CATEGORY></CATEGORY>
-      <BASEUNITS>NOS</BASEUNITS>
-      <OPENINGBALANCE>${total}</OPENINGBALANCE>
-      <OPENINGRATE>0</OPENINGRATE>
-      <OPENINGVALUE>0</OPENINGVALUE>
-      <BATCHALLOCATIONS.LIST></BATCHALLOCATIONS.LIST>
-    </STOCKITEM>`;
+      return `\n    <STOCKITEM NAME="${esc(p.product_name)}" RESERVEDNAME="">\n      <PARENT></PARENT>\n      <CATEGORY></CATEGORY>\n      <BASEUNITS>NOS</BASEUNITS>\n      <OPENINGBALANCE>${total}</OPENINGBALANCE>\n      <OPENINGRATE>0</OPENINGRATE>\n      <OPENINGVALUE>0</OPENINGVALUE>\n      <BATCHALLOCATIONS.LIST></BATCHALLOCATIONS.LIST>\n    </STOCKITEM>`;
     }).join("");
-    const xml = `<?xml version="1.0" encoding="UTF-8"?>
-<ENVELOPE>
-  <HEADER>
-    <TALLYREQUEST>Import Data</TALLYREQUEST>
-  </HEADER>
-  <BODY>
-    <IMPORTDATA>
-      <REQUESTDESC>
-        <REPORTNAME>Stock Items</REPORTNAME>
-        <STATICVARIABLES>
-          <SVCURRENTCOMPANY>Nivee Metal</SVCURRENTCOMPANY>
-        </STATICVARIABLES>
-      </REQUESTDESC>
-      <REQUESTDATA>
-        <TALLYMESSAGE xmlns:UDF="TallyUDF">${stockItems}
-        </TALLYMESSAGE>
-      </REQUESTDATA>
-    </IMPORTDATA>
-  </BODY>
-</ENVELOPE>`;
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>\n<ENVELOPE>\n  <HEADER>\n    <TALLYREQUEST>Import Data</TALLYREQUEST>\n  </HEADER>\n  <BODY>\n    <IMPORTDATA>\n      <REQUESTDESC>\n        <REPORTNAME>Stock Items</REPORTNAME>\n        <STATICVARIABLES>\n          <SVCURRENTCOMPANY>Nivee Metal</SVCURRENTCOMPANY>\n        </STATICVARIABLES>\n      </REQUESTDESC>\n      <REQUESTDATA>\n        <TALLYMESSAGE xmlns:UDF="TallyUDF">${stockItems}\n        </TALLYMESSAGE>\n      </REQUESTDATA>\n    </IMPORTDATA>\n  </BODY>\n</ENVELOPE>`;
     const blob = new Blob([xml], { type: "text/xml" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
@@ -305,12 +428,22 @@ export default function Products() {
   };
 
   // ── Export: PDF ──────────────────────────────────────────────────────────────
+  function hexToRgb(hex) {
+    const r = parseInt(hex.slice(1,3),16), g = parseInt(hex.slice(3,5),16), b = parseInt(hex.slice(5,7),16);
+    return { r, g, b };
+  }
+  function hexToRgbArr(hex, alpha) {
+    const { r, g, b } = hexToRgb(hex);
+    if (alpha !== undefined) {
+      return [Math.round(255-(255-r)*alpha), Math.round(255-(255-g)*alpha), Math.round(255-(255-b)*alpha)];
+    }
+    return [r, g, b];
+  }
+
   const handleExportPDF = () => {
     if (!products.length) return;
     const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
     const pageW = doc.internal.pageSize.getWidth();
-
-    // Header
     doc.setFillColor(27, 58, 107);
     doc.rect(0, 0, pageW, 18, "F");
     doc.setTextColor(255, 255, 255);
@@ -319,16 +452,12 @@ export default function Products() {
     doc.text("NIVEE METAL — Products Catalog", 14, 12);
     doc.setFontSize(8);
     doc.setFont("helvetica", "normal");
-    doc.text(`Generated: ${new Date().toLocaleDateString("en-IN", { day:"2-digit", month:"short", year:"numeric" })}`, pageW - 14, 12, { align: "right" });
-
+    doc.text(`Generated: ${new Date().toLocaleDateString("en-IN",{day:"2-digit",month:"short",year:"numeric"})}`, pageW - 14, 12, { align: "right" });
     let y = 24;
-
     catOrder.forEach(catKey => {
       const { cat, grades } = grouped[catKey];
       const allItems = Object.values(grades).flat();
       const catTotal = allItems.reduce((s,p) => s + totalStock(p.id), 0);
-
-      // Category header band
       const rgb = hexToRgb(cat.color);
       doc.setFillColor(rgb.r, rgb.g, rgb.b);
       doc.rect(0, y, pageW, 8, "F");
@@ -337,7 +466,6 @@ export default function Products() {
       doc.setFont("helvetica", "bold");
       doc.text(`${cat.label}  (${allItems.length} products · ${catTotal.toLocaleString()} units)`, 14, y + 5.5);
       y += 10;
-
       Object.keys(grades).sort(gradeSort).forEach(grade => {
         const items = grades[grade];
         const rows = items.map(p => [
@@ -347,31 +475,29 @@ export default function Products() {
           warehouseStock(p.id),
           totalStock(p.id),
           p.low_stock_alert || "—",
+          tallyMap[p.id] ? formatDateTime(tallyMap[p.id]) : "—",
         ]);
-
         doc.autoTable({
           startY: y,
           head: [[
-            { content: `Grade: ${grade}`, colSpan: 6, styles: { fillColor: hexToRgbArr(cat.color, 0.15), textColor: hexToRgbArr(cat.color), fontStyle: "bold", fontSize: 8 } }
-          ], [
-            "Product ID", "Name", "Office", "Warehouse", "Total", "Alert"
-          ]],
+            { content: `${grade}`, colSpan: 7, styles: { fillColor: hexToRgbArr(cat.color, 0.15), textColor: hexToRgbArr(cat.color), fontStyle: "bold", fontSize: 8 } }
+          ], ["Product ID", "Name", "Office", "Warehouse", "Total", "Alert", "Last Tallied"]],
           body: rows,
           theme: "grid",
-          styles: { fontSize: 7.5, cellPadding: 2, overflow: "linebreak" },
-          headStyles: { fillColor: hexToRgbArr(cat.color), textColor: [255,255,255], fontStyle: "bold", fontSize: 7.5 },
+          styles: { fontSize: 7, cellPadding: 2, overflow: "linebreak" },
+          headStyles: { fillColor: hexToRgbArr(cat.color), textColor: [255,255,255], fontStyle: "bold", fontSize: 7 },
           alternateRowStyles: { fillColor: [250, 250, 250] },
           columnStyles: {
-            0: { cellWidth: 28, font: "courier" },
+            0: { cellWidth: 26, font: "courier" },
             1: { cellWidth: "auto" },
-            2: { cellWidth: 20, halign: "center" },
-            3: { cellWidth: 24, halign: "center" },
-            4: { cellWidth: 18, halign: "center", fontStyle: "bold" },
-            5: { cellWidth: 18, halign: "center" },
+            2: { cellWidth: 18, halign: "center" },
+            3: { cellWidth: 22, halign: "center" },
+            4: { cellWidth: 16, halign: "center", fontStyle: "bold" },
+            5: { cellWidth: 16, halign: "center" },
+            6: { cellWidth: 34, halign: "center" },
           },
           margin: { left: 10, right: 10 },
-          didDrawPage: (data) => {
-            // footer page number
+          didDrawPage: () => {
             doc.setFontSize(7);
             doc.setTextColor(150);
             doc.text(`Page ${doc.internal.getNumberOfPages()}`, pageW / 2, doc.internal.pageSize.getHeight() - 6, { align: "center" });
@@ -382,23 +508,10 @@ export default function Products() {
       });
       y += 4;
     });
-
     doc.save(`Nivee_Products_${new Date().toISOString().slice(0,10)}.pdf`);
   };
 
-  // ── Helpers for PDF color ────────────────────────────────────────────────────
-  function hexToRgb(hex) {
-    const r = parseInt(hex.slice(1,3),16), g = parseInt(hex.slice(3,5),16), b = parseInt(hex.slice(5,7),16);
-    return { r, g, b };
-  }
-  function hexToRgbArr(hex, alpha) {
-    const { r, g, b } = hexToRgb(hex);
-    if (alpha !== undefined) {
-      return [Math.round(255 - (255-r)*alpha), Math.round(255-(255-g)*alpha), Math.round(255-(255-b)*alpha)];
-    }
-    return [r, g, b];
-  }
-
+  // ── Grouped data ─────────────────────────────────────────────────────────────
   const filtered = products
     .filter(p => (p.product_name||"").toLowerCase().includes(search.toLowerCase()) || (p.product_id||"").toLowerCase().includes(search.toLowerCase()))
     .sort((a,b) => (a.product_name||"").localeCompare(b.product_name||""));
@@ -406,18 +519,20 @@ export default function Products() {
   const grouped = {};
   filtered.forEach(p => {
     const cat   = getCategory(p.product_id, p.product_name);
-    const grade = extractGrade(p.product_name);
+    const grade = extractGrade(p.product_name, cat.key);
     if (!grouped[cat.key]) grouped[cat.key] = { cat, grades: {} };
     if (!grouped[cat.key].grades[grade]) grouped[cat.key].grades[grade] = [];
     grouped[cat.key].grades[grade].push(p);
   });
   Object.values(grouped).forEach(({ grades }) => {
-    Object.keys(grades).forEach(g => { grades[g].sort((a,b) => extractSizeKey(a.product_name) - extractSizeKey(b.product_name)); });
+    Object.keys(grades).forEach(g => {
+      grades[g].sort((a,b) => extractSizeKey(a.product_name) - extractSizeKey(b.product_name));
+    });
   });
 
   const catOrder = CATEGORIES.map(c => c.key).filter(k => grouped[k]);
   const lowStockCount = products.filter(p => p.low_stock_alert && totalStock(p.id) <= Number(p.low_stock_alert)).length;
-  const toggleCat   = (key) => setOpenCats(prev   => ({ ...prev, [key]: !prev[key]  }));
+  const toggleCat   = (key) => setOpenCats(prev   => ({ ...prev, [key]: !prev[key] }));
   const toggleGrade = (key) => setOpenGrades(prev  => ({ ...prev, [key]: !prev[key] }));
 
   return (
@@ -443,15 +558,20 @@ export default function Products() {
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
             Excel
           </button>
-          {/* Tally */}
+          {/* Tally XML */}
           <button onClick={handleExportTally} style={{ background:"#7C3AED" }} className="flex items-center gap-2 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:opacity-90 transition shadow-sm">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
-            Tally
+            Tally XML
           </button>
           {/* PDF */}
           <button onClick={handleExportPDF} style={{ background:"#DC2626" }} className="flex items-center gap-2 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:opacity-90 transition shadow-sm">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><path d="M9 13h1a2 2 0 0 1 0 4H9v-4zm4 0h2m-2 2h1.5m-.5 2h1"/></svg>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
             PDF
+          </button>
+          {/* Bulk Upload */}
+          <button onClick={() => setShowBulk(v => !v)} style={{ background: showBulk ? "#6B7280" : "#0369A1" }} className="flex items-center gap-2 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:opacity-90 transition shadow-sm">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+            {showBulk ? "✕ Close" : "Bulk Upload"}
           </button>
           {/* Add */}
           <button onClick={() => setShowAddForm(v => !v)} style={{ background: showAddForm ? "#6B7280" : "#E8630A" }} className="flex items-center gap-2 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:opacity-90 transition shadow-sm">
@@ -459,6 +579,56 @@ export default function Products() {
           </button>
         </div>
       </div>
+
+      {/* BULK UPLOAD PANEL */}
+      {showBulk && (
+        <div className="bg-white border border-blue-200 shadow rounded-xl p-5 mb-5">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="font-black text-base" style={{ color:"#0369A1" }}>📥 Bulk Upload Products</h3>
+            <button onClick={downloadTemplate} className="text-xs font-semibold px-3 py-1.5 rounded-lg border border-blue-300 text-blue-700 hover:bg-blue-50 transition">
+              ⬇ Download Template
+            </button>
+          </div>
+          <p className="text-xs text-gray-500 mb-3">Upload an Excel (.xlsx) or CSV file with columns: <code className="bg-gray-100 px-1 rounded">product_id</code>, <code className="bg-gray-100 px-1 rounded">product_name</code>, <code className="bg-gray-100 px-1 rounded">low_stock_alert</code>. Existing products (matched by name) will be updated.</p>
+          <input ref={fileRef} type="file" accept=".xlsx,.csv,.xls" onChange={handleBulkFile} className="block w-full text-sm text-gray-600 file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-blue-50 file:text-blue-700 file:font-semibold hover:file:bg-blue-100 mb-3" />
+          {bulkErrors.length > 0 && (
+            <div className="bg-red-50 border border-red-200 rounded-lg p-3 mb-3">
+              {bulkErrors.map((e,i) => <p key={i} className="text-xs text-red-600">{e}</p>)}
+            </div>
+          )}
+          {bulkRows.length > 0 && (
+            <>
+              <p className="text-xs text-gray-500 mb-2 font-semibold">{bulkRows.length} rows ready to import:</p>
+              <div className="overflow-x-auto max-h-52 border border-gray-100 rounded-lg mb-3">
+                <table className="w-full text-xs">
+                  <thead className="sticky top-0 bg-gray-50">
+                    <tr>
+                      <th className="px-3 py-2 text-left text-gray-500 font-bold">Product ID</th>
+                      <th className="px-3 py-2 text-left text-gray-500 font-bold">Name</th>
+                      <th className="px-3 py-2 text-center text-gray-500 font-bold">Alert</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-50">
+                    {bulkRows.map((r,i) => (
+                      <tr key={i} className="hover:bg-gray-50">
+                        <td className="px-3 py-2 font-mono text-gray-400">{r.product_id || "—"}</td>
+                        <td className="px-3 py-2 font-semibold text-gray-700">{r.product_name}</td>
+                        <td className="px-3 py-2 text-center text-gray-500">{r.low_stock_alert ?? "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div className="flex gap-2">
+                <button onClick={() => { setBulkRows([]); setBulkErrors([]); if (fileRef.current) fileRef.current.value = ""; }} className="flex-1 border border-gray-200 py-2 rounded-lg text-sm font-semibold text-gray-600 hover:bg-gray-50">Clear</button>
+                <button onClick={handleBulkSave} disabled={bulkSaving} style={{ background:"#0369A1" }} className="flex-1 py-2 rounded-lg text-sm font-bold text-white disabled:opacity-50 hover:opacity-90">
+                  {bulkSaving ? "Importing…" : `Import ${bulkRows.length} Products`}
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      )}
 
       {/* ADD FORM */}
       {showAddForm && (
@@ -522,7 +692,7 @@ export default function Products() {
                     </div>
                     <div>
                       <p className="font-black text-base" style={{ color: cat.color }}>{cat.label}</p>
-                      <p className="text-xs text-gray-500 mt-0.5">{totalProducts} products · {totalQty.toLocaleString()} units total · {Object.keys(grades).length} grade{Object.keys(grades).length !== 1 ? 's' : ''}</p>
+                      <p className="text-xs text-gray-500 mt-0.5">{totalProducts} products · {totalQty.toLocaleString()} units total · {Object.keys(grades).length} group{Object.keys(grades).length !== 1 ? 's' : ''}</p>
                     </div>
                   </div>
                   <svg className="transition-transform" style={{ transform: isOpen ? "rotate(180deg)" : "rotate(0deg)", color: cat.color }} width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="m6 9 6 6 6-6"/></svg>
@@ -531,10 +701,10 @@ export default function Products() {
                 {isOpen && (
                   <div className="bg-white">
                     {Object.keys(grades).sort(gradeSort).map(grade => {
-                      const gradeKey   = `${catKey}-${grade}`;
+                      const gradeKey    = `${catKey}-${grade}`;
                       const isGradeOpen = openGrades[gradeKey] !== false;
-                      const items      = grades[grade];
-                      const gradeQty   = items.reduce((s,p) => s + totalStock(p.id), 0);
+                      const items       = grades[grade];
+                      const gradeQty    = items.reduce((s,p) => s + totalStock(p.id), 0);
 
                       return (
                         <div key={grade} className="border-t border-gray-50">
@@ -558,6 +728,7 @@ export default function Products() {
                                     <th className="px-4 py-2.5 text-center" style={{ color: cat.color }}>Warehouse</th>
                                     <th className="px-4 py-2.5 text-center" style={{ color: cat.color }}>Total</th>
                                     <th className="px-4 py-2.5 text-center" style={{ color: cat.color }}>Alert</th>
+                                    <th className="px-4 py-2.5 text-center" style={{ color: cat.color }}>Last Tallied</th>
                                     <th className="px-4 py-2.5 text-center" style={{ color: cat.color }}>Actions</th>
                                   </tr>
                                 </thead>
@@ -568,6 +739,7 @@ export default function Products() {
                                     const total     = totalStock(p.id);
                                     const isLow     = p.low_stock_alert && total <= Number(p.low_stock_alert);
                                     const isEditing = editingId === p.id;
+                                    const lastTally = tallyMap[p.id];
                                     return (
                                       <tr key={p.id} className={`transition hover:bg-orange-50/20 ${isLow ? "bg-red-50/40" : ""}`}>
                                         <td className="px-4 py-3 font-mono text-xs text-gray-400">
@@ -594,6 +766,13 @@ export default function Products() {
                                             ? <input value={editForm.low_stock_alert} type="number" onChange={e => setEditForm({ ...editForm, low_stock_alert: e.target.value })} className="border rounded px-2 py-1 w-16 text-center text-xs" />
                                             : <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${isLow ? "bg-red-100 text-red-600" : "bg-gray-100 text-gray-500"}`}>{p.low_stock_alert || "—"}</span>}
                                         </td>
+                                        <td className="px-4 py-3 text-center">
+                                          <div className="flex flex-col items-center gap-0.5">
+                                            {lastTally
+                                              ? <span className="text-xs text-green-700 font-semibold bg-green-50 px-2 py-0.5 rounded-full whitespace-nowrap">{formatDateTime(lastTally)}</span>
+                                              : <span className="text-xs text-gray-400">Never</span>}
+                                          </div>
+                                        </td>
                                         <td className="px-4 py-3">
                                           <div className="flex items-center justify-center gap-1.5 flex-wrap">
                                             {isEditing ? (
@@ -603,6 +782,11 @@ export default function Products() {
                                               </>
                                             ) : (
                                               <>
+                                                {/* Tally button per row */}
+                                                <button onClick={e => { e.stopPropagation(); setTallyModal(p); }}
+                                                  className="text-xs px-2.5 py-1 rounded-md font-medium" style={{ background:"#F3EFFE", color:"#7C3AED" }}>
+                                                  ✓ Tally
+                                                </button>
                                                 <div className="relative group">
                                                   <button className="text-xs px-2.5 py-1 rounded-md font-medium" style={{ background:"#EBF0FA", color:"#1B3A6B" }}>+ Stock ▾</button>
                                                   <div className="absolute right-0 top-full mt-1 bg-white border border-gray-100 rounded-xl shadow-xl z-10 hidden group-hover:block min-w-[140px] overflow-hidden">
@@ -638,6 +822,40 @@ export default function Products() {
         </div>
       )}
 
+      {/* TALLY CONFIRM MODAL */}
+      {tallyModal && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 px-4" onClick={() => setTallyModal(null)}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-xl flex items-center justify-center text-white text-lg" style={{ background:"#7C3AED" }}>✓</div>
+              <div>
+                <h3 className="font-black text-base" style={{ color:"#7C3AED" }}>Mark as Tallied</h3>
+                <p className="text-xs text-gray-500 mt-0.5">This will record the current date &amp; time</p>
+              </div>
+            </div>
+            <div className="bg-purple-50 rounded-xl p-4 mb-4">
+              <p className="text-sm font-semibold text-gray-800">{tallyModal.product_name}</p>
+              <p className="text-xs text-gray-500 font-mono mt-0.5">{tallyModal.product_id || "No ID"}</p>
+              <div className="flex gap-4 mt-3">
+                <div><p className="text-xs text-gray-400">Office</p><p className="font-black text-base" style={{ color:"#1B3A6B" }}>{officeStock(tallyModal.id)}</p></div>
+                <div><p className="text-xs text-gray-400">Warehouse</p><p className="font-black text-base" style={{ color:"#0D7A5F" }}>{warehouseStock(tallyModal.id)}</p></div>
+                <div><p className="text-xs text-gray-400">Total</p><p className="font-black text-base text-gray-800">{totalStock(tallyModal.id)}</p></div>
+              </div>
+              {tallyMap[tallyModal.id] && (
+                <p className="text-xs text-gray-400 mt-3">Previously tallied: <span className="font-semibold text-gray-600">{formatDateTime(tallyMap[tallyModal.id])}</span></p>
+              )}
+            </div>
+            <p className="text-xs text-gray-400 mb-4 text-center">Tally timestamp: <span className="font-semibold text-gray-600">{formatDateTime(new Date().toISOString())}</span></p>
+            <div className="flex gap-2">
+              <button onClick={() => setTallyModal(null)} className="flex-1 border border-gray-200 py-2.5 rounded-xl text-sm font-semibold text-gray-600 hover:bg-gray-50">Cancel</button>
+              <button onClick={() => handleTally(tallyModal)} disabled={tallyConfirming} className="flex-1 py-2.5 rounded-xl text-sm font-bold text-white disabled:opacity-50" style={{ background:"#7C3AED" }}>
+                {tallyConfirming ? "Saving…" : "Confirm Tally"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* LEDGER MODAL */}
       {selectedProduct && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 px-4" onClick={() => setSelectedProduct(null)}>
@@ -655,6 +873,10 @@ export default function Products() {
               <div><p className="text-xs text-gray-500 font-semibold">WAREHOUSE</p><p className="font-black text-xl" style={{ color:"#0D7A5F" }}>{warehouseStock(selectedProduct.id)}</p></div>
               <div className="border-l border-blue-200" />
               <div><p className="text-xs text-gray-500 font-semibold">TOTAL</p><p className="font-black text-xl text-gray-800">{totalStock(selectedProduct.id)}</p></div>
+              {tallyMap[selectedProduct.id] && (
+                <><div className="border-l border-blue-200" />
+                <div><p className="text-xs text-gray-500 font-semibold">LAST TALLIED</p><p className="font-semibold text-sm text-purple-700">{formatDateTime(tallyMap[selectedProduct.id])}</p></div></>
+              )}
             </div>
             <div className="overflow-y-auto flex-1">
               {ledgerLoading ? (
