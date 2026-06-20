@@ -145,7 +145,7 @@ function buildOrderedProductList(products) {
   return ordered;
 }
 
-// ── Big Prominent Product Picker (same as Transactions original) ──────────────
+// ── Product Picker ────────────────────────────────────────────────────────────
 
 function ProductPicker({ products, value, onChange }) {
   const [query, setQuery]             = useState("");
@@ -519,6 +519,14 @@ export default function Transactions() {
   const inwardQty    = transactions.filter(t => t.transaction_type === "inward").reduce((s, t) => s + (Number(t.quantity) || 0), 0);
   const outwardQty   = transactions.filter(t => t.transaction_type === "outward").reduce((s, t) => s + (Number(t.quantity) || 0), 0);
 
+  // Category pill counts (mirrors Products catCounts)
+  const locationCounts = {};
+  transactions.forEach(t => {
+    if (t.location_id) locationCounts[t.location_id] = (locationCounts[t.location_id] || 0) + 1;
+  });
+  const inwardTotal  = transactions.filter(t => t.transaction_type === "inward").length;
+  const outwardTotal = transactions.filter(t => t.transaction_type === "outward").length;
+
   return (
     <div style={{ background: "#F8F7F4", minHeight: "100vh" }} className="p-4 md:p-6 max-w-screen-xl mx-auto">
 
@@ -539,9 +547,9 @@ export default function Transactions() {
             <p className="text-sm text-gray-500">
               <span className="font-semibold text-gray-700">{totalCount.toLocaleString()}</span> total entries
               {" · "}
-              <span style={{ color: "#0D7A5F" }} className="font-semibold">{inwardCount} IN</span>
+              <span style={{ color: "#0D7A5F" }} className="font-semibold">{inwardTotal} IN</span>
               {" · "}
-              <span className="font-semibold text-red-500">{outwardCount} OUT</span>
+              <span className="font-semibold text-red-500">{outwardTotal} OUT</span>
               <span className="text-gray-400 text-xs ml-1">(this page)</span>
             </p>
             <div className="flex items-center gap-2 flex-wrap">
@@ -553,7 +561,6 @@ export default function Transactions() {
                 <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><line x1="5" y1="12" x2="19" y2="12"/></svg>
                 -{outwardQty.toLocaleString()} units out
               </span>
-              {/* Latest tally-style "last updated" pill */}
               {transactions.length > 0 && (
                 <span className="inline-flex items-center gap-1 bg-blue-50 text-blue-700 border border-blue-200 px-2.5 py-0.5 rounded-full text-xs font-semibold">
                   <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
@@ -712,12 +719,12 @@ export default function Transactions() {
         </div>
       )}
 
-      {/* ── FILTER PILLS — mirrors Products category pill strip exactly ── */}
+      {/* ── CATEGORY PILL STRIP — mirrors Products exactly ── */}
       <div className="flex flex-wrap gap-2 mb-4">
         {[
-          { key: "all",     label: "All Transactions", color: "#1B3A6B", light: "#EBF0FA" },
-          { key: "inward",  label: "▲ Inward",         color: "#0D7A5F", light: "#E6F5F1" },
-          { key: "outward", label: "▼ Outward",        color: "#DC2626", light: "#FEF2F2" },
+          { key: "all",     label: "All Transactions", count: transactions.length,  color: "#1B3A6B", light: "#EBF0FA" },
+          { key: "inward",  label: "▲ Inward",         count: inwardTotal,           color: "#0D7A5F", light: "#E6F5F1" },
+          { key: "outward", label: "▼ Outward",        count: outwardTotal,          color: "#DC2626", light: "#FEF2F2" },
         ].map(t => (
           <button
             key={t.key}
@@ -727,12 +734,23 @@ export default function Transactions() {
               color: filterType === t.key ? "#fff" : t.color,
               border: `1.5px solid ${t.color}`,
             }}
-            className="px-3 py-1 rounded-full text-xs font-bold transition-all"
+            className="flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold transition-all"
           >
             {t.label}
+            <span
+              className="inline-flex items-center justify-center rounded-full text-xs font-black min-w-[18px] h-[18px] px-1"
+              style={{
+                background: filterType === t.key ? "rgba(255,255,255,0.25)" : t.color,
+                color: filterType === t.key ? "#fff" : "#fff",
+              }}
+            >
+              {t.count}
+            </span>
           </button>
         ))}
-        <span className="mx-1 self-center text-gray-300">·</span>
+
+        {locations.length > 0 && <span className="mx-1 self-center text-gray-300">·</span>}
+
         {locations.map(l => (
           <button
             key={l.id}
@@ -742,9 +760,20 @@ export default function Transactions() {
               color: filterLocation === l.id ? "#fff" : "#1B3A6B",
               border: "1.5px solid #1B3A6B",
             }}
-            className="px-3 py-1 rounded-full text-xs font-bold transition-all"
+            className="flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold transition-all"
           >
             {l.name}
+            {locationCounts[l.id] > 0 && (
+              <span
+                className="inline-flex items-center justify-center rounded-full text-xs font-black min-w-[18px] h-[18px] px-1"
+                style={{
+                  background: filterLocation === l.id ? "rgba(255,255,255,0.25)" : "#1B3A6B",
+                  color: "#fff",
+                }}
+              >
+                {locationCounts[l.id]}
+              </span>
+            )}
           </button>
         ))}
       </div>
@@ -812,36 +841,49 @@ export default function Transactions() {
             const isOpen     = openDates[dateKey] !== false; // default open
             const dayInward  = items.filter(t => t.transaction_type === "inward").reduce((s, t) => s + (Number(t.quantity) || 0), 0);
             const dayOutward = items.filter(t => t.transaction_type === "outward").reduce((s, t) => s + (Number(t.quantity) || 0), 0);
+            const inCount    = items.filter(t => t.transaction_type === "inward").length;
+            const outCount   = items.filter(t => t.transaction_type === "outward").length;
 
             return (
-              <div key={dateKey} className="rounded-2xl overflow-hidden shadow-sm" style={{ border: "1.5px solid #1B3A6B22" }}>
+              <div key={dateKey} className="rounded-2xl overflow-hidden" style={{ border: "1.5px solid #1B3A6B22", boxShadow: "0 1px 4px #1B3A6B0A" }}>
 
-                {/* ── Date group header — mirrors Products category-level header ── */}
+                {/* ── Date group header — mirrors Products category-level colored header ── */}
                 <button
                   onClick={() => toggleDate(dateKey)}
-                  className="w-full flex items-center justify-between px-5 py-3 transition-colors hover:opacity-95"
+                  className="w-full flex items-center justify-between px-5 py-3.5 transition-colors hover:opacity-95"
                   style={{ background: "#EBF0FA" }}
                 >
-                  <div className="flex items-center gap-3">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#1B3A6B" strokeWidth="2.5">
-                      <rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>
-                    </svg>
-                    <span className="font-black text-sm" style={{ color: "#1B3A6B" }}>
+                  <div className="flex items-center gap-3 min-w-0">
+                    {/* Calendar icon — mirrors Products category icon */}
+                    <div
+                      className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0"
+                      style={{ background: "#1B3A6B" }}
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5">
+                        <rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>
+                      </svg>
+                    </div>
+                    <span className="font-black text-sm truncate" style={{ color: "#1B3A6B" }}>
                       {formatDateLabel(`${dateKey}T00:00:00`)}
                     </span>
-                    <span className="text-xs font-semibold text-gray-500">
+                    {/* Entry count pill — mirrors Products "X products" */}
+                    <span
+                      className="flex-shrink-0 text-xs font-bold px-2.5 py-0.5 rounded-full"
+                      style={{ background: "#1B3A6B", color: "#fff" }}
+                    >
                       {items.length} {items.length === 1 ? "entry" : "entries"}
                     </span>
                   </div>
-                  <div className="flex items-center gap-3">
+
+                  <div className="flex items-center gap-2 flex-shrink-0 ml-3">
                     {dayInward > 0 && (
-                      <span className="text-xs font-bold px-2.5 py-0.5 rounded-full" style={{ background: "#E6F5F1", color: "#0D7A5F" }}>
-                        +{dayInward.toLocaleString()} IN
+                      <span className="text-xs font-bold px-2.5 py-0.5 rounded-full" style={{ background: "#E6F5F1", color: "#0D7A5F", border: "1px solid #B5E0D9" }}>
+                        ▲ {inCount} · +{dayInward.toLocaleString()}
                       </span>
                     )}
                     {dayOutward > 0 && (
-                      <span className="text-xs font-bold px-2.5 py-0.5 rounded-full" style={{ background: "#FEF2F2", color: "#DC2626" }}>
-                        -{dayOutward.toLocaleString()} OUT
+                      <span className="text-xs font-bold px-2.5 py-0.5 rounded-full" style={{ background: "#FEF2F2", color: "#DC2626", border: "1px solid #FECACA" }}>
+                        ▼ {outCount} · -{dayOutward.toLocaleString()}
                       </span>
                     )}
                     <svg
@@ -853,80 +895,185 @@ export default function Transactions() {
                   </div>
                 </button>
 
-                {/* ── Rows table — mirrors Products grade-level rows ── */}
-                {isOpen && (
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-sm">
-                      <thead>
-                        <tr className="text-xs font-bold uppercase tracking-wide" style={{ background: "#F8F7F4", borderBottom: "1.5px solid #1B3A6B22" }}>
-                          <th className="px-4 py-2 text-left"  style={{ color: "#1B3A6B" }}>Time</th>
-                          <th className="px-4 py-2 text-left"  style={{ color: "#1B3A6B" }}>Product</th>
-                          <th className="px-4 py-2 text-center" style={{ color: "#1B3A6B" }}>Type</th>
-                          <th className="px-4 py-2 text-center" style={{ color: "#1B3A6B" }}>Qty</th>
-                          <th className="px-4 py-2 text-center" style={{ color: "#1B3A6B" }}>Location</th>
-                          <th className="px-4 py-2 text-left"  style={{ color: "#1B3A6B" }}>Party</th>
-                          <th className="px-4 py-2 text-left"  style={{ color: "#1B3A6B" }}>Notes</th>
-                          <th className="px-4 py-2 text-left"  style={{ color: "#1B3A6B" }}>Employee</th>
-                          <th className="px-4 py-2 text-center" style={{ color: "#1B3A6B" }}>Actions</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-gray-50 bg-white">
-                        {items.map(t => {
-                          const product  = products.find(p => p.id === t.product_id);
-                          const location = locations.find(l => l.id === t.location_id);
-                          const isIn     = t.transaction_type === "inward";
-                          const isEditing = editingId === t.id;
-                          return (
-                            <tr key={t.id} className={`transition hover:bg-blue-50/20 ${isEditing ? "bg-orange-50/40" : ""}`}>
-                              <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">
-                                {new Date(t.created_at).toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", hour12: true })}
-                              </td>
-                              <td className="px-4 py-3 font-semibold max-w-xs" style={{ color: "#1B3A6B" }}>
-                                <span className="line-clamp-2 leading-snug">
-                                  {product?.product_name || <span className="text-gray-300 italic font-normal">Unknown product</span>}
+                {/* ── Grade-level sub-header (location breakdown) — mirrors Products grade header ── */}
+                {isOpen && (() => {
+                  // Group by location within the day — mirrors Products grade-level grouping
+                  const byLoc = {};
+                  items.forEach(t => {
+                    const locName = locations.find(l => l.id === t.location_id)?.name || "Unknown";
+                    if (!byLoc[locName]) byLoc[locName] = [];
+                    byLoc[locName].push(t);
+                  });
+                  const locKeys = Object.keys(byLoc).sort();
+
+                  return (
+                    <div>
+                      {locKeys.map(locName => {
+                        const locItems = byLoc[locName];
+                        const locIn  = locItems.filter(t => t.transaction_type === "inward").reduce((s,t)=>s+(Number(t.quantity)||0),0);
+                        const locOut = locItems.filter(t => t.transaction_type === "outward").reduce((s,t)=>s+(Number(t.quantity)||0),0);
+                        return (
+                          <div key={locName}>
+                            {/* Location sub-header — mirrors Products grade-level header */}
+                            {locKeys.length > 1 && (
+                              <div
+                                className="px-5 py-1.5 flex items-center gap-3 text-xs font-black uppercase tracking-wider"
+                                style={{ background: "#F0F4FA", borderBottom: "1px solid #1B3A6B15", color: "#1B3A6B" }}
+                              >
+                                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+                                {locName}
+                                <span className="text-gray-400 font-semibold normal-case tracking-normal">
+                                  {locItems.length} {locItems.length === 1 ? "entry" : "entries"}
+                                  {locIn > 0 && <span style={{ color: "#0D7A5F" }}> · +{locIn.toLocaleString()} in</span>}
+                                  {locOut > 0 && <span style={{ color: "#DC2626" }}> · -{locOut.toLocaleString()} out</span>}
                                 </span>
-                              </td>
-                              <td className="px-4 py-3 text-center">
-                                <span className="inline-block px-2.5 py-0.5 rounded-full text-xs font-bold" style={{
-                                  background: isIn ? "#E6F5F1" : "#FEF2F2",
-                                  color: isIn ? "#0D7A5F" : "#DC2626",
-                                }}>
-                                  {isIn ? "▲ IN" : "▼ OUT"}
-                                </span>
-                              </td>
-                              <td className="px-4 py-3 text-center">
-                                <span className="font-black tabular-nums text-gray-800">{t.quantity}</span>
-                              </td>
-                              <td className="px-4 py-3 text-center">
-                                <span className="inline-block px-2.5 py-0.5 rounded-full text-xs font-bold tabular-nums" style={{ background: "#EBF0FA", color: "#1B3A6B" }}>
-                                  {location?.name || "—"}
-                                </span>
-                              </td>
-                              <td className="px-4 py-3 text-xs text-gray-600 max-w-[140px] truncate">{t.party || "—"}</td>
-                              <td className="px-4 py-3 text-xs text-gray-500 max-w-[160px] truncate">{t.notes || "—"}</td>
-                              <td className="px-4 py-3 text-xs text-gray-400">{t.created_by_email || "System"}</td>
-                              <td className="px-4 py-3">
-                                <div className="flex items-center justify-center gap-1.5 flex-wrap">
-                                  <button
-                                    onClick={() => handleEditClick(t)}
-                                    className="text-xs px-2.5 py-1 rounded-md font-medium transition"
-                                    style={{ background: "#EBF0FA", color: "#1B3A6B" }}
-                                  >Edit</button>
-                                  {isAdmin && (
-                                    <button
-                                      onClick={() => setDeleteConfirm(t)}
-                                      className="text-xs px-2.5 py-1 rounded-md font-medium bg-red-50 text-red-600 hover:bg-red-100 transition"
-                                    >Delete</button>
-                                  )}
-                                </div>
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
+                              </div>
+                            )}
+
+                            {/* ── Rows table — mirrors Products grade-level product rows ── */}
+                            <div className="overflow-x-auto">
+                              <table className="w-full text-sm">
+                                <thead>
+                                  <tr className="text-xs font-bold uppercase tracking-wide" style={{ background: "#F8F7F4", borderBottom: "1.5px solid #1B3A6B18" }}>
+                                    <th className="px-4 py-2.5 text-left"  style={{ color: "#1B3A6B" }}>Time</th>
+                                    <th className="px-4 py-2.5 text-left"  style={{ color: "#1B3A6B" }}>Product</th>
+                                    <th className="px-4 py-2.5 text-center" style={{ color: "#1B3A6B" }}>Type</th>
+                                    <th className="px-4 py-2.5 text-center" style={{ color: "#1B3A6B" }}>Qty</th>
+                                    {locKeys.length === 1 && (
+                                      <th className="px-4 py-2.5 text-center" style={{ color: "#1B3A6B" }}>Location</th>
+                                    )}
+                                    <th className="px-4 py-2.5 text-left"  style={{ color: "#1B3A6B" }}>Party</th>
+                                    <th className="px-4 py-2.5 text-left"  style={{ color: "#1B3A6B" }}>Notes</th>
+                                    <th className="px-4 py-2.5 text-left"  style={{ color: "#1B3A6B" }}>Employee</th>
+                                    <th className="px-4 py-2.5 text-center" style={{ color: "#1B3A6B" }}>Actions</th>
+                                  </tr>
+                                </thead>
+                                <tbody className="divide-y bg-white" style={{ divideColor: "#F3F4F6" }}>
+                                  {locItems.map((t, rowIdx) => {
+                                    const product  = products.find(p => p.id === t.product_id);
+                                    const location = locations.find(l => l.id === t.location_id);
+                                    const isIn     = t.transaction_type === "inward";
+                                    const isEditing = editingId === t.id;
+                                    return (
+                                      <tr
+                                        key={t.id}
+                                        className="transition"
+                                        style={{
+                                          background: isEditing ? "#FEF0E7" : rowIdx % 2 === 0 ? "#ffffff" : "#FAFBFD",
+                                        }}
+                                        onMouseEnter={e => { if (!isEditing) e.currentTarget.style.background = "#EBF0FA60"; }}
+                                        onMouseLeave={e => { e.currentTarget.style.background = isEditing ? "#FEF0E7" : rowIdx % 2 === 0 ? "#ffffff" : "#FAFBFD"; }}
+                                      >
+                                        {/* Time */}
+                                        <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap font-medium">
+                                          {new Date(t.created_at).toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", hour12: true })}
+                                        </td>
+
+                                        {/* Product — styled like Products page product_name cell */}
+                                        <td className="px-4 py-3 max-w-[260px]">
+                                          <span className="font-semibold leading-snug line-clamp-2 text-sm" style={{ color: "#1B3A6B" }}>
+                                            {product?.product_name || <span className="text-gray-300 italic font-normal text-xs">Unknown product</span>}
+                                          </span>
+                                          {product?.product_id && (
+                                            <span className="text-xs text-gray-400 font-mono block mt-0.5">{product.product_id}</span>
+                                          )}
+                                        </td>
+
+                                        {/* Type badge — mirrors Products low-stock badge style */}
+                                        <td className="px-4 py-3 text-center">
+                                          <span
+                                            className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-black"
+                                            style={{
+                                              background: isIn ? "#E6F5F1" : "#FEF2F2",
+                                              color: isIn ? "#0D7A5F" : "#DC2626",
+                                              border: `1px solid ${isIn ? "#B5E0D9" : "#FECACA"}`,
+                                            }}
+                                          >
+                                            {isIn ? "▲ IN" : "▼ OUT"}
+                                          </span>
+                                        </td>
+
+                                        {/* Qty — mirrors Products stock cell */}
+                                        <td className="px-4 py-3 text-center">
+                                          <span
+                                            className="font-black tabular-nums text-base"
+                                            style={{ color: isIn ? "#0D7A5F" : "#DC2626" }}
+                                          >
+                                            {isIn ? "+" : "-"}{Number(t.quantity).toLocaleString()}
+                                          </span>
+                                        </td>
+
+                                        {/* Location (only when single location group) */}
+                                        {locKeys.length === 1 && (
+                                          <td className="px-4 py-3 text-center">
+                                            <span
+                                              className="inline-block px-2.5 py-0.5 rounded-full text-xs font-bold tabular-nums"
+                                              style={{ background: "#EBF0FA", color: "#1B3A6B" }}
+                                            >
+                                              {location?.name || "—"}
+                                            </span>
+                                          </td>
+                                        )}
+
+                                        {/* Party */}
+                                        <td className="px-4 py-3 text-xs text-gray-600 max-w-[140px]">
+                                          {t.party
+                                            ? <span className="font-semibold truncate block">{t.party}</span>
+                                            : <span className="text-gray-300">—</span>
+                                          }
+                                        </td>
+
+                                        {/* Notes */}
+                                        <td className="px-4 py-3 text-xs text-gray-500 max-w-[180px]">
+                                          {t.notes
+                                            ? <span className="truncate block" title={t.notes}>{t.notes}</span>
+                                            : <span className="text-gray-300">—</span>
+                                          }
+                                        </td>
+
+                                        {/* Employee */}
+                                        <td className="px-4 py-3 text-xs text-gray-400">
+                                          {t.created_by_email
+                                            ? t.created_by_email.split("@")[0]
+                                            : <span className="text-gray-300">System</span>
+                                          }
+                                        </td>
+
+                                        {/* Actions — mirrors Products edit/delete row actions */}
+                                        <td className="px-4 py-3">
+                                          <div className="flex items-center justify-center gap-1.5">
+                                            <button
+                                              onClick={() => handleEditClick(t)}
+                                              className="text-xs px-2.5 py-1 rounded-md font-bold transition hover:opacity-80"
+                                              style={{ background: "#EBF0FA", color: "#1B3A6B" }}
+                                              title="Edit transaction"
+                                            >
+                                              Edit
+                                            </button>
+                                            {isAdmin && (
+                                              <button
+                                                onClick={() => setDeleteConfirm(t)}
+                                                className="text-xs px-2.5 py-1 rounded-md font-bold transition hover:opacity-80"
+                                                style={{ background: "#FEF2F2", color: "#DC2626" }}
+                                                title="Delete transaction"
+                                              >
+                                                Del
+                                              </button>
+                                            )}
+                                          </div>
+                                        </td>
+                                      </tr>
+                                    );
+                                  })}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })()}
               </div>
             );
           })}
@@ -935,7 +1082,7 @@ export default function Transactions() {
 
       {/* ── PAGINATION — same style as Products ── */}
       {!loading && totalPages > 1 && (
-        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 px-5 py-3.5 flex justify-between items-center mt-5">
+        <div className="bg-white rounded-2xl border px-5 py-3.5 flex justify-between items-center mt-5" style={{ borderColor: "#1B3A6B18", boxShadow: "0 1px 4px #1B3A6B0A" }}>
           <button
             onClick={() => setPage(page - 1)}
             disabled={page === 0}
@@ -966,15 +1113,39 @@ export default function Transactions() {
       {deleteConfirm && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 px-4" onClick={() => setDeleteConfirm(null)}>
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6" onClick={e => e.stopPropagation()}>
-            <h3 className="font-black text-lg text-red-600 mb-2">Delete Transaction?</h3>
-            <p className="text-sm text-gray-600 mb-5">
-              This will permanently delete the transaction for{" "}
-              <span className="font-semibold">{products.find(p => p.id === deleteConfirm.product_id)?.product_name || "this product"}</span>.
-              This cannot be undone.
+            <div className="flex items-center gap-3 mb-3">
+              <div className="w-10 h-10 rounded-xl bg-red-100 flex items-center justify-center">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#DC2626" strokeWidth="2.5"><path d="M3 6h18M19 6l-1 14H6L5 6M10 11v6M14 11v6M9 6V4h6v2"/></svg>
+              </div>
+              <div>
+                <h3 className="font-black text-base text-red-600">Delete Transaction?</h3>
+                <p className="text-xs text-gray-400">This cannot be undone</p>
+              </div>
+            </div>
+            <p className="text-sm text-gray-600 mb-5 bg-gray-50 rounded-xl px-4 py-3">
+              Permanently deleting the{" "}
+              <span className="font-black" style={{ color: deleteConfirm.transaction_type === "inward" ? "#0D7A5F" : "#DC2626" }}>
+                {deleteConfirm.transaction_type.toUpperCase()}
+              </span>{" "}
+              transaction of{" "}
+              <span className="font-semibold text-gray-800">{Number(deleteConfirm.quantity).toLocaleString()} units</span>{" "}
+              for{" "}
+              <span className="font-semibold text-gray-800">{products.find(p => p.id === deleteConfirm.product_id)?.product_name || "this product"}</span>.
             </p>
             <div className="flex gap-2">
-              <button onClick={() => setDeleteConfirm(null)} className="flex-1 border border-gray-200 py-2.5 rounded-xl text-sm font-semibold text-gray-600 hover:bg-gray-50">Cancel</button>
-              <button onClick={() => handleDelete(deleteConfirm.id)} className="flex-1 bg-red-600 hover:bg-red-700 py-2.5 rounded-xl text-sm font-bold text-white">Delete</button>
+              <button
+                onClick={() => setDeleteConfirm(null)}
+                className="flex-1 border border-gray-200 py-2.5 rounded-xl text-sm font-semibold text-gray-600 hover:bg-gray-50 transition"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => handleDelete(deleteConfirm.id)}
+                className="flex-1 py-2.5 rounded-xl text-sm font-black text-white transition hover:opacity-90"
+                style={{ background: "#DC2626" }}
+              >
+                Delete Entry
+              </button>
             </div>
           </div>
         </div>
