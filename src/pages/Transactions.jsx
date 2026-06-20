@@ -137,7 +137,7 @@ function buildOrderedProductList(products) {
         .sort((a, b) => {
           const sA = extractSizeKey(a.product_name), sB = extractSizeKey(b.product_name);
           if (sA !== sB) return sA - sB;
-          return a.product_id.localeCompare(b.product_id);
+          return (a.product_id || "").localeCompare(b.product_id || "");
         })
         .forEach(p => ordered.push({ ...p, _material: mat, _category: cat }));
     });
@@ -145,11 +145,11 @@ function buildOrderedProductList(products) {
   return ordered;
 }
 
-// ── Big Prominent Product Picker ──────────────────────────────────────────────
+// ── Big Prominent Product Picker (same as Transactions original) ──────────────
 
 function ProductPicker({ products, value, onChange }) {
-  const [query, setQuery]           = useState("");
-  const [open, setOpen]             = useState(false);
+  const [query, setQuery]             = useState("");
+  const [open, setOpen]               = useState(false);
   const [highlighted, setHighlighted] = useState(0);
   const inputRef   = useRef(null);
   const listRef    = useRef(null);
@@ -314,28 +314,28 @@ function formatDateLabel(iso) {
 
 function isoToLocalDate(iso) {
   if (!iso) return "";
-  return new Date(iso).toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" }); // YYYY-MM-DD
+  return new Date(iso).toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
 }
 
 // ── Main Component ────────────────────────────────────────────────────────────
 
 export default function Transactions() {
-  const [products, setProducts]         = useState([]);
-  const [locations, setLocations]       = useState([]);
-  const [transactions, setTransactions] = useState([]);
-  const [search, setSearch]             = useState("");
-  const [filterType, setFilterType]     = useState("all");
+  const [products, setProducts]             = useState([]);
+  const [locations, setLocations]           = useState([]);
+  const [transactions, setTransactions]     = useState([]);
+  const [search, setSearch]                 = useState("");
+  const [filterType, setFilterType]         = useState("all");
   const [filterLocation, setFilterLocation] = useState("all");
   const [filterDateFrom, setFilterDateFrom] = useState("");
   const [filterDateTo, setFilterDateTo]     = useState("");
-  const [loading, setLoading]           = useState(true);
-  const [editingId, setEditingId]       = useState(null);
-  const [isAdmin, setIsAdmin]           = useState(false);
-  const [showForm, setShowForm]         = useState(false);
-  const [deleteConfirm, setDeleteConfirm] = useState(null);
+  const [loading, setLoading]               = useState(true);
+  const [editingId, setEditingId]           = useState(null);
+  const [isAdmin, setIsAdmin]               = useState(false);
+  const [showForm, setShowForm]             = useState(false);
+  const [deleteConfirm, setDeleteConfirm]   = useState(null);
 
   // Collapsible date groups — mirrors Products collapsible categories
-  const [openDates, setOpenDates]       = useState({});
+  const [openDates, setOpenDates] = useState({});
 
   const [page, setPage]             = useState(0);
   const [totalCount, setTotalCount] = useState(0);
@@ -385,7 +385,7 @@ export default function Transactions() {
       alert("Please fill required fields: Product, Location, Quantity"); return;
     }
     try {
-      const activeEmployee = localStorage.getItem("userEmail") || "Unknown User";
+      const { data: { user } } = await supabase.auth.getUser();
       const payload = {
         product_id:       form.product_id,
         location_id:      form.location_id,
@@ -393,7 +393,7 @@ export default function Transactions() {
         quantity:         Number(form.quantity),
         party:            form.party,
         notes:            form.notes || null,
-        created_by_email: activeEmployee,
+        created_by_email: user?.email || "Unknown",
       };
       if (editingId) await supabase.from("transactions").update(payload).eq("id", editingId);
       else           await supabase.from("transactions").insert([payload]);
@@ -503,27 +503,26 @@ export default function Transactions() {
     return matchSearch && matchType && matchLoc && matchFrom && matchTo;
   });
 
-  // Group by local date label (matches Products' category grouping pattern)
   const groupedByDate = {};
   filtered.forEach(t => {
-    const label = isoToLocalDate(t.created_at); // YYYY-MM-DD key
+    const label = isoToLocalDate(t.created_at);
     if (!groupedByDate[label]) groupedByDate[label] = [];
     groupedByDate[label].push(t);
   });
-  const dateKeys = Object.keys(groupedByDate).sort((a, b) => b.localeCompare(a)); // newest first
+  const dateKeys = Object.keys(groupedByDate).sort((a, b) => b.localeCompare(a));
 
   const toggleDate = (key) => setOpenDates(prev => ({ ...prev, [key]: !prev[key] }));
 
-  const totalPages    = Math.ceil(totalCount / PAGE_SIZE);
-  const inwardCount   = transactions.filter(t => t.transaction_type === "inward").length;
-  const outwardCount  = transactions.filter(t => t.transaction_type === "outward").length;
-  const inwardQty     = transactions.filter(t => t.transaction_type === "inward").reduce((s, t) => s + (Number(t.quantity) || 0), 0);
-  const outwardQty    = transactions.filter(t => t.transaction_type === "outward").reduce((s, t) => s + (Number(t.quantity) || 0), 0);
+  const totalPages   = Math.ceil(totalCount / PAGE_SIZE);
+  const inwardCount  = transactions.filter(t => t.transaction_type === "inward").length;
+  const outwardCount = transactions.filter(t => t.transaction_type === "outward").length;
+  const inwardQty    = transactions.filter(t => t.transaction_type === "inward").reduce((s, t) => s + (Number(t.quantity) || 0), 0);
+  const outwardQty   = transactions.filter(t => t.transaction_type === "outward").reduce((s, t) => s + (Number(t.quantity) || 0), 0);
 
   return (
     <div style={{ background: "#F8F7F4", minHeight: "100vh" }} className="p-4 md:p-6 max-w-screen-xl mx-auto">
 
-      {/* ── HEADER — mirrors Products header exactly ── */}
+      {/* ── HEADER — exact same structure as Products ── */}
       <div className="flex flex-wrap items-start justify-between gap-3 mb-6">
         <div>
           <div className="flex items-center gap-3 mb-1">
@@ -534,8 +533,9 @@ export default function Transactions() {
             </div>
             <h1 style={{ color: "#1B3A6B" }} className="text-2xl font-black tracking-tight">Transactions Log</h1>
           </div>
-          {/* Stats strip — mirrors Products "X products · Y low stock" */}
-          <div className="ml-12 flex flex-col gap-0.5">
+
+          {/* Stats strip — mirrors Products "X products · Y low stock" pill area */}
+          <div className="ml-12 flex flex-col gap-1">
             <p className="text-sm text-gray-500">
               <span className="font-semibold text-gray-700">{totalCount.toLocaleString()}</span> total entries
               {" · "}
@@ -544,32 +544,44 @@ export default function Transactions() {
               <span className="font-semibold text-red-500">{outwardCount} OUT</span>
               <span className="text-gray-400 text-xs ml-1">(this page)</span>
             </p>
-            <p className="text-xs flex items-center gap-1.5">
-              <span className="inline-flex items-center gap-1 bg-green-50 text-green-700 border border-green-200 px-2.5 py-0.5 rounded-full font-semibold">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="inline-flex items-center gap-1 bg-green-50 text-green-700 border border-green-200 px-2.5 py-0.5 rounded-full text-xs font-semibold">
                 <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>
                 +{inwardQty.toLocaleString()} units in
               </span>
-              <span className="inline-flex items-center gap-1 bg-red-50 text-red-600 border border-red-200 px-2.5 py-0.5 rounded-full font-semibold">
+              <span className="inline-flex items-center gap-1 bg-red-50 text-red-600 border border-red-200 px-2.5 py-0.5 rounded-full text-xs font-semibold">
                 <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><line x1="5" y1="12" x2="19" y2="12"/></svg>
                 -{outwardQty.toLocaleString()} units out
               </span>
-            </p>
+              {/* Latest tally-style "last updated" pill */}
+              {transactions.length > 0 && (
+                <span className="inline-flex items-center gap-1 bg-blue-50 text-blue-700 border border-blue-200 px-2.5 py-0.5 rounded-full text-xs font-semibold">
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                  Last: {new Date(transactions[0]?.created_at).toLocaleDateString("en-IN", { day: "2-digit", month: "short", timeZone: "Asia/Kolkata" })}
+                </span>
+              )}
+            </div>
           </div>
         </div>
 
         {/* Action buttons — same order / style as Products */}
         <div className="flex gap-2 flex-wrap">
-          {/* Excel */}
-          <button onClick={exportToExcel} style={{ background: "#0D7A5F" }} className="flex items-center gap-2 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:opacity-90 transition shadow-sm">
+          <button
+            onClick={exportToExcel}
+            style={{ background: "#0D7A5F" }}
+            className="flex items-center gap-2 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:opacity-90 transition shadow-sm"
+          >
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
             Excel
           </button>
-          {/* PDF */}
-          <button onClick={exportToPDF} style={{ background: "#DC2626" }} className="flex items-center gap-2 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:opacity-90 transition shadow-sm">
+          <button
+            onClick={exportToPDF}
+            style={{ background: "#DC2626" }}
+            className="flex items-center gap-2 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:opacity-90 transition shadow-sm"
+          >
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
             PDF
           </button>
-          {/* New Transaction — mirrors Products "+ Add Product" */}
           <button
             onClick={() => { setShowForm(f => !f); if (editingId) cancelEdit(); }}
             style={{ background: showForm ? "#6B7280" : "#E8630A" }}
@@ -580,7 +592,7 @@ export default function Transactions() {
         </div>
       </div>
 
-      {/* ── TRANSACTION FORM — exact same panel style as Products add form ── */}
+      {/* ── TRANSACTION FORM — same panel style as Products add/edit form ── */}
       {(showForm || editingId) && (
         <div
           className="bg-white shadow rounded-xl p-5 mb-5"
@@ -606,14 +618,12 @@ export default function Transactions() {
           </div>
 
           <div className="space-y-4">
-            {/* Product Picker */}
             <ProductPicker
               products={products}
               value={form.product_id}
               onChange={id => setForm({ ...form, product_id: id })}
             />
 
-            {/* Location · Type · Qty · Party */}
             <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
               <div>
                 <label className="block text-xs font-bold uppercase tracking-widest mb-1.5 text-gray-500">📍 Location</label>
@@ -674,7 +684,6 @@ export default function Transactions() {
               </div>
             </div>
 
-            {/* Notes row */}
             <div>
               <label className="block text-xs font-bold uppercase tracking-widest mb-1.5 text-gray-500">📝 Notes</label>
               <input
@@ -686,7 +695,6 @@ export default function Transactions() {
               />
             </div>
 
-            {/* Save / Cancel */}
             <div className="flex gap-2 pt-1">
               <button
                 onClick={handleSave}
@@ -741,9 +749,8 @@ export default function Transactions() {
         ))}
       </div>
 
-      {/* ── SEARCH + DATE RANGE row ── */}
+      {/* ── SEARCH + DATE RANGE — same row as Products search bar ── */}
       <div className="flex flex-wrap gap-3 mb-5">
-        {/* Search */}
         <div className="relative flex-1 min-w-[200px]">
           <svg className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
           <input
@@ -756,7 +763,6 @@ export default function Transactions() {
             <button onClick={() => setSearch("")} className="absolute right-3.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 text-xl leading-none">×</button>
           )}
         </div>
-        {/* Date From */}
         <div className="flex items-center gap-2 bg-white border border-gray-200 rounded-xl px-3 shadow-sm">
           <label className="text-xs font-bold uppercase tracking-widest text-gray-400 whitespace-nowrap">From</label>
           <input
@@ -766,7 +772,6 @@ export default function Transactions() {
             className="py-2.5 text-sm text-gray-700 font-semibold focus:outline-none bg-transparent"
           />
         </div>
-        {/* Date To */}
         <div className="flex items-center gap-2 bg-white border border-gray-200 rounded-xl px-3 shadow-sm">
           <label className="text-xs font-bold uppercase tracking-widest text-gray-400 whitespace-nowrap">To</label>
           <input
@@ -810,7 +815,8 @@ export default function Transactions() {
 
             return (
               <div key={dateKey} className="rounded-2xl overflow-hidden shadow-sm" style={{ border: "1.5px solid #1B3A6B22" }}>
-                {/* Date group header — mirrors Products category header */}
+
+                {/* ── Date group header — mirrors Products category-level header ── */}
                 <button
                   onClick={() => toggleDate(dateKey)}
                   className="w-full flex items-center justify-between px-5 py-3 transition-colors hover:opacity-95"
@@ -847,20 +853,20 @@ export default function Transactions() {
                   </div>
                 </button>
 
-                {/* Rows */}
+                {/* ── Rows table — mirrors Products grade-level rows ── */}
                 {isOpen && (
                   <div className="overflow-x-auto">
                     <table className="w-full text-sm">
                       <thead>
                         <tr className="text-xs font-bold uppercase tracking-wide" style={{ background: "#F8F7F4", borderBottom: "1.5px solid #1B3A6B22" }}>
-                          <th className="px-4 py-2 text-left" style={{ color: "#1B3A6B" }}>Time</th>
-                          <th className="px-4 py-2 text-left" style={{ color: "#1B3A6B" }}>Product</th>
+                          <th className="px-4 py-2 text-left"  style={{ color: "#1B3A6B" }}>Time</th>
+                          <th className="px-4 py-2 text-left"  style={{ color: "#1B3A6B" }}>Product</th>
                           <th className="px-4 py-2 text-center" style={{ color: "#1B3A6B" }}>Type</th>
                           <th className="px-4 py-2 text-center" style={{ color: "#1B3A6B" }}>Qty</th>
                           <th className="px-4 py-2 text-center" style={{ color: "#1B3A6B" }}>Location</th>
-                          <th className="px-4 py-2 text-left" style={{ color: "#1B3A6B" }}>Party</th>
-                          <th className="px-4 py-2 text-left" style={{ color: "#1B3A6B" }}>Notes</th>
-                          <th className="px-4 py-2 text-left" style={{ color: "#1B3A6B" }}>Employee</th>
+                          <th className="px-4 py-2 text-left"  style={{ color: "#1B3A6B" }}>Party</th>
+                          <th className="px-4 py-2 text-left"  style={{ color: "#1B3A6B" }}>Notes</th>
+                          <th className="px-4 py-2 text-left"  style={{ color: "#1B3A6B" }}>Employee</th>
                           <th className="px-4 py-2 text-center" style={{ color: "#1B3A6B" }}>Actions</th>
                         </tr>
                       </thead>
@@ -956,7 +962,7 @@ export default function Transactions() {
         </div>
       )}
 
-      {/* ── DELETE CONFIRM MODAL ── */}
+      {/* ── DELETE CONFIRM MODAL — same as Products ── */}
       {deleteConfirm && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 px-4" onClick={() => setDeleteConfirm(null)}>
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6" onClick={e => e.stopPropagation()}>
