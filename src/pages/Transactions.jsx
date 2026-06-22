@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useCallback } from "react";
 import { supabase } from "../supabase";
 import * as XLSX from "xlsx";
 import jsPDF from "jspdf";
@@ -317,6 +317,23 @@ function isoToLocalDate(iso) {
   return new Date(iso).toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
 }
 
+// Convert a local YYYY-MM-DD to an ISO UTC range for Supabase filtering
+function localDateToUTCRange(dateStr, isEnd = false) {
+  if (!dateStr) return null;
+  // Interpret the date string as IST (UTC+5:30)
+  const [y, m, d] = dateStr.split("-").map(Number);
+  const offsetMs = 5.5 * 60 * 60 * 1000; // IST offset
+  if (!isEnd) {
+    // Start of day IST → UTC
+    const startIST = new Date(Date.UTC(y, m - 1, d, 0, 0, 0, 0));
+    return new Date(startIST.getTime() - offsetMs).toISOString();
+  } else {
+    // End of day IST → UTC
+    const endIST = new Date(Date.UTC(y, m - 1, d, 23, 59, 59, 999));
+    return new Date(endIST.getTime() - offsetMs).toISOString();
+  }
+}
+
 // ── TYPE FILTER CONFIG (mirrors category pills in Products) ───────────────────
 
 const TYPE_FILTERS = [
@@ -349,13 +366,22 @@ export default function Transactions() {
   const [totalCount, setTotalCount] = useState(0);
   const PAGE_SIZE = 50;
 
+  // Separate counts for type-pill badges (unfiltered by type/location/date)
+  const [allTypeCounts, setAllTypeCounts] = useState({ all: 0, inward: 0, outward: 0 });
+
   const [form, setForm] = useState({
     product_id: "", location_id: "", transaction_type: "inward",
     quantity: "", party: "", notes: "",
   });
 
-  useEffect(() => { checkUserRole(); fetchDropdowns(); }, []);
-  useEffect(() => { fetchTransactions(); }, [page]);
+  useEffect(() => { checkUserRole(); fetchDropdowns(); fetchTypeCounts(); }, []);
+
+  // Re-fetch whenever any filter or page changes
+  useEffect(() => { fetchTransactions(); }, [page, search, filterType, filterLocation, filterDateFrom, filterDateTo]);
+
+  // When filters change (not page), always reset to page 0.
+  // The page reset itself triggers the fetchTransactions above.
+  useEffect(() => { setPage(0); }, [search, filterType, filterLocation, filterDateFrom, filterDateTo]);
 
   const checkUserRole = async () => {
     const { data: { user } } = await supabase.auth.getUser();
@@ -369,24 +395,68 @@ export default function Transactions() {
     setLocations(loc || []);
   }
 
-  async function fetchTransactions() {
+  // Fetch total inward/outward counts for the type pills (no filters applied)
+  async function fetchTypeCounts() {
+    const [{ count: total }, { count: inward }, { count: outward }] = await Promise.all([
+      supabase.from("transactions").select("id", { count: "exact", head: true }),
+      supabase.from("transactions").select("id", { count: "exact", head: true }).eq("transaction_type", "inward"),
+      supabase.from("transactions").select("id", { count: "exact", head: true }).eq("transaction_type", "outward"),
+    ]);
+    setAllTypeCounts({
+      all:     total   || 0,
+      inward:  inward  || 0,
+      outward: outward || 0,
+    });
+  }
+
+  // ── Server-side filtered + paginated fetch ────────────────────────────────
+  const fetchTransactions = useCallback(async () => {
     setLoading(true);
     try {
-      const from = page * PAGE_SIZE, to = from + PAGE_SIZE - 1;
-      const { data: trans, count, error } = await supabase
+      const from = page * PAGE_SIZE;
+      const to   = from + PAGE_SIZE - 1;
+
+      let query = supabase
         .from("transactions")
         .select("*", { count: "exact" })
         .order("created_at", { ascending: false })
         .range(from, to);
+
+      // Server-side type filter
+      if (filterType !== "all") {
+        query = query.eq("transaction_type", filterType);
+      }
+
+      // Server-side location filter
+      if (filterLocation !== "all") {
+        query = query.eq("location_id", filterLocation);
+      }
+
+      // Server-side date range filter (convert IST → UTC)
+      const utcFrom = localDateToUTCRange(filterDateFrom, false);
+      const utcTo   = localDateToUTCRange(filterDateTo, true);
+      if (utcFrom) query = query.gte("created_at", utcFrom);
+      if (utcTo)   query = query.lte("created_at", utcTo);
+
+      // Server-side party/notes text search (Postgres ilike)
+      // Product name search is still client-side below (requires join)
+      if (search.trim()) {
+        query = query.or(
+          `party.ilike.%${search.trim()}%,notes.ilike.%${search.trim()}%`
+        );
+      }
+
+      const { data, count, error } = await query;
       if (error) throw error;
-      setTransactions(trans || []);
+
+      setTransactions(data || []);
       if (count !== null) setTotalCount(count);
     } catch (err) {
       console.error("Failed fetching transactions", err);
     } finally {
       setLoading(false);
     }
-  }
+  }, [page, search, filterType, filterLocation, filterDateFrom, filterDateTo]);
 
   const handleSave = async () => {
     if (!form.product_id || !form.location_id || !form.quantity) {
@@ -407,6 +477,7 @@ export default function Transactions() {
       else           await supabase.from("transactions").insert([payload]);
       setForm({ product_id: "", location_id: "", transaction_type: "inward", quantity: "", party: "", notes: "" });
       setEditingId(null); setShowForm(false); setPage(0);
+      fetchTypeCounts();
       fetchTransactions();
     } catch { alert("Failed to save transaction."); }
   };
@@ -432,6 +503,7 @@ export default function Transactions() {
   const handleDelete = async id => {
     await supabase.from("transactions").delete().eq("id", id);
     setDeleteConfirm(null);
+    fetchTypeCounts();
     fetchTransactions();
   };
 
@@ -497,29 +569,23 @@ export default function Transactions() {
     } catch (e) { alert("PDF export failed: " + e.message); }
   };
 
-  // ── Filtering ─────────────────────────────────────────────────────────────
-
-  const filtered = transactions.filter(t => {
-    const product = products.find(p => p.id === t.product_id);
-    const productName = product?.product_name || "";
-    const productId   = product?.product_id   || "";
-    const locationName = locations.find(l => l.id === t.location_id)?.name || "";
-
-    const matchSearch = search.trim() === "" ||
-      productName.toLowerCase().includes(search.toLowerCase()) ||
-      productId.toLowerCase().includes(search.toLowerCase()) ||
-      (t.party || "").toLowerCase().includes(search.toLowerCase()) ||
-      (t.notes || "").toLowerCase().includes(search.toLowerCase());
-
-    const matchType = filterType === "all" || t.transaction_type === filterType;
-    const matchLoc  = filterLocation === "all" || t.location_id === filterLocation;
-
-    const txDate = isoToLocalDate(t.created_at);
-    const matchFrom = !filterDateFrom || txDate >= filterDateFrom;
-    const matchTo   = !filterDateTo   || txDate <= filterDateTo;
-
-    return matchSearch && matchType && matchLoc && matchFrom && matchTo;
-  });
+  // ── Client-side product-name search overlay ───────────────────────────────
+  // Party/notes are already filtered server-side. We additionally filter
+  // locally for product_name / product_id matches so the search feels complete.
+  const filtered = search.trim()
+    ? transactions.filter(t => {
+        const product = products.find(p => p.id === t.product_id);
+        const productName = product?.product_name || "";
+        const productId   = product?.product_id   || "";
+        const searchLower = search.toLowerCase();
+        return (
+          productName.toLowerCase().includes(searchLower) ||
+          productId.toLowerCase().includes(searchLower) ||
+          (t.party || "").toLowerCase().includes(searchLower) ||
+          (t.notes || "").toLowerCase().includes(searchLower)
+        );
+      })
+    : transactions;
 
   // ── Group by date ─────────────────────────────────────────────────────────
 
@@ -532,17 +598,6 @@ export default function Transactions() {
   const sortedDates = Object.keys(dateGroups).sort((a, b) => b.localeCompare(a));
 
   const toggleDate = key => setOpenDates(prev => ({ ...prev, [key]: !prev[key] }));
-
-  // ── Counts ────────────────────────────────────────────────────────────────
-
-  const inwardCount  = transactions.filter(t => t.transaction_type === "inward").length;
-  const outwardCount = transactions.filter(t => t.transaction_type === "outward").length;
-
-  const typeCounts = {
-    all:     transactions.length,
-    inward:  inwardCount,
-    outward: outwardCount,
-  };
 
   // ── Pagination ────────────────────────────────────────────────────────────
 
@@ -566,11 +621,11 @@ export default function Transactions() {
           </div>
           <div className="ml-12 flex flex-col gap-0.5">
             <p className="text-sm text-gray-500">
-              <span className="font-semibold text-gray-700">{totalCount.toLocaleString()}</span> total transactions
+              <span className="font-semibold text-gray-700">{totalCount.toLocaleString()}</span> matching transactions
               {" · "}
-              <span style={{ color: "#0D7A5F" }} className="font-semibold">{inwardCount.toLocaleString()} inward</span>
+              <span style={{ color: "#0D7A5F" }} className="font-semibold">{allTypeCounts.inward.toLocaleString()} inward</span>
               {" · "}
-              <span style={{ color: "#DC2626" }} className="font-semibold">{outwardCount.toLocaleString()} outward</span>
+              <span style={{ color: "#DC2626" }} className="font-semibold">{allTypeCounts.outward.toLocaleString()} outward</span>
             </p>
           </div>
         </div>
@@ -711,7 +766,7 @@ export default function Transactions() {
       <div className="flex flex-wrap gap-2 mb-4">
         {TYPE_FILTERS.map(tf => {
           const isActive = filterType === tf.key;
-          const count = typeCounts[tf.key] || 0;
+          const count = allTypeCounts[tf.key] || 0;
           return (
             <button
               key={tf.key}
@@ -725,7 +780,7 @@ export default function Transactions() {
               }}
             >
               <span style={{ fontSize: "0.7rem" }}>{tf.icon}</span>
-              {tf.label} <span style={{ opacity: 0.8 }}>({count})</span>
+              {tf.label} <span style={{ opacity: 0.8 }}>({count.toLocaleString()})</span>
             </button>
           );
         })}
@@ -745,252 +800,255 @@ export default function Transactions() {
                 boxShadow: isActive ? "0 2px 8px #1B3A6B40" : "none",
               }}
             >
-              🏭 {loc.name}
+              📍 {loc.name}
             </button>
           );
         })}
+      </div>
 
-        {/* Date range */}
-        <div className="flex items-center gap-1.5 ml-auto">
+      {/* ── DATE RANGE FILTER ── */}
+      <div className="flex flex-wrap gap-3 mb-5 items-center">
+        <div className="flex items-center gap-2">
+          <label className="text-xs font-semibold text-gray-500 whitespace-nowrap">From</label>
           <input
             type="date"
             value={filterDateFrom}
             onChange={e => setFilterDateFrom(e.target.value)}
-            className="border border-gray-200 rounded-lg px-2 py-1 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-blue-200"
+            className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 bg-white"
           />
-          <span className="text-gray-400 text-xs">to</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <label className="text-xs font-semibold text-gray-500 whitespace-nowrap">To</label>
           <input
             type="date"
             value={filterDateTo}
             onChange={e => setFilterDateTo(e.target.value)}
-            className="border border-gray-200 rounded-lg px-2 py-1 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-blue-200"
+            className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 bg-white"
           />
-          {(filterDateFrom || filterDateTo) && (
-            <button
-              onClick={() => { setFilterDateFrom(""); setFilterDateTo(""); }}
-              className="text-xs text-gray-400 hover:text-red-500 transition px-1"
-            >✕</button>
-          )}
         </div>
+        {(filterDateFrom || filterDateTo) && (
+          <button
+            onClick={() => { setFilterDateFrom(""); setFilterDateTo(""); }}
+            className="text-xs text-red-500 hover:text-red-700 font-semibold px-2 py-1 rounded border border-red-200 hover:bg-red-50 transition"
+          >
+            ✕ Clear dates
+          </button>
+        )}
       </div>
 
-      {/* ── LOADING ── */}
-      {loading && (
-        <div className="flex items-center justify-center py-20 text-gray-400">
-          <svg className="animate-spin mr-2" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
-          Loading transactions…
+      {/* ── TRANSACTION LIST ── */}
+      {loading ? (
+        <div className="text-center py-16 text-gray-400">
+          <div className="text-3xl mb-3 animate-spin inline-block">⟳</div>
+          <p className="text-sm">Loading transactions…</p>
         </div>
-      )}
-
-      {/* ── EMPTY STATE ── */}
-      {!loading && filtered.length === 0 && (
-        <div className="text-center py-20">
-          <div className="text-5xl mb-3">📋</div>
-          <p className="text-gray-500 font-semibold">No transactions found</p>
-          <p className="text-gray-400 text-sm mt-1">
-            {search || filterType !== "all" || filterLocation !== "all" || filterDateFrom || filterDateTo
-              ? "Try adjusting your filters"
-              : "Add your first transaction using the button above"}
-          </p>
+      ) : filtered.length === 0 ? (
+        <div className="text-center py-16 text-gray-400">
+          <div className="text-4xl mb-3">📭</div>
+          <p className="font-semibold text-gray-500">No transactions found</p>
+          <p className="text-sm mt-1">Try adjusting your filters or search query.</p>
         </div>
-      )}
+      ) : (
+        <>
+          {sortedDates.map(dateKey => {
+            const isOpen = openDates[dateKey] !== false; // default open
+            const rows   = dateGroups[dateKey];
+            return (
+              <div key={dateKey} className="mb-4">
+                {/* Date group header */}
+                <button
+                  onClick={() => toggleDate(dateKey)}
+                  className="w-full flex items-center justify-between px-4 py-2.5 rounded-xl text-sm font-bold transition hover:opacity-90"
+                  style={{ background: "#1B3A6B", color: "white" }}
+                >
+                  <span className="flex items-center gap-2">
+                    📅 {formatDateLabel(dateKey + "T00:00:00")}
+                    <span className="text-xs font-normal opacity-75 ml-1">({rows.length} entries)</span>
+                  </span>
+                  <span>{isOpen ? "▲" : "▼"}</span>
+                </button>
 
-      {/* ── DATE-GROUPED TRANSACTION TABLES (mirrors Products category groups) ── */}
-      {!loading && sortedDates.map(dateKey => {
-        const items = dateGroups[dateKey];
-        const isOpen = openDates[dateKey] !== false;
-        const dayInward  = items.filter(t => t.transaction_type === "inward").reduce((s, t) => s + Number(t.quantity), 0);
-        const dayOutward = items.filter(t => t.transaction_type === "outward").reduce((s, t) => s + Number(t.quantity), 0);
-
-        return (
-          <div key={dateKey} className="mb-4 rounded-xl overflow-hidden shadow-sm border border-gray-200">
-            {/* Date group header — mirrors Products category header */}
-            <button
-              onClick={() => toggleDate(dateKey)}
-              className="w-full flex items-center justify-between px-4 py-3 text-left transition hover:opacity-90"
-              style={{ background: "#1B3A6B" }}
-            >
-              <div className="flex items-center gap-3">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
-                <div>
-                  <span className="text-white font-black text-sm">{formatDateLabel(dateKey + "T00:00:00")}</span>
-                  <span className="text-white/70 text-xs ml-2">{items.length} transactions</span>
-                </div>
-              </div>
-              <div className="flex items-center gap-3">
-                {dayInward > 0  && <span className="text-xs font-bold px-2 py-0.5 rounded-full" style={{ background: "#0D7A5F22", color: "#6EE7B7" }}>▲ {dayInward.toLocaleString()} in</span>}
-                {dayOutward > 0 && <span className="text-xs font-bold px-2 py-0.5 rounded-full" style={{ background: "#DC262622", color: "#FCA5A5" }}>▼ {dayOutward.toLocaleString()} out</span>}
-                <svg className={`text-white transition-transform ${isOpen ? "rotate-180" : ""}`} width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="6 9 12 15 18 9"/></svg>
-              </div>
-            </button>
-
-            {/* Transaction rows table — mirrors Products grade table */}
-            {isOpen && (
-              <div className="bg-white overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b border-gray-100">
-                      <th className="px-4 py-2.5 text-left text-xs font-bold text-gray-400 w-36">Time</th>
-                      <th className="px-4 py-2.5 text-left text-xs font-bold text-gray-400">Product</th>
-                      <th className="px-4 py-2.5 text-center text-xs font-bold text-gray-400 w-24">Type</th>
-                      <th className="px-4 py-2.5 text-center text-xs font-bold text-gray-400 w-20">Qty</th>
-                      <th className="px-4 py-2.5 text-left text-xs font-bold text-gray-400 w-28">Location</th>
-                      <th className="px-4 py-2.5 text-left text-xs font-bold text-gray-400 w-32">Party</th>
-                      <th className="px-4 py-2.5 text-left text-xs font-bold text-gray-400">Notes</th>
-                      <th className="px-4 py-2.5 text-left text-xs font-bold text-gray-400 w-28">Employee</th>
-                      {isAdmin && <th className="px-4 py-2.5 text-center text-xs font-bold text-gray-400 w-24">Actions</th>}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {items.map((t, idx) => {
-                      const product  = products.find(p => p.id === t.product_id);
-                      const location = locations.find(l => l.id === t.location_id);
-                      const isIn     = t.transaction_type === "inward";
-
-                      return (
-                        <tr
-                          key={t.id}
-                          className={`border-b border-gray-50 transition ${idx % 2 === 0 ? "bg-white" : "bg-gray-50/50"} hover:bg-blue-50/30`}
-                        >
-                          {/* Time */}
-                          <td className="px-4 py-2.5">
-                            <span className="font-mono text-xs text-gray-500">
-                              {new Date(t.created_at).toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", hour12: true })}
-                            </span>
-                          </td>
-
-                          {/* Product */}
-                          <td className="px-4 py-2.5">
-                            <div>
-                              <span className="font-semibold text-gray-800 text-sm">{product?.product_name || <span className="text-gray-400 italic">Unknown product</span>}</span>
-                              {product?.product_id && (
-                                <span className="ml-2 font-mono text-xs text-gray-400">{product.product_id}</span>
-                              )}
-                            </div>
-                          </td>
-
-                          {/* Type badge */}
-                          <td className="px-4 py-2.5 text-center">
-                            <span
-                              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-bold border"
-                              style={{
-                                background: isIn ? "#E6F5F1" : "#FEF2F2",
-                                color: isIn ? "#0D7A5F" : "#DC2626",
-                                borderColor: isIn ? "#A7F3D0" : "#FECACA",
-                              }}
-                            >
-                              {isIn ? "▲ IN" : "▼ OUT"}
-                            </span>
-                          </td>
-
-                          {/* Qty */}
-                          <td className="px-4 py-2.5 text-center">
-                            <span className={`font-black text-sm ${isIn ? "text-green-700" : "text-red-600"}`}>
-                              {isIn ? "+" : "−"}{Number(t.quantity).toLocaleString()}
-                            </span>
-                          </td>
-
-                          {/* Location */}
-                          <td className="px-4 py-2.5">
-                            <span className="text-xs font-semibold text-gray-600 capitalize">{location?.name || "—"}</span>
-                          </td>
-
-                          {/* Party */}
-                          <td className="px-4 py-2.5">
-                            <span className="text-xs text-gray-600">{t.party || <span className="text-gray-300">—</span>}</span>
-                          </td>
-
-                          {/* Notes */}
-                          <td className="px-4 py-2.5">
-                            <span className="text-xs text-gray-500">{t.notes || <span className="text-gray-300">—</span>}</span>
-                          </td>
-
-                          {/* Employee */}
-                          <td className="px-4 py-2.5">
-                            <span className="text-xs text-gray-400 truncate max-w-[110px] block">{t.created_by_email || "System"}</span>
-                          </td>
-
-                          {/* Actions (admin only) */}
-                          {isAdmin && (
-                            <td className="px-4 py-2.5">
-                              <div className="flex items-center justify-center gap-1.5">
-                                <button
-                                  onClick={() => handleEditClick(t)}
-                                  title="Edit"
-                                  className="inline-flex items-center justify-center w-7 h-7 rounded-lg bg-gray-100 text-gray-600 hover:bg-gray-200 transition"
-                                >
-                                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-                                </button>
-                                <button
-                                  onClick={() => setDeleteConfirm(t.id)}
-                                  title="Delete"
-                                  className="inline-flex items-center justify-center w-7 h-7 rounded-lg bg-red-50 text-red-400 hover:bg-red-100 transition"
-                                >
-                                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/></svg>
-                                </button>
-                              </div>
-                            </td>
-                          )}
+                {isOpen && (
+                  <div className="mt-1 rounded-xl overflow-hidden border border-gray-100 shadow-sm">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr style={{ background: "#F1F5FB" }} className="text-xs uppercase tracking-wider">
+                          <th className="px-4 py-2.5 text-left font-bold" style={{ color: "#1B3A6B" }}>Time</th>
+                          <th className="px-4 py-2.5 text-left font-bold" style={{ color: "#1B3A6B" }}>Product</th>
+                          <th className="px-4 py-2.5 text-center font-bold" style={{ color: "#1B3A6B" }}>Type</th>
+                          <th className="px-4 py-2.5 text-center font-bold" style={{ color: "#1B3A6B" }}>Qty</th>
+                          <th className="px-4 py-2.5 text-left font-bold" style={{ color: "#1B3A6B" }}>Location</th>
+                          <th className="px-4 py-2.5 text-left font-bold" style={{ color: "#1B3A6B" }}>Party</th>
+                          <th className="px-4 py-2.5 text-left font-bold" style={{ color: "#1B3A6B" }}>Notes</th>
+                          <th className="px-4 py-2.5 text-left font-bold" style={{ color: "#1B3A6B" }}>By</th>
+                          {isAdmin && <th className="px-4 py-2.5 text-center font-bold" style={{ color: "#1B3A6B" }}>Actions</th>}
                         </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+                      </thead>
+                      <tbody className="divide-y divide-gray-100">
+                        {rows.map((t, i) => {
+                          const product  = products.find(p => p.id === t.product_id);
+                          const location = locations.find(l => l.id === t.location_id);
+                          const isIn     = t.transaction_type === "inward";
+                          return (
+                            <tr
+                              key={t.id}
+                              className="hover:bg-blue-50/40 transition-colors"
+                              style={{ background: i % 2 === 0 ? "white" : "#FAFAFA" }}
+                            >
+                              <td className="px-4 py-2.5 text-xs text-gray-500 whitespace-nowrap">
+                                {new Date(t.created_at).toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", hour12: true })}
+                              </td>
+                              <td className="px-4 py-2.5 font-semibold text-gray-800 max-w-xs">
+                                <div className="truncate">{product?.product_name || <span className="text-gray-400 italic">Unknown</span>}</div>
+                                {product?.product_id && <div className="text-xs text-gray-400 font-normal">{product.product_id}</div>}
+                              </td>
+                              <td className="px-4 py-2.5 text-center">
+                                <span
+                                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-bold"
+                                  style={{
+                                    background: isIn ? "#E6F5F1" : "#FEF2F2",
+                                    color:      isIn ? "#0D7A5F" : "#DC2626",
+                                  }}
+                                >
+                                  {isIn ? "▲" : "▼"} {t.transaction_type.toUpperCase()}
+                                </span>
+                              </td>
+                              <td className="px-4 py-2.5 text-center font-bold" style={{ color: isIn ? "#0D7A5F" : "#DC2626" }}>
+                                {isIn ? "+" : "−"}{t.quantity}
+                              </td>
+                              <td className="px-4 py-2.5 text-gray-600 text-xs">{location?.name || "—"}</td>
+                              <td className="px-4 py-2.5 text-gray-600 text-xs">{t.party || "—"}</td>
+                              <td className="px-4 py-2.5 text-gray-500 text-xs max-w-[160px]">
+                                <div className="truncate">{t.notes || "—"}</div>
+                              </td>
+                              <td className="px-4 py-2.5 text-gray-400 text-xs">
+                                <div className="truncate max-w-[120px]">{t.created_by_email || "System"}</div>
+                              </td>
+                              {isAdmin && (
+                                <td className="px-4 py-2.5 text-center">
+                                  <div className="flex justify-center gap-1">
+                                    <button
+                                      onClick={() => handleEditClick(t)}
+                                      className="p-1.5 rounded-lg hover:bg-blue-100 transition text-blue-600"
+                                      title="Edit"
+                                    >
+                                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                                    </button>
+                                    <button
+                                      onClick={() => setDeleteConfirm(t.id)}
+                                      className="p-1.5 rounded-lg hover:bg-red-100 transition text-red-500"
+                                      title="Delete"
+                                    >
+                                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
+                                    </button>
+                                  </div>
+                                </td>
+                              )}
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </div>
-            )}
-          </div>
-        );
-      })}
+            );
+          })}
 
-      {/* ── PAGINATION ── */}
-      {!loading && totalPages > 1 && (
-        <div className="flex items-center justify-between mt-4 px-1">
-          <p className="text-sm text-gray-500">
-            Showing {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, totalCount)} of {totalCount.toLocaleString()} transactions
-          </p>
-          <div className="flex gap-2">
-            <button
-              onClick={() => setPage(p => Math.max(0, p - 1))}
-              disabled={page === 0}
-              style={{ background: "#1B3A6B" }}
-              className="text-white px-4 py-2 rounded-lg text-sm font-semibold hover:opacity-90 transition disabled:opacity-30"
-            >
-              ← Prev
-            </button>
-            <span className="flex items-center px-3 text-sm text-gray-600 font-semibold">
-              {page + 1} / {totalPages}
-            </span>
-            <button
-              onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))}
-              disabled={page >= totalPages - 1}
-              style={{ background: "#1B3A6B" }}
-              className="text-white px-4 py-2 rounded-lg text-sm font-semibold hover:opacity-90 transition disabled:opacity-30"
-            >
-              Next →
-            </button>
-          </div>
-        </div>
+          {/* ── PAGINATION ── */}
+          {totalPages > 1 && (
+            <div className="flex items-center justify-between mt-6 px-2">
+              <p className="text-sm text-gray-500">
+                Showing{" "}
+                <span className="font-semibold text-gray-700">
+                  {(page * PAGE_SIZE + 1).toLocaleString()}–{Math.min((page + 1) * PAGE_SIZE, totalCount).toLocaleString()}
+                </span>{" "}
+                of{" "}
+                <span className="font-semibold text-gray-700">{totalCount.toLocaleString()}</span>
+              </p>
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => setPage(0)}
+                  disabled={page === 0}
+                  className="px-2 py-1.5 rounded-lg text-sm font-semibold border transition disabled:opacity-30"
+                  style={{ borderColor: "#D1D5DB", color: "#1B3A6B" }}
+                  title="First page"
+                >«</button>
+                <button
+                  onClick={() => setPage(p => Math.max(0, p - 1))}
+                  disabled={page === 0}
+                  className="px-3 py-1.5 rounded-lg text-sm font-semibold border transition disabled:opacity-30"
+                  style={{ borderColor: "#D1D5DB", color: "#1B3A6B" }}
+                >‹ Prev</button>
+
+                {/* Page number pills */}
+                {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                  // Show pages around current page
+                  let start = Math.max(0, page - 2);
+                  if (start + 5 > totalPages) start = Math.max(0, totalPages - 5);
+                  const p = start + i;
+                  return (
+                    <button
+                      key={p}
+                      onClick={() => setPage(p)}
+                      className="w-9 h-9 rounded-lg text-sm font-bold border transition"
+                      style={{
+                        background: p === page ? "#1B3A6B" : "white",
+                        color:      p === page ? "white"   : "#1B3A6B",
+                        borderColor: p === page ? "#1B3A6B" : "#D1D5DB",
+                      }}
+                    >
+                      {p + 1}
+                    </button>
+                  );
+                })}
+
+                <button
+                  onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))}
+                  disabled={page >= totalPages - 1}
+                  className="px-3 py-1.5 rounded-lg text-sm font-semibold border transition disabled:opacity-30"
+                  style={{ borderColor: "#D1D5DB", color: "#1B3A6B" }}
+                >Next ›</button>
+                <button
+                  onClick={() => setPage(totalPages - 1)}
+                  disabled={page >= totalPages - 1}
+                  className="px-2 py-1.5 rounded-lg text-sm font-semibold border transition disabled:opacity-30"
+                  style={{ borderColor: "#D1D5DB", color: "#1B3A6B" }}
+                  title="Last page"
+                >»</button>
+              </div>
+            </div>
+          )}
+        </>
       )}
 
-      {/* ── DELETE CONFIRM MODAL (mirrors Products delete modal) ── */}
+      {/* ── DELETE CONFIRM MODAL ── */}
       {deleteConfirm && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-6 text-center">
-            <div className="text-4xl mb-3">🗑️</div>
-            <h3 className="font-black text-base text-gray-800 mb-2">Delete Transaction?</h3>
-            <p className="text-sm text-gray-500 mb-5">This will permanently delete this transaction and adjust stock accordingly. This cannot be undone.</p>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl shadow-2xl p-6 max-w-sm w-full mx-4">
+            <div className="text-center mb-4">
+              <div className="text-4xl mb-2">🗑️</div>
+              <h3 className="font-black text-lg text-gray-800">Delete Transaction?</h3>
+              <p className="text-sm text-gray-500 mt-1">This action cannot be undone.</p>
+            </div>
             <div className="flex gap-3">
-              <button onClick={() => handleDelete(deleteConfirm)} className="flex-1 bg-red-600 text-white py-2 rounded-lg text-sm font-bold hover:bg-red-700 transition">
+              <button
+                onClick={() => handleDelete(deleteConfirm)}
+                className="flex-1 py-2.5 rounded-xl text-sm font-bold text-white transition hover:opacity-90"
+                style={{ background: "#DC2626" }}
+              >
                 Yes, Delete
               </button>
-              <button onClick={() => setDeleteConfirm(null)} className="flex-1 py-2 rounded-lg text-sm font-semibold text-gray-600 border border-gray-200 hover:bg-gray-50 transition">
+              <button
+                onClick={() => setDeleteConfirm(null)}
+                className="flex-1 py-2.5 rounded-xl text-sm font-bold border border-gray-200 text-gray-600 hover:bg-gray-50 transition"
+              >
                 Cancel
               </button>
             </div>
           </div>
         </div>
       )}
-
     </div>
   );
 }
