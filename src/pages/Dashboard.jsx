@@ -9,11 +9,12 @@ import jsPDF from "jspdf";
 import "jspdf-autotable";
 
 /* ─────────────────────────────────────────────────────────────────────────────
-   CATEGORY CONFIG — mirrors Products.jsx exactly so pie chart matches
+   CATEGORY CONFIG — mirrors Products.jsx so dashboard stays in sync
+   even after product master updates.
    ───────────────────────────────────────────────────────────────────────────── */
 const CATEGORIES = [
   { key: "seamless",  label: "Seamless Pipes",       color: "#1B3A6B", prefixes: ["NM-NBSMLS","NM-SMLS"] },
-  { key: "polish",    label: "Polish Pipes (ERW)",    color: "#E8630A", prefixes: ["NM-PP"] },
+  { key: "polish",    label: "Polish Pipes (ERW)",   color: "#E8630A", prefixes: ["NM-PP"] },
   { key: "nb",        label: "NB / GI Pipes",        color: "#0D7A5F", prefixes: ["NM-NB"] },
   { key: "nonpolish", label: "Non-Polish Pipes",     color: "#7C3AED", prefixes: ["NM-NMPR","NM-NPS","NM-NPR"] },
   { key: "sheets",    label: "Sheets / Plates",      color: "#B45309", prefixes: ["NM-SH","NM-SNO"] },
@@ -22,20 +23,31 @@ const CATEGORIES = [
   { key: "other",     label: "Others",               color: "#374151", prefixes: [] },
 ];
 
-const VALVE_KEYWORDS   = ["valve","gate valve","ball valve","butterfly valve","globe valve","check valve","needle valve","solenoid valve"];
-const FITTING_KEYWORDS = ["flange","elbow","tee","reducer","coupling","cap","fitting","union","bushing","nipple","socket","stub","olet","weldolet","sockolet"];
+const VALVE_KEYWORDS     = ["valve","gate valve","ball valve","butterfly valve","globe valve","check valve","needle valve","solenoid valve"];
+const FITTING_KEYWORDS   = ["flange","elbow","tee","reducer","coupling","cap","fitting","union","bushing","nipple","socket","stub","olet","weldolet","sockolet"];
+const POLISH_KEYWORDS    = ["polish","polished","mirror","buff"];
+const SHEET_KEYWORDS     = ["sheet","plate","coil","strip"];
+const SEAMLESS_KEYWORDS  = ["seamless", "smls"];
+const NON_POLISH_KEYWORDS = ["non polish", "non-polish", "npr", "np pipe"];
+const NB_GI_KEYWORDS     = ["nb", "gi", "galvanized", "galvanised"];
 
 function getCategory(product_id, product_name) {
-  const pid   = (product_id   || "").toUpperCase();
-  const pname = (product_name || "").toLowerCase();
+  const pid = String(product_id || "").toUpperCase().trim();
+  const pname = String(product_name || "").toLowerCase().trim();
+
   for (const cat of CATEGORIES) {
     if (cat.key === "other") continue;
-    if (cat.prefixes.some(p => pid.startsWith(p))) return cat;
+    if (cat.prefixes.some(prefix => pid.startsWith(prefix))) return cat;
   }
-  if (VALVE_KEYWORDS.some(k => pname.includes(k)))   return CATEGORIES.find(c => c.key === "valves");
-  if (FITTING_KEYWORDS.some(k => pname.includes(k))) return CATEGORIES.find(c => c.key === "fittings");
-  const pnameU = pname.toUpperCase();
-  if (pnameU.includes("SHEET") || pnameU.includes("PLATE")) return CATEGORIES.find(c => c.key === "sheets");
+
+  if (VALVE_KEYWORDS.some(k => pname.includes(k)))       return CATEGORIES.find(c => c.key === "valves");
+  if (FITTING_KEYWORDS.some(k => pname.includes(k)))     return CATEGORIES.find(c => c.key === "fittings");
+  if (SEAMLESS_KEYWORDS.some(k => pname.includes(k)))    return CATEGORIES.find(c => c.key === "seamless");
+  if (NON_POLISH_KEYWORDS.some(k => pname.includes(k)))  return CATEGORIES.find(c => c.key === "nonpolish");
+  if (POLISH_KEYWORDS.some(k => pname.includes(k)))      return CATEGORIES.find(c => c.key === "polish");
+  if (NB_GI_KEYWORDS.some(k => pname.includes(k)))       return CATEGORIES.find(c => c.key === "nb");
+  if (SHEET_KEYWORDS.some(k => pname.includes(k)))       return CATEGORIES.find(c => c.key === "sheets");
+
   return CATEGORIES[CATEGORIES.length - 1];
 }
 
