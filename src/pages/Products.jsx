@@ -147,6 +147,27 @@ function formatDateTime(iso) {
     + " " + d.toLocaleTimeString("en-IN", { hour:"2-digit", minute:"2-digit", hour12:true });
 }
 
+/* ─── Generic paginated fetch helper ───────────────────────────────────────────
+   Fetches ALL rows from a Supabase table/query by looping with .range() until
+   fewer rows than PAGE_SIZE are returned. Works around the 1 000-row default cap.
+   Usage:
+     const rows = await fetchAllRows(
+       supabase.from("products").select("*").order("product_name", { ascending: true })
+     );
+──────────────────────────────────────────────────────────────────────────────── */
+async function fetchAllRows(baseQuery, pageSize = 1000) {
+  const all = [];
+  let from = 0;
+  while (true) {
+    const { data, error } = await baseQuery.range(from, from + pageSize - 1);
+    if (error || !data || data.length === 0) break;
+    all.push(...data);
+    if (data.length < pageSize) break;
+    from += pageSize;
+  }
+  return all;
+}
+
 export default function Products() {
   const [products, setProducts]     = useState([]);
   const [stockMap, setStockMap]     = useState({});
@@ -190,9 +211,12 @@ export default function Products() {
     finally { setLoading(false); }
   };
 
+  // ── FIX 1: paginate products (was capped at 1 000 rows) ──────────────────────
   const loadProducts = async () => {
-    const { data, error } = await supabase.from("products").select("*").order("product_name", { ascending: true });
-    if (!error) setProducts(data || []);
+    const data = await fetchAllRows(
+      supabase.from("products").select("*").order("product_name", { ascending: true })
+    );
+    setProducts(data);
   };
 
   const loadLocations = async () => {
@@ -253,19 +277,20 @@ export default function Products() {
     setShowTallyAll(false);
   };
 
+  // ── FIX 2: paginate per-product ledger (could exceed 1 000 for busy products) ─
   const openLedger = async (product) => {
     setSelectedProduct(product);
     setLedgerLoading(true);
     setLedger([]);
-    const { data, error } = await supabase.from("transactions").select("*").eq("product_id", product.id).order("created_at", { ascending: true });
-    if (!error && data) {
-      let balance = 0;
-      setLedger(data.map(t => {
-        const q = Number(t.quantity) || 0;
-        if (t.transaction_type === "inward") balance += q; else balance -= q;
-        return { ...t, balance: safeStock(balance) };
-      }));
-    }
+    const data = await fetchAllRows(
+      supabase.from("transactions").select("*").eq("product_id", product.id).order("created_at", { ascending: true })
+    );
+    let balance = 0;
+    setLedger(data.map(t => {
+      const q = Number(t.quantity) || 0;
+      if (t.transaction_type === "inward") balance += q; else balance -= q;
+      return { ...t, balance: safeStock(balance) };
+    }));
     setLedgerLoading(false);
   };
 
@@ -344,9 +369,12 @@ export default function Products() {
     }
     const rowsWithStock = bulkRows.filter(r => r._stock !== null && r._stock > 0);
     if (rowsWithStock.length > 0) {
-      const { data: freshProducts } = await supabase.from("products").select("id, product_name");
+      // ── FIX 3: paginate freshProducts lookup so it sees all 1 265+ products ──
+      const freshProducts = await fetchAllRows(
+        supabase.from("products").select("id, product_name")
+      );
       const nameToId = {};
-      (freshProducts || []).forEach(p => { nameToId[p.product_name] = p.id; });
+      freshProducts.forEach(p => { nameToId[p.product_name] = p.id; });
       const txns = [];
       for (const row of rowsWithStock) {
         const productUUID = nameToId[row.product_name];
