@@ -320,21 +320,18 @@ function isoToLocalDate(iso) {
 // Convert a local YYYY-MM-DD to an ISO UTC range for Supabase filtering
 function localDateToUTCRange(dateStr, isEnd = false) {
   if (!dateStr) return null;
-  // Interpret the date string as IST (UTC+5:30)
   const [y, m, d] = dateStr.split("-").map(Number);
-  const offsetMs = 5.5 * 60 * 60 * 1000; // IST offset
+  const offsetMs = 5.5 * 60 * 60 * 1000;
   if (!isEnd) {
-    // Start of day IST → UTC
     const startIST = new Date(Date.UTC(y, m - 1, d, 0, 0, 0, 0));
     return new Date(startIST.getTime() - offsetMs).toISOString();
   } else {
-    // End of day IST → UTC
     const endIST = new Date(Date.UTC(y, m - 1, d, 23, 59, 59, 999));
     return new Date(endIST.getTime() - offsetMs).toISOString();
   }
 }
 
-// ── TYPE FILTER CONFIG (mirrors category pills in Products) ───────────────────
+// ── TYPE FILTER CONFIG ────────────────────────────────────────────────────────
 
 const TYPE_FILTERS = [
   { key: "all",     label: "All",     icon: "◈", color: "#1B3A6B", light: "#EBF0FA" },
@@ -347,6 +344,8 @@ const TYPE_FILTERS = [
 export default function Transactions() {
   const [products, setProducts]             = useState([]);
   const [locations, setLocations]           = useState([]);
+  // productMap: uuid -> {product_name, product_id} for fast lookup in render
+  const [productMap, setProductMap]         = useState({});
   const [transactions, setTransactions]     = useState([]);
   const [search, setSearch]                 = useState("");
   const [filterType, setFilterType]         = useState("all");
@@ -359,14 +358,13 @@ export default function Transactions() {
   const [showForm, setShowForm]             = useState(false);
   const [deleteConfirm, setDeleteConfirm]   = useState(null);
 
-  // Collapsible date groups — mirrors Products collapsible categories
   const [openDates, setOpenDates] = useState({});
 
   const [page, setPage]             = useState(0);
   const [totalCount, setTotalCount] = useState(0);
   const PAGE_SIZE = 50;
 
-  // Separate counts for type-pill badges (unfiltered by type/location/date)
+  // Global unfiltered counts for type-pill badges
   const [allTypeCounts, setAllTypeCounts] = useState({ all: 0, inward: 0, outward: 0 });
 
   const [form, setForm] = useState({
@@ -379,8 +377,7 @@ export default function Transactions() {
   // Re-fetch whenever any filter or page changes
   useEffect(() => { fetchTransactions(); }, [page, search, filterType, filterLocation, filterDateFrom, filterDateTo]);
 
-  // When filters change (not page), always reset to page 0.
-  // The page reset itself triggers the fetchTransactions above.
+  // When filters change (not page), always reset to page 0
   useEffect(() => { setPage(0); }, [search, filterType, filterLocation, filterDateFrom, filterDateTo]);
 
   const checkUserRole = async () => {
@@ -389,13 +386,20 @@ export default function Transactions() {
   };
 
   async function fetchDropdowns() {
-    const { data: prod } = await supabase.from("products").select("*");
-    const { data: loc }  = await supabase.from("locations").select("*");
-    setProducts(prod || []);
+    const [{ data: prod }, { data: loc }] = await Promise.all([
+      supabase.from("products").select("*"),
+      supabase.from("locations").select("*"),
+    ]);
+    const pList = prod || [];
+    setProducts(pList);
+    // Build a fast lookup map by UUID
+    const map = {};
+    pList.forEach(p => { map[p.id] = p; });
+    setProductMap(map);
     setLocations(loc || []);
   }
 
-  // Fetch total inward/outward counts for the type pills (no filters applied)
+  // Fetch total inward/outward counts for the type pills (no filters)
   async function fetchTypeCounts() {
     const [{ count: total }, { count: inward }, { count: outward }] = await Promise.all([
       supabase.from("transactions").select("id", { count: "exact", head: true }),
@@ -416,9 +420,20 @@ export default function Transactions() {
       const from = page * PAGE_SIZE;
       const to   = from + PAGE_SIZE - 1;
 
+      // ── STRATEGY: use products(id) join so Postgres can filter by product name ──
+      // The select string "*, products!inner(id,product_name,product_id)" pulls the
+      // joined product columns alongside every transaction row. We then use
+      // products.product_name.ilike and products.product_id.ilike for product search.
+
+      const searchTerm = search.trim();
+
+      // Decide join type: inner when searching by product name so non-matching rows
+      // are excluded at DB level; left join otherwise to keep all transactions.
+      const joinType = searchTerm ? "products!inner" : "products";
+
       let query = supabase
         .from("transactions")
-        .select("*", { count: "exact" })
+        .select(`*, ${joinType}(id, product_name, product_id)`, { count: "exact" })
         .order("created_at", { ascending: false })
         .range(from, to);
 
@@ -432,17 +447,21 @@ export default function Transactions() {
         query = query.eq("location_id", filterLocation);
       }
 
-      // Server-side date range filter (convert IST → UTC)
+      // Server-side date range (IST → UTC)
       const utcFrom = localDateToUTCRange(filterDateFrom, false);
       const utcTo   = localDateToUTCRange(filterDateTo, true);
       if (utcFrom) query = query.gte("created_at", utcFrom);
       if (utcTo)   query = query.lte("created_at", utcTo);
 
-      // Server-side party/notes text search (Postgres ilike)
-      // Product name search is still client-side below (requires join)
-      if (search.trim()) {
+      // Server-side text search across party, notes, AND product name/id
+      if (searchTerm) {
         query = query.or(
-          `party.ilike.%${search.trim()}%,notes.ilike.%${search.trim()}%`
+          [
+            `party.ilike.%${searchTerm}%`,
+            `notes.ilike.%${searchTerm}%`,
+            `products.product_name.ilike.%${searchTerm}%`,
+            `products.product_id.ilike.%${searchTerm}%`,
+          ].join(",")
         );
       }
 
@@ -509,13 +528,16 @@ export default function Transactions() {
 
   const exportToExcel = async () => {
     try {
-      const { data: allTrans } = await supabase.from("transactions").select("*").order("created_at", { ascending: false });
+      const { data: allTrans } = await supabase
+        .from("transactions")
+        .select("*, products(product_name)")
+        .order("created_at", { ascending: false });
       const exportData = (allTrans || []).map(t => ({
         Date_IST:  formatIST(t.created_at),
-        Product:   products.find(p => p.id === t.product_id)?.product_name || "",
+        Product:   t.products?.product_name || productMap[t.product_id]?.product_name || "—",
         Type:      t.transaction_type.toUpperCase(),
         Quantity:  t.quantity,
-        Location:  locations.find(l => l.id === t.location_id)?.name || "",
+        Location:  locations.find(l => l.id === t.location_id)?.name || "—",
         Party:     t.party || "—",
         Notes:     t.notes || "—",
         Employee:  t.created_by_email || "System",
@@ -529,7 +551,10 @@ export default function Transactions() {
 
   const exportToPDF = async () => {
     try {
-      const { data: allTrans, error } = await supabase.from("transactions").select("*").order("created_at", { ascending: false });
+      const { data: allTrans, error } = await supabase
+        .from("transactions")
+        .select("*, products(product_name)")
+        .order("created_at", { ascending: false });
       if (error) throw error;
       const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
       const pageW = doc.internal.pageSize.getWidth();
@@ -542,7 +567,7 @@ export default function Transactions() {
       doc.text(`Generated: ${new Date().toLocaleDateString("en-IN", { day:"2-digit", month:"short", year:"numeric" })}`, pageW - 14, 12, { align: "right" });
       const rows = (allTrans || []).map(t => [
         formatIST(t.created_at),
-        products.find(p => p.id === t.product_id)?.product_name || "—",
+        t.products?.product_name || productMap[t.product_id]?.product_name || "—",
         t.transaction_type.toUpperCase(),
         t.quantity,
         locations.find(l => l.id === t.location_id)?.name || "—",
@@ -569,26 +594,11 @@ export default function Transactions() {
     } catch (e) { alert("PDF export failed: " + e.message); }
   };
 
-  // ── Client-side product-name search overlay ───────────────────────────────
-  // Party/notes are already filtered server-side. We additionally filter
-  // locally for product_name / product_id matches so the search feels complete.
-  const filtered = search.trim()
-    ? transactions.filter(t => {
-        const product = products.find(p => p.id === t.product_id);
-        const productName = product?.product_name || "";
-        const productId   = product?.product_id   || "";
-        const searchLower = search.toLowerCase();
-        return (
-          productName.toLowerCase().includes(searchLower) ||
-          productId.toLowerCase().includes(searchLower) ||
-          (t.party || "").toLowerCase().includes(searchLower) ||
-          (t.notes || "").toLowerCase().includes(searchLower)
-        );
-      })
-    : transactions;
+  // ── NO client-side filtering needed — everything is server-side ──────────
+  // The `transactions` array is already the correct filtered+paginated page.
+  const filtered = transactions;
 
   // ── Group by date ─────────────────────────────────────────────────────────
-
   const dateGroups = {};
   filtered.forEach(t => {
     const dateKey = isoToLocalDate(t.created_at);
@@ -600,15 +610,18 @@ export default function Transactions() {
   const toggleDate = key => setOpenDates(prev => ({ ...prev, [key]: !prev[key] }));
 
   // ── Pagination ────────────────────────────────────────────────────────────
-
   const totalPages = Math.ceil(totalCount / PAGE_SIZE);
 
-  // ── Render ────────────────────────────────────────────────────────────────
+  // Helper: resolve product name from a transaction row
+  // The join attaches a `products` object on each row; fall back to productMap
+  const getProductName = (t) =>
+    t.products?.product_name || productMap[t.product_id]?.product_name || "Unknown";
 
+  // ── Render ────────────────────────────────────────────────────────────────
   return (
     <div style={{ background: "#F8F7F4", minHeight: "100vh" }} className="p-4 md:p-6 max-w-screen-xl mx-auto">
 
-      {/* ── HEADER (mirrors Products header exactly) ── */}
+      {/* ── HEADER ── */}
       <div className="flex flex-wrap items-start justify-between gap-3 mb-6">
         <div>
           <div className="flex items-center gap-3 mb-1">
@@ -651,48 +664,46 @@ export default function Transactions() {
             style={{ background: showForm ? "#6B7280" : "#E8630A" }}
             className="flex items-center gap-2 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:opacity-90 transition shadow-sm"
           >
-            {showForm ? "✕ Cancel" : "+ Add Transaction"}
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            {showForm ? "Cancel" : "+ Add Transaction"}
           </button>
         </div>
       </div>
 
-      {/* ── ADD / EDIT FORM (mirrors Products add form) ── */}
+      {/* ── ADD / EDIT FORM ── */}
       {showForm && (
-        <div className="bg-white border border-orange-200 shadow rounded-xl p-5 mb-5">
-          <h3 className="font-black text-base mb-3" style={{ color: "#E8630A" }}>
-            {editingId ? "✏️ Edit Transaction" : "+ Add New Transaction"}
-          </h3>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            {/* Product Picker — full width */}
-            <ProductPicker products={products} value={form.product_id} onChange={id => setForm(f => ({ ...f, product_id: id }))} />
-
-            {/* Location */}
+        <div className="rounded-2xl border mb-6 overflow-hidden shadow-lg" style={{ borderColor: "#D1D5DB", background: "white" }}>
+          <div className="px-5 py-4 flex items-center justify-between" style={{ background: "#1B3A6B" }}>
+            <h2 className="text-white font-bold text-base">{editingId ? "✏️ Edit Transaction" : "➕ New Transaction"}</h2>
+            <button onClick={cancelEdit} className="text-white/70 hover:text-white text-xl">×</button>
+          </div>
+          <div className="p-5 grid grid-cols-1 md:grid-cols-2 gap-4">
+            <ProductPicker products={products} value={form.product_id} onChange={v => setForm(f => ({ ...f, product_id: v }))} />
             <div>
-              <label className="block text-xs font-semibold text-gray-500 mb-1">Location <span className="text-red-400">*</span></label>
+              <label className="block text-xs font-black uppercase tracking-widest mb-1.5" style={{ color: "#1B3A6B" }}>📍 Location</label>
               <select
                 value={form.location_id}
                 onChange={e => setForm(f => ({ ...f, location_id: e.target.value }))}
-                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-300"
+                className="w-full rounded-xl border-2 px-4 py-3 text-sm font-medium focus:outline-none"
+                style={{ borderColor: form.location_id ? "#1B3A6B" : "#D1D5DB" }}
               >
                 <option value="">Select location…</option>
                 {locations.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
               </select>
             </div>
-
-            {/* Type */}
             <div>
-              <label className="block text-xs font-semibold text-gray-500 mb-1">Type <span className="text-red-400">*</span></label>
+              <label className="block text-xs font-black uppercase tracking-widest mb-1.5" style={{ color: "#1B3A6B" }}>⬆⬇ Type</label>
               <div className="flex gap-2">
                 {["inward", "outward"].map(type => (
                   <button
                     key={type}
                     type="button"
                     onClick={() => setForm(f => ({ ...f, transaction_type: type }))}
-                    className="flex-1 py-2 rounded-lg text-sm font-bold border-2 transition"
+                    className="flex-1 py-3 rounded-xl text-sm font-bold border-2 transition-all"
                     style={{
                       background: form.transaction_type === type ? (type === "inward" ? "#0D7A5F" : "#DC2626") : "white",
-                      color: form.transaction_type === type ? "white" : (type === "inward" ? "#0D7A5F" : "#DC2626"),
-                      borderColor: type === "inward" ? "#0D7A5F" : "#DC2626",
+                      color: form.transaction_type === type ? "white" : "#374151",
+                      borderColor: form.transaction_type === type ? (type === "inward" ? "#0D7A5F" : "#DC2626") : "#D1D5DB",
                     }}
                   >
                     {type === "inward" ? "▲ Inward" : "▼ Outward"}
@@ -700,250 +711,276 @@ export default function Transactions() {
                 ))}
               </div>
             </div>
-
-            {/* Quantity */}
             <div>
-              <label className="block text-xs font-semibold text-gray-500 mb-1">Quantity <span className="text-red-400">*</span></label>
+              <label className="block text-xs font-black uppercase tracking-widest mb-1.5" style={{ color: "#1B3A6B" }}>🔢 Quantity</label>
               <input
                 type="number"
+                min="1"
                 value={form.quantity}
                 onChange={e => setForm(f => ({ ...f, quantity: e.target.value }))}
-                placeholder="e.g. 50"
-                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-300"
+                placeholder="Enter quantity…"
+                className="w-full rounded-xl border-2 px-4 py-3 text-sm font-medium focus:outline-none"
+                style={{ borderColor: form.quantity ? "#1B3A6B" : "#D1D5DB" }}
               />
             </div>
-
-            {/* Party */}
             <div>
-              <label className="block text-xs font-semibold text-gray-500 mb-1">Party / Customer</label>
+              <label className="block text-xs font-black uppercase tracking-widest mb-1.5" style={{ color: "#1B3A6B" }}>👤 Party (optional)</label>
               <input
+                type="text"
                 value={form.party}
                 onChange={e => setForm(f => ({ ...f, party: e.target.value }))}
-                placeholder="e.g. Rajesh Steel"
-                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-300"
+                placeholder="Customer / supplier name…"
+                className="w-full rounded-xl border-2 px-4 py-3 text-sm font-medium focus:outline-none"
+                style={{ borderColor: "#D1D5DB" }}
               />
             </div>
-
-            {/* Notes */}
             <div>
-              <label className="block text-xs font-semibold text-gray-500 mb-1">Notes</label>
+              <label className="block text-xs font-black uppercase tracking-widest mb-1.5" style={{ color: "#1B3A6B" }}>📝 Notes (optional)</label>
               <input
+                type="text"
                 value={form.notes}
                 onChange={e => setForm(f => ({ ...f, notes: e.target.value }))}
-                placeholder="Optional note"
-                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-300"
+                placeholder="Any additional notes…"
+                className="w-full rounded-xl border-2 px-4 py-3 text-sm font-medium focus:outline-none"
+                style={{ borderColor: "#D1D5DB" }}
               />
             </div>
           </div>
-
-          <div className="flex gap-2 mt-4">
+          <div className="px-5 pb-5 flex gap-3">
             <button
               onClick={handleSave}
               style={{ background: "#E8630A" }}
-              className="text-white px-5 py-2 rounded-lg text-sm font-bold hover:opacity-90 transition"
+              className="flex-1 text-white py-3 rounded-xl font-bold text-sm hover:opacity-90 transition"
             >
-              {editingId ? "Update Transaction" : "Save Transaction"}
+              {editingId ? "💾 Save Changes" : "✅ Add Transaction"}
             </button>
-            <button onClick={cancelEdit} className="px-4 py-2 rounded-lg text-sm font-semibold text-gray-600 border border-gray-200 hover:bg-gray-50 transition">
+            <button onClick={cancelEdit} className="px-6 py-3 rounded-xl border-2 text-sm font-semibold text-gray-600 hover:bg-gray-50 transition" style={{ borderColor: "#D1D5DB" }}>
               Cancel
             </button>
           </div>
         </div>
       )}
 
-      {/* ── SEARCH (mirrors Products search bar) ── */}
+      {/* ── SEARCH BAR ── */}
       <div className="relative mb-4">
-        <svg className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+        <svg className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+        </svg>
         <input
+          type="text"
           value={search}
           onChange={e => setSearch(e.target.value)}
           placeholder="Search by product name, ID, party or notes…"
-          className="w-full pl-9 pr-4 py-2.5 border border-gray-200 rounded-xl text-sm bg-white shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
+          className="w-full pl-11 pr-4 py-3 rounded-xl border-2 text-sm focus:outline-none transition"
+          style={{ borderColor: search ? "#E8630A" : "#D1D5DB", background: "white" }}
         />
+        {search && (
+          <button onClick={() => setSearch("")} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 text-xl">×</button>
+        )}
       </div>
 
-      {/* ── FILTER PILLS (mirrors Products category pills) ── */}
+      {/* ── TYPE PILLS ── */}
       <div className="flex flex-wrap gap-2 mb-4">
-        {TYPE_FILTERS.map(tf => {
-          const isActive = filterType === tf.key;
-          const count = allTypeCounts[tf.key] || 0;
-          return (
-            <button
-              key={tf.key}
-              onClick={() => setFilterType(isActive && tf.key !== "all" ? "all" : tf.key)}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-semibold transition-all border"
-              style={{
-                background: isActive ? tf.color : "white",
-                color: isActive ? "white" : tf.color,
-                borderColor: tf.color,
-                boxShadow: isActive ? `0 2px 8px ${tf.color}40` : "none",
-              }}
-            >
-              <span style={{ fontSize: "0.7rem" }}>{tf.icon}</span>
-              {tf.label} <span style={{ opacity: 0.8 }}>({count.toLocaleString()})</span>
-            </button>
-          );
-        })}
-
-        {/* Location filter pills */}
-        {locations.map(loc => {
-          const isActive = filterLocation === loc.id;
-          return (
-            <button
-              key={loc.id}
-              onClick={() => setFilterLocation(isActive ? "all" : loc.id)}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-semibold transition-all border"
-              style={{
-                background: isActive ? "#1B3A6B" : "white",
-                color: isActive ? "white" : "#1B3A6B",
-                borderColor: "#1B3A6B",
-                boxShadow: isActive ? "0 2px 8px #1B3A6B40" : "none",
-              }}
-            >
-              📍 {loc.name}
-            </button>
-          );
-        })}
+        {TYPE_FILTERS.map(f => (
+          <button
+            key={f.key}
+            onClick={() => setFilterType(f.key)}
+            className="flex items-center gap-1.5 px-4 py-2 rounded-full text-sm font-bold border-2 transition-all"
+            style={{
+              background:   filterType === f.key ? f.color   : f.light,
+              color:        filterType === f.key ? "white"   : f.color,
+              borderColor:  filterType === f.key ? f.color   : "transparent",
+            }}
+          >
+            <span style={{ fontSize: "0.6rem" }}>{f.icon}</span>
+            {f.label}
+            <span className="ml-1 text-xs opacity-80">
+              ({f.key === "all" ? totalCount.toLocaleString() : allTypeCounts[f.key].toLocaleString()})
+            </span>
+          </button>
+        ))}
+        {/* Location pills */}
+        {locations.map(loc => (
+          <button
+            key={loc.id}
+            onClick={() => setFilterLocation(prev => prev === loc.id ? "all" : loc.id)}
+            className="flex items-center gap-1.5 px-4 py-2 rounded-full text-sm font-bold border-2 transition-all"
+            style={{
+              background:  filterLocation === loc.id ? "#E8630A" : "#FEF0E7",
+              color:       filterLocation === loc.id ? "white"   : "#E8630A",
+              borderColor: filterLocation === loc.id ? "#E8630A" : "transparent",
+            }}
+          >
+            <span style={{ fontSize: "0.6rem" }}>📍</span>
+            {loc.name}
+          </button>
+        ))}
       </div>
 
-      {/* ── DATE RANGE FILTER ── */}
-      <div className="flex flex-wrap gap-3 mb-5 items-center">
-        <div className="flex items-center gap-2">
-          <label className="text-xs font-semibold text-gray-500 whitespace-nowrap">From</label>
-          <input
-            type="date"
-            value={filterDateFrom}
-            onChange={e => setFilterDateFrom(e.target.value)}
-            className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 bg-white"
-          />
-        </div>
-        <div className="flex items-center gap-2">
-          <label className="text-xs font-semibold text-gray-500 whitespace-nowrap">To</label>
-          <input
-            type="date"
-            value={filterDateTo}
-            onChange={e => setFilterDateTo(e.target.value)}
-            className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 bg-white"
-          />
-        </div>
+      {/* ── DATE RANGE ── */}
+      <div className="flex flex-wrap items-center gap-3 mb-6">
+        <span className="text-sm font-semibold text-gray-600">From</span>
+        <input
+          type="date"
+          value={filterDateFrom}
+          onChange={e => setFilterDateFrom(e.target.value)}
+          className="border-2 rounded-lg px-3 py-1.5 text-sm focus:outline-none transition"
+          style={{ borderColor: filterDateFrom ? "#1B3A6B" : "#D1D5DB" }}
+        />
+        <span className="text-sm font-semibold text-gray-600">To</span>
+        <input
+          type="date"
+          value={filterDateTo}
+          onChange={e => setFilterDateTo(e.target.value)}
+          className="border-2 rounded-lg px-3 py-1.5 text-sm focus:outline-none transition"
+          style={{ borderColor: filterDateTo ? "#1B3A6B" : "#D1D5DB" }}
+        />
         {(filterDateFrom || filterDateTo) && (
           <button
             onClick={() => { setFilterDateFrom(""); setFilterDateTo(""); }}
-            className="text-xs text-red-500 hover:text-red-700 font-semibold px-2 py-1 rounded border border-red-200 hover:bg-red-50 transition"
+            className="text-xs text-gray-500 hover:text-red-500 underline"
           >
-            ✕ Clear dates
+            Clear dates
           </button>
         )}
       </div>
 
-      {/* ── TRANSACTION LIST ── */}
+      {/* ── TRANSACTIONS LIST ── */}
       {loading ? (
-        <div className="text-center py-16 text-gray-400">
-          <div className="text-3xl mb-3 animate-spin inline-block">⟳</div>
-          <p className="text-sm">Loading transactions…</p>
+        <div className="flex items-center justify-center py-20">
+          <div className="flex flex-col items-center gap-3">
+            <div className="w-10 h-10 rounded-full border-4 border-gray-200 animate-spin" style={{ borderTopColor: "#1B3A6B" }} />
+            <span className="text-sm text-gray-500 font-medium">Loading transactions…</span>
+          </div>
         </div>
-      ) : filtered.length === 0 ? (
-        <div className="text-center py-16 text-gray-400">
-          <div className="text-4xl mb-3">📭</div>
-          <p className="font-semibold text-gray-500">No transactions found</p>
-          <p className="text-sm mt-1">Try adjusting your filters or search query.</p>
+      ) : sortedDates.length === 0 ? (
+        <div className="flex flex-col items-center justify-center py-20 text-gray-400">
+          <div className="text-5xl mb-4">📭</div>
+          <p className="text-lg font-semibold">No transactions found</p>
+          <p className="text-sm mt-1">Try adjusting your filters or search term</p>
         </div>
       ) : (
         <>
           {sortedDates.map(dateKey => {
-            const isOpen = openDates[dateKey] !== false; // default open
-            const rows   = dateGroups[dateKey];
+            const group     = dateGroups[dateKey];
+            const isOpen    = openDates[dateKey] !== false; // default open
+            const dateLabel = formatDateLabel(group[0].created_at);
+
             return (
-              <div key={dateKey} className="mb-4">
-                {/* Date group header */}
+              <div key={dateKey} className="mb-4 rounded-2xl overflow-hidden shadow-sm border" style={{ borderColor: "#E5E7EB" }}>
+                {/* Date header */}
                 <button
                   onClick={() => toggleDate(dateKey)}
-                  className="w-full flex items-center justify-between px-4 py-2.5 rounded-xl text-sm font-bold transition hover:opacity-90"
-                  style={{ background: "#1B3A6B", color: "white" }}
+                  className="w-full flex items-center justify-between px-5 py-3 transition-colors"
+                  style={{ background: "#1B3A6B" }}
                 >
-                  <span className="flex items-center gap-2">
-                    📅 {formatDateLabel(dateKey + "T00:00:00")}
-                    <span className="text-xs font-normal opacity-75 ml-1">({rows.length} entries)</span>
-                  </span>
-                  <span>{isOpen ? "▲" : "▼"}</span>
+                  <div className="flex items-center gap-3">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2">
+                      <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>
+                    </svg>
+                    <span className="text-white font-bold text-sm">{dateLabel}</span>
+                    <span className="text-white/60 text-xs font-medium">({group.length} entries)</span>
+                  </div>
+                  <svg
+                    width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5"
+                    style={{ transform: isOpen ? "rotate(0deg)" : "rotate(180deg)", transition: "transform 0.2s" }}
+                  >
+                    <polyline points="18 15 12 9 6 15"/>
+                  </svg>
                 </button>
 
                 {isOpen && (
-                  <div className="mt-1 rounded-xl overflow-hidden border border-gray-100 shadow-sm">
+                  <div className="overflow-x-auto bg-white">
                     <table className="w-full text-sm">
                       <thead>
-                        <tr style={{ background: "#F1F5FB" }} className="text-xs uppercase tracking-wider">
-                          <th className="px-4 py-2.5 text-left font-bold" style={{ color: "#1B3A6B" }}>Time</th>
-                          <th className="px-4 py-2.5 text-left font-bold" style={{ color: "#1B3A6B" }}>Product</th>
-                          <th className="px-4 py-2.5 text-center font-bold" style={{ color: "#1B3A6B" }}>Type</th>
-                          <th className="px-4 py-2.5 text-center font-bold" style={{ color: "#1B3A6B" }}>Qty</th>
-                          <th className="px-4 py-2.5 text-left font-bold" style={{ color: "#1B3A6B" }}>Location</th>
-                          <th className="px-4 py-2.5 text-left font-bold" style={{ color: "#1B3A6B" }}>Party</th>
-                          <th className="px-4 py-2.5 text-left font-bold" style={{ color: "#1B3A6B" }}>Notes</th>
-                          <th className="px-4 py-2.5 text-left font-bold" style={{ color: "#1B3A6B" }}>By</th>
-                          {isAdmin && <th className="px-4 py-2.5 text-center font-bold" style={{ color: "#1B3A6B" }}>Actions</th>}
+                        <tr style={{ background: "#F3F4F6", borderBottom: "2px solid #E5E7EB" }}>
+                          {["TIME", "PRODUCT", "TYPE", "QTY", "LOCATION", "PARTY", "NOTES", "BY", "ACTIONS"].map(h => (
+                            <th key={h} className="px-4 py-3 text-left text-xs font-black tracking-widest" style={{ color: "#6B7280" }}>{h}</th>
+                          ))}
                         </tr>
                       </thead>
-                      <tbody className="divide-y divide-gray-100">
-                        {rows.map((t, i) => {
-                          const product  = products.find(p => p.id === t.product_id);
-                          const location = locations.find(l => l.id === t.location_id);
-                          const isIn     = t.transaction_type === "inward";
+                      <tbody>
+                        {group.map((t, i) => {
+                          const productName = getProductName(t);
+                          const locationName = locations.find(l => l.id === t.location_id)?.name || "—";
+                          const isEven = i % 2 === 0;
+
                           return (
                             <tr
                               key={t.id}
-                              className="hover:bg-blue-50/40 transition-colors"
-                              style={{ background: i % 2 === 0 ? "white" : "#FAFAFA" }}
+                              style={{ background: isEven ? "white" : "#FAFAFA", borderBottom: "1px solid #F3F4F6" }}
+                              className="hover:bg-blue-50/30 transition-colors"
                             >
-                              <td className="px-4 py-2.5 text-xs text-gray-500 whitespace-nowrap">
+                              <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap font-medium">
                                 {new Date(t.created_at).toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", hour12: true })}
                               </td>
-                              <td className="px-4 py-2.5 font-semibold text-gray-800 max-w-xs">
-                                <div className="truncate">{product?.product_name || <span className="text-gray-400 italic">Unknown</span>}</div>
-                                {product?.product_id && <div className="text-xs text-gray-400 font-normal">{product.product_id}</div>}
-                              </td>
-                              <td className="px-4 py-2.5 text-center">
-                                <span
-                                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-bold"
-                                  style={{
-                                    background: isIn ? "#E6F5F1" : "#FEF2F2",
-                                    color:      isIn ? "#0D7A5F" : "#DC2626",
-                                  }}
-                                >
-                                  {isIn ? "▲" : "▼"} {t.transaction_type.toUpperCase()}
+                              <td className="px-4 py-3 font-semibold text-gray-800 max-w-[200px]">
+                                <span className={productName === "Unknown" ? "italic text-gray-400" : ""}>
+                                  {productName}
                                 </span>
                               </td>
-                              <td className="px-4 py-2.5 text-center font-bold" style={{ color: isIn ? "#0D7A5F" : "#DC2626" }}>
-                                {isIn ? "+" : "−"}{t.quantity}
+                              <td className="px-4 py-3">
+                                <span
+                                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold whitespace-nowrap"
+                                  style={{
+                                    background: t.transaction_type === "inward" ? "#E6F5F1" : "#FEF2F2",
+                                    color:      t.transaction_type === "inward" ? "#0D7A5F" : "#DC2626",
+                                  }}
+                                >
+                                  {t.transaction_type === "inward" ? "▲" : "▼"} {t.transaction_type.toUpperCase()}
+                                </span>
                               </td>
-                              <td className="px-4 py-2.5 text-gray-600 text-xs">{location?.name || "—"}</td>
-                              <td className="px-4 py-2.5 text-gray-600 text-xs">{t.party || "—"}</td>
-                              <td className="px-4 py-2.5 text-gray-500 text-xs max-w-[160px]">
-                                <div className="truncate">{t.notes || "—"}</div>
+                              <td className="px-4 py-3 font-bold tabular-nums" style={{ color: t.transaction_type === "inward" ? "#0D7A5F" : "#DC2626" }}>
+                                {t.transaction_type === "inward" ? "+" : "-"}{t.quantity}
                               </td>
-                              <td className="px-4 py-2.5 text-gray-400 text-xs">
-                                <div className="truncate max-w-[120px]">{t.created_by_email || "System"}</div>
-                              </td>
-                              {isAdmin && (
-                                <td className="px-4 py-2.5 text-center">
-                                  <div className="flex justify-center gap-1">
+                              <td className="px-4 py-3 text-gray-600 whitespace-nowrap">{locationName}</td>
+                              <td className="px-4 py-3 text-gray-600 max-w-[140px] truncate">{t.party || "—"}</td>
+                              <td className="px-4 py-3 text-gray-500 max-w-[180px] truncate text-xs">{t.notes || "—"}</td>
+                              <td className="px-4 py-3 text-xs text-gray-400 whitespace-nowrap">{t.created_by_email?.split("@")[0] || "System"}</td>
+                              <td className="px-4 py-3">
+                                {isAdmin && (
+                                  <div className="flex items-center gap-2">
                                     <button
                                       onClick={() => handleEditClick(t)}
-                                      className="p-1.5 rounded-lg hover:bg-blue-100 transition text-blue-600"
+                                      className="p-1.5 rounded-lg hover:bg-blue-50 transition-colors"
                                       title="Edit"
                                     >
-                                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#1B3A6B" strokeWidth="2.5">
+                                        <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                                        <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                                      </svg>
                                     </button>
-                                    <button
-                                      onClick={() => setDeleteConfirm(t.id)}
-                                      className="p-1.5 rounded-lg hover:bg-red-100 transition text-red-500"
-                                      title="Delete"
-                                    >
-                                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
-                                    </button>
+                                    {deleteConfirm === t.id ? (
+                                      <div className="flex items-center gap-1">
+                                        <button
+                                          onClick={() => handleDelete(t.id)}
+                                          className="px-2 py-1 rounded text-xs font-bold text-white"
+                                          style={{ background: "#DC2626" }}
+                                        >
+                                          Confirm
+                                        </button>
+                                        <button
+                                          onClick={() => setDeleteConfirm(null)}
+                                          className="px-2 py-1 rounded text-xs font-bold text-gray-600 border"
+                                        >
+                                          No
+                                        </button>
+                                      </div>
+                                    ) : (
+                                      <button
+                                        onClick={() => setDeleteConfirm(t.id)}
+                                        className="p-1.5 rounded-lg hover:bg-red-50 transition-colors"
+                                        title="Delete"
+                                      >
+                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#DC2626" strokeWidth="2.5">
+                                          <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+                                          <path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
+                                        </svg>
+                                      </button>
+                                    )}
                                   </div>
-                                </td>
-                              )}
+                                )}
+                              </td>
                             </tr>
                           );
                         })}
@@ -957,97 +994,63 @@ export default function Transactions() {
 
           {/* ── PAGINATION ── */}
           {totalPages > 1 && (
-            <div className="flex items-center justify-between mt-6 px-2">
-              <p className="text-sm text-gray-500">
-                Showing{" "}
-                <span className="font-semibold text-gray-700">
-                  {(page * PAGE_SIZE + 1).toLocaleString()}–{Math.min((page + 1) * PAGE_SIZE, totalCount).toLocaleString()}
-                </span>{" "}
-                of{" "}
-                <span className="font-semibold text-gray-700">{totalCount.toLocaleString()}</span>
-              </p>
-              <div className="flex items-center gap-1">
-                <button
-                  onClick={() => setPage(0)}
-                  disabled={page === 0}
-                  className="px-2 py-1.5 rounded-lg text-sm font-semibold border transition disabled:opacity-30"
-                  style={{ borderColor: "#D1D5DB", color: "#1B3A6B" }}
-                  title="First page"
-                >«</button>
-                <button
-                  onClick={() => setPage(p => Math.max(0, p - 1))}
-                  disabled={page === 0}
-                  className="px-3 py-1.5 rounded-lg text-sm font-semibold border transition disabled:opacity-30"
-                  style={{ borderColor: "#D1D5DB", color: "#1B3A6B" }}
-                >‹ Prev</button>
+            <div className="flex items-center justify-center gap-2 mt-6 flex-wrap">
+              <button
+                onClick={() => setPage(0)}
+                disabled={page === 0}
+                className="px-3 py-2 rounded-lg text-sm font-semibold border-2 transition-all disabled:opacity-40"
+                style={{ borderColor: "#D1D5DB", color: "#1B3A6B" }}
+                title="First page"
+              >«</button>
+              <button
+                onClick={() => setPage(p => Math.max(0, p - 1))}
+                disabled={page === 0}
+                className="px-3 py-2 rounded-lg text-sm font-semibold border-2 transition-all disabled:opacity-40"
+                style={{ borderColor: "#D1D5DB", color: "#1B3A6B" }}
+              >‹ Prev</button>
 
-                {/* Page number pills */}
-                {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
-                  // Show pages around current page
-                  let start = Math.max(0, page - 2);
-                  if (start + 5 > totalPages) start = Math.max(0, totalPages - 5);
-                  const p = start + i;
-                  return (
-                    <button
-                      key={p}
-                      onClick={() => setPage(p)}
-                      className="w-9 h-9 rounded-lg text-sm font-bold border transition"
-                      style={{
-                        background: p === page ? "#1B3A6B" : "white",
-                        color:      p === page ? "white"   : "#1B3A6B",
-                        borderColor: p === page ? "#1B3A6B" : "#D1D5DB",
-                      }}
-                    >
-                      {p + 1}
-                    </button>
-                  );
-                })}
+              {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                const start = Math.min(Math.max(page - 2, 0), Math.max(totalPages - 5, 0));
+                const p = start + i;
+                return (
+                  <button
+                    key={p}
+                    onClick={() => setPage(p)}
+                    className="w-9 h-9 rounded-lg text-sm font-bold border-2 transition-all"
+                    style={{
+                      background:  p === page ? "#1B3A6B" : "white",
+                      color:       p === page ? "white"   : "#1B3A6B",
+                      borderColor: p === page ? "#1B3A6B" : "#D1D5DB",
+                    }}
+                  >{p + 1}</button>
+                );
+              })}
 
-                <button
-                  onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))}
-                  disabled={page >= totalPages - 1}
-                  className="px-3 py-1.5 rounded-lg text-sm font-semibold border transition disabled:opacity-30"
-                  style={{ borderColor: "#D1D5DB", color: "#1B3A6B" }}
-                >Next ›</button>
-                <button
-                  onClick={() => setPage(totalPages - 1)}
-                  disabled={page >= totalPages - 1}
-                  className="px-2 py-1.5 rounded-lg text-sm font-semibold border transition disabled:opacity-30"
-                  style={{ borderColor: "#D1D5DB", color: "#1B3A6B" }}
-                  title="Last page"
-                >»</button>
-              </div>
+              <button
+                onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))}
+                disabled={page >= totalPages - 1}
+                className="px-3 py-2 rounded-lg text-sm font-semibold border-2 transition-all disabled:opacity-40"
+                style={{ borderColor: "#D1D5DB", color: "#1B3A6B" }}
+              >Next ›</button>
+              <button
+                onClick={() => setPage(totalPages - 1)}
+                disabled={page >= totalPages - 1}
+                className="px-3 py-2 rounded-lg text-sm font-semibold border-2 transition-all disabled:opacity-40"
+                style={{ borderColor: "#D1D5DB", color: "#1B3A6B" }}
+                title="Last page"
+              >»</button>
+
+              <span className="text-xs text-gray-500 ml-2">
+                Page {page + 1} of {totalPages} · {totalCount.toLocaleString()} results
+              </span>
             </div>
           )}
         </>
       )}
 
-      {/* ── DELETE CONFIRM MODAL ── */}
+      {/* ── DELETE MODAL BACKDROP ── */}
       {deleteConfirm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
-          <div className="bg-white rounded-2xl shadow-2xl p-6 max-w-sm w-full mx-4">
-            <div className="text-center mb-4">
-              <div className="text-4xl mb-2">🗑️</div>
-              <h3 className="font-black text-lg text-gray-800">Delete Transaction?</h3>
-              <p className="text-sm text-gray-500 mt-1">This action cannot be undone.</p>
-            </div>
-            <div className="flex gap-3">
-              <button
-                onClick={() => handleDelete(deleteConfirm)}
-                className="flex-1 py-2.5 rounded-xl text-sm font-bold text-white transition hover:opacity-90"
-                style={{ background: "#DC2626" }}
-              >
-                Yes, Delete
-              </button>
-              <button
-                onClick={() => setDeleteConfirm(null)}
-                className="flex-1 py-2.5 rounded-xl text-sm font-bold border border-gray-200 text-gray-600 hover:bg-gray-50 transition"
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
-        </div>
+        <div className="fixed inset-0 z-40 bg-black/20" onClick={() => setDeleteConfirm(null)} />
       )}
     </div>
   );
