@@ -97,7 +97,8 @@ function AppContent({ session, onSignOut }) {
                 <Products />
               </RouteGuard>
             } />
-            <Route path="/transactions" element={<Transactions />} />
+            {/* Pass session.user so Transactions can check isAdmin for edit/delete */}
+            <Route path="/transactions" element={<Transactions user={session.user} />} />
             <Route path="/scan" element={<Scan />} />
             <Route path="/qr-print" element={<QRPrint />} />
             <Route path="/warehouse" element={<WarehouseStock />} />
