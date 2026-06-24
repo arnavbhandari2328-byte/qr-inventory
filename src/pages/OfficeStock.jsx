@@ -233,6 +233,16 @@ export default function OfficeStock() {
     [stockMap, locations]
   );
 
+  // ── Check if a product has ever had a transaction at ANY office location ──
+  const hasOfficeActivity = useCallback(
+    (uuid) => {
+      const locIds = locations.map(l => l.id);
+      if (!stockMap[uuid]) return false;
+      return locIds.some(lid => stockMap[uuid][lid] !== undefined);
+    },
+    [stockMap, locations]
+  );
+
   const submitStock = async () => {
     if (!stockForm.quantity || !stockModal) return;
     const qty = Number(stockForm.quantity);
@@ -379,9 +389,10 @@ export default function OfficeStock() {
   };
 
   // ── Filter + group ─────────────────────────────────────────────────────────
-  // FIX: Show ALL products (including new ones with 0 stock).
-  // Previously `.filter(p => officeTotal(p.id) !== 0 || search)` hid new products.
+  // Only show products that have had at least one transaction at an office location.
+  // This ensures warehouse-only products are excluded from this view.
   const filtered = products
+    .filter(p => hasOfficeActivity(p.id))
     .filter(p =>
       (p.product_name||"").toLowerCase().includes(search.toLowerCase()) ||
       (p.product_id||"").toLowerCase().includes(search.toLowerCase())
@@ -403,7 +414,7 @@ export default function OfficeStock() {
   });
 
   const catOrder      = CATEGORIES.map(c => c.key).filter(k => grouped[k]);
-  const lowStockCount = products.filter(p =>
+  const lowStockCount = filtered.filter(p =>
     p.low_stock_alert && officeTotal(p.id) <= Number(p.low_stock_alert) && officeTotal(p.id) > 0
   ).length;
 
@@ -497,7 +508,7 @@ export default function OfficeStock() {
             <path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/>
           </svg>
           <p className="font-semibold">No products found</p>
-          <p className="text-sm mt-1">{search ? "Try a different search term" : "Upload products to see them here"}</p>
+          <p className="text-sm mt-1">{search ? "Try a different search term" : "No office transactions recorded yet"}</p>
         </div>
       ) : (
         <div className="space-y-4">
