@@ -56,6 +56,25 @@ function safeStock(v) {
   return Object.is(n, -0) ? 0 : n;
 }
 
+/* ─── Load ALL products with pagination (fixes 1000-row Supabase cap) ───────
+   Fetches in pages of 1000 until all rows are retrieved.                     */
+async function loadAllProducts() {
+  const all = [];
+  let from = 0;
+  const PAGE_SIZE = 1000;
+  while (true) {
+    const { data, error } = await supabase
+      .from("products")
+      .select("id, product_id, product_name, low_stock_alert, high_stock_alert")
+      .range(from, from + PAGE_SIZE - 1);
+    if (error || !data || data.length === 0) break;
+    all.push(...data);
+    if (data.length < PAGE_SIZE) break;
+    from += PAGE_SIZE;
+  }
+  return all;
+}
+
 /* ─── Load ALL transactions and build stockMap[productUUID][locationId] ─────
    This is identical to Products.jsx loadStockFromTransactions() so numbers
    will always match exactly.                                                 */
@@ -178,10 +197,8 @@ export default function Dashboard() {
   // ── Main dashboard fetch ─────────────────────────────────────────────────────
   const fetchDashboardData = async () => {
     try {
-      // 1. Products master list
-      const { data: productsData } = await supabase
-        .from("products")
-        .select("id, product_id, product_name, low_stock_alert, high_stock_alert");
+      // 1. Products master list — paginated to load ALL products beyond the 1000-row default cap
+      const productsData = await loadAllProducts();
 
       // 2. Live stock map — built from raw transactions, identical to Products.jsx
       const stockMap = await loadLiveStockMap();
@@ -447,7 +464,7 @@ export default function Dashboard() {
         {/* Products */}
         <div className="bg-white p-5 rounded-2xl shadow-sm" style={{ border: "1.5px solid #1B3A6B22" }}>
           <p className="text-xs font-black uppercase tracking-widest mb-1" style={{ color: "#1B3A6B" }}>Products</p>
-          <p className="text-3xl font-black" style={{ color: "#1B3A6B" }}>{stats.totalProducts}</p>
+          <p className="text-3xl font-black" style={{ color: "#1B3A6B" }}>{stats.totalProducts.toLocaleString()}</p>
         </div>
         {/* Total Stock */}
         <div className="bg-white p-5 rounded-2xl shadow-sm" style={{ border: "1.5px solid #0D7A5F22" }}>
