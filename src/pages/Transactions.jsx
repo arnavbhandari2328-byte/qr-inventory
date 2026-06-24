@@ -221,6 +221,7 @@ export default function Transactions({ user }) {
   const [transactions, setTransactions] = useState([]);
   const [products,     setProducts]     = useState([]);
   const [locations,    setLocations]    = useState([]);
+  const [officeLocationIds, setOfficeLocationIds] = useState([]);
   const [typeCounts,   setTypeCounts]   = useState({ inward: 0, outward: 0, transfer: 0 });
 
   // UI state
@@ -255,24 +256,47 @@ export default function Transactions({ user }) {
     setLocations(locs ?? []);
   }, []);
 
-  const fetchTypeCounts = useCallback(async () => {
+  // Fetch only office location IDs — used to scope all queries
+  const fetchOfficeLocations = useCallback(async () => {
+    const { data } = await supabase
+      .from("locations")
+      .select("id")
+      .ilike("name", "office");
+    const ids = (data ?? []).map(l => l.id);
+    setOfficeLocationIds(ids);
+    return ids;
+  }, []);
+
+  const fetchTypeCounts = useCallback(async (officeIds) => {
+    if (!officeIds || officeIds.length === 0) {
+      setTypeCounts({ inward: 0, outward: 0, transfer: 0 });
+      return;
+    }
     const types = ["inward", "outward", "transfer"];
     const counts = {};
     await Promise.all(types.map(async (t) => {
       const { count } = await supabase
-        .from("transactions").select("id", { count: "exact", head: true })
-        .eq("transaction_type", t);
+        .from("transactions")
+        .select("id", { count: "exact", head: true })
+        .eq("transaction_type", t)
+        .in("location_id", officeIds);
       counts[t] = count ?? 0;
     }));
     setTypeCounts(counts);
   }, []);
 
-  const fetchTransactions = useCallback(async () => {
+  const fetchTransactions = useCallback(async (officeIds) => {
+    if (!officeIds || officeIds.length === 0) {
+      setTransactions([]);
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     try {
       let q = supabase
         .from("transactions")
         .select("*, products(product_name, product_id), locations(name)")
+        .in("location_id", officeIds)
         .order("created_at", { ascending: false })
         .range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1);
 
@@ -295,8 +319,21 @@ export default function Transactions({ user }) {
     }
   }, [page, filterType, filterProduct, filterLocation, filterDateFrom, filterDateTo, search]);
 
-  useEffect(() => { fetchDropdowns(); fetchTypeCounts(); }, [fetchDropdowns, fetchTypeCounts]);
-  useEffect(() => { fetchTransactions(); }, [fetchTransactions]);
+  // Bootstrap: fetch office IDs first, then use them for all data queries
+  useEffect(() => {
+    fetchOfficeLocations().then((ids) => {
+      fetchDropdowns();
+      fetchTypeCounts(ids);
+      fetchTransactions(ids);
+    });
+  }, [fetchOfficeLocations, fetchDropdowns, fetchTypeCounts, fetchTransactions]);
+
+  // Re-fetch transactions whenever filters/page change (officeLocationIds already set)
+  useEffect(() => {
+    if (officeLocationIds.length > 0) {
+      fetchTransactions(officeLocationIds);
+    }
+  }, [page, filterType, filterProduct, filterLocation, filterDateFrom, filterDateTo, search]); // eslint-disable-line
 
   // ── save / delete ──────────────────────────────────────────────────────────
 
@@ -324,9 +361,9 @@ export default function Transactions({ user }) {
       setShowForm(false);
       setForm({ product_id: "", location_id: "", transaction_type: "inward", quantity: "", party: "", notes: "" });
       setPage(0);
-      fetchTypeCounts();
+      fetchTypeCounts(officeLocationIds);
       fetchDropdowns();
-      fetchTransactions();
+      fetchTransactions(officeLocationIds);
     } catch { alert("Failed to save transaction."); }
   };
 
@@ -334,8 +371,8 @@ export default function Transactions({ user }) {
     if (!deleteTarget) return;
     await supabase.from("transactions").delete().eq("id", deleteTarget.id);
     setDeleteTarget(null);
-    fetchTypeCounts();
-    fetchTransactions();
+    fetchTypeCounts(officeLocationIds);
+    fetchTransactions(officeLocationIds);
   };
 
   const handleEdit = (t) => {
@@ -378,7 +415,7 @@ export default function Transactions({ user }) {
   const exportPDF = () => {
     const doc = new jsPDF();
     doc.setFontSize(14);
-    doc.text("Transactions — Nivee Metals", 14, 16);
+    doc.text("Transactions — Nivee Metals (Office)", 14, 16);
     autoTable(doc, {
       startY: 22,
       head: [["Date","Product","Location","Type","Qty","Party","Notes"]],
@@ -414,6 +451,9 @@ export default function Transactions({ user }) {
     );
   };
 
+  // Only show office locations in the location filter dropdown
+  const officeLocations = locations.filter(l => officeLocationIds.includes(l.id));
+
   // ══════════════════════════════════════════════════════════════════════════
   //   RENDER
   // ══════════════════════════════════════════════════════════════════════════
@@ -433,7 +473,7 @@ export default function Transactions({ user }) {
           <div>
             <h1 style={{ margin: 0, fontSize: 24, fontWeight: 700, color: "#1B3A6B" }}>📋 Transactions</h1>
             <p style={{ margin: "4px 0 0", color: "#6B7280", fontSize: 13 }}>
-              Stock movements across all locations
+              Office stock movements
             </p>
           </div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -487,7 +527,7 @@ export default function Transactions({ user }) {
                 />
               </div>
 
-              {/* Location */}
+              {/* Location — scoped to office only */}
               <div>
                 <label style={{ fontSize: 12, fontWeight: 600, color: "#374151", display: "block", marginBottom: 5 }}>Location *</label>
                 <select
@@ -496,7 +536,7 @@ export default function Transactions({ user }) {
                   style={{ width: "100%", border: "1.5px solid #D1D5DB", borderRadius: 8, padding: "7px 10px", fontSize: 13, outline: "none" }}
                 >
                   <option value="">Select location…</option>
-                  {locations.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+                  {officeLocations.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
                 </select>
               </div>
 
@@ -589,8 +629,8 @@ export default function Transactions({ user }) {
             <label style={{ fontSize: 11, fontWeight: 600, color: "#6B7280", display: "block", marginBottom: 4 }}>LOCATION</label>
             <select value={filterLocation} onChange={e => { setFilterLocation(e.target.value); setPage(0); }}
               style={{ border: "1.5px solid #D1D5DB", borderRadius: 7, padding: "6px 10px", fontSize: 12, outline: "none" }}>
-              <option value="">All locations</option>
-              {locations.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+              <option value="">All office locations</option>
+              {officeLocations.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
             </select>
           </div>
           <div>
@@ -615,7 +655,7 @@ export default function Transactions({ user }) {
         {loading ? (
           <div style={{ padding: 48, textAlign: "center", color: "#9CA3AF" }}>Loading transactions…</div>
         ) : transactions.length === 0 ? (
-          <div style={{ padding: 48, textAlign: "center", color: "#9CA3AF" }}>No transactions found</div>
+          <div style={{ padding: 48, textAlign: "center", color: "#9CA3AF" }}>No office transactions found</div>
         ) : (
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
@@ -677,12 +717,12 @@ export default function Transactions({ user }) {
           <button
             disabled={page === 0}
             onClick={() => setPage(p => p - 1)}
-            style={{ background: page === 0 ? "#F3F4F6" : "#1B3A6B", color: page === 0 ? "#9CA3AF" : "#fff", border: "none", borderRadius: 7, padding: "6px 16px", fontSize: 12, cursor: page === 0 ? "default" : "pointer", fontWeight: 600 }}
+            style={{ background: page === 0 ? "#F3F4F6" : "#1B3A6B", color: page === 0 ? "#9CA3AF" : "#fff", border: "none", borderRadius: 7, padding: "6px 16px", fontSize: 12, cursor: page === 0 ? "default" : "pointer" }}
           >← Prev</button>
           <button
             disabled={transactions.length < PAGE_SIZE}
             onClick={() => setPage(p => p + 1)}
-            style={{ background: transactions.length < PAGE_SIZE ? "#F3F4F6" : "#1B3A6B", color: transactions.length < PAGE_SIZE ? "#9CA3AF" : "#fff", border: "none", borderRadius: 7, padding: "6px 16px", fontSize: 12, cursor: transactions.length < PAGE_SIZE ? "default" : "pointer", fontWeight: 600 }}
+            style={{ background: transactions.length < PAGE_SIZE ? "#F3F4F6" : "#1B3A6B", color: transactions.length < PAGE_SIZE ? "#9CA3AF" : "#fff", border: "none", borderRadius: 7, padding: "6px 16px", fontSize: 12, cursor: transactions.length < PAGE_SIZE ? "default" : "pointer" }}
           >Next →</button>
         </div>
       </div>
