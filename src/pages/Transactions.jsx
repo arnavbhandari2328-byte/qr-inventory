@@ -420,11 +420,6 @@ export default function Transactions() {
       const from = page * PAGE_SIZE;
       const to   = from + PAGE_SIZE - 1;
 
-      // ── STRATEGY: use products(id) join so Postgres can filter by product name ──
-      // The select string "*, products!inner(id,product_name,product_id)" pulls the
-      // joined product columns alongside every transaction row. We then use
-      // products.product_name.ilike and products.product_id.ilike for product search.
-
       const searchTerm = search.trim();
 
       // Decide join type: inner when searching by product name so non-matching rows
@@ -595,7 +590,6 @@ export default function Transactions() {
   };
 
   // ── NO client-side filtering needed — everything is server-side ──────────
-  // The `transactions` array is already the correct filtered+paginated page.
   const filtered = transactions;
 
   // ── Group by date ─────────────────────────────────────────────────────────
@@ -613,9 +607,14 @@ export default function Transactions() {
   const totalPages = Math.ceil(totalCount / PAGE_SIZE);
 
   // Helper: resolve product name from a transaction row
-  // The join attaches a `products` object on each row; fall back to productMap
   const getProductName = (t) =>
     t.products?.product_name || productMap[t.product_id]?.product_name || "Unknown";
+
+  // Find the product name for the delete confirm modal
+  const deleteTarget = deleteConfirm
+    ? transactions.find(t => t.id === deleteConfirm)
+    : null;
+  const deleteTargetName = deleteTarget ? getProductName(deleteTarget) : "";
 
   // ── Render ────────────────────────────────────────────────────────────────
   return (
@@ -894,7 +893,7 @@ export default function Transactions() {
                     <table className="w-full text-sm">
                       <thead>
                         <tr style={{ background: "#F3F4F6", borderBottom: "2px solid #E5E7EB" }}>
-                          {["TIME", "PRODUCT", "TYPE", "QTY", "LOCATION", "PARTY", "NOTES", "BY", "ACTIONS"].map(h => (
+                          {["TIME", "PRODUCT", "TYPE", "QTY", "LOCATION", "PARTY", "NOTES", "BY", isAdmin ? "ACTIONS" : ""].filter(Boolean).map(h => (
                             <th key={h} className="px-4 py-3 text-left text-xs font-black tracking-widest" style={{ color: "#6B7280" }}>{h}</th>
                           ))}
                         </tr>
@@ -937,8 +936,8 @@ export default function Transactions() {
                               <td className="px-4 py-3 text-gray-600 max-w-[140px] truncate">{t.party || "—"}</td>
                               <td className="px-4 py-3 text-gray-500 max-w-[180px] truncate text-xs">{t.notes || "—"}</td>
                               <td className="px-4 py-3 text-xs text-gray-400 whitespace-nowrap">{t.created_by_email?.split("@")[0] || "System"}</td>
-                              <td className="px-4 py-3">
-                                {isAdmin && (
+                              {isAdmin && (
+                                <td className="px-4 py-3">
                                   <div className="flex items-center gap-2">
                                     <button
                                       onClick={() => handleEditClick(t)}
@@ -950,37 +949,19 @@ export default function Transactions() {
                                         <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
                                       </svg>
                                     </button>
-                                    {deleteConfirm === t.id ? (
-                                      <div className="flex items-center gap-1">
-                                        <button
-                                          onClick={() => handleDelete(t.id)}
-                                          className="px-2 py-1 rounded text-xs font-bold text-white"
-                                          style={{ background: "#DC2626" }}
-                                        >
-                                          Confirm
-                                        </button>
-                                        <button
-                                          onClick={() => setDeleteConfirm(null)}
-                                          className="px-2 py-1 rounded text-xs font-bold text-gray-600 border"
-                                        >
-                                          No
-                                        </button>
-                                      </div>
-                                    ) : (
-                                      <button
-                                        onClick={() => setDeleteConfirm(t.id)}
-                                        className="p-1.5 rounded-lg hover:bg-red-50 transition-colors"
-                                        title="Delete"
-                                      >
-                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#DC2626" strokeWidth="2.5">
-                                          <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
-                                          <path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
-                                        </svg>
-                                      </button>
-                                    )}
+                                    <button
+                                      onClick={() => setDeleteConfirm(t.id)}
+                                      className="p-1.5 rounded-lg hover:bg-red-50 transition-colors"
+                                      title="Delete"
+                                    >
+                                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#DC2626" strokeWidth="2.5">
+                                        <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+                                        <path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
+                                      </svg>
+                                    </button>
                                   </div>
-                                )}
-                              </td>
+                                </td>
+                              )}
                             </tr>
                           );
                         })}
@@ -1048,9 +1029,62 @@ export default function Transactions() {
         </>
       )}
 
-      {/* ── DELETE MODAL BACKDROP ── */}
+      {/* ── DELETE CONFIRM MODAL ── */}
       {deleteConfirm && (
-        <div className="fixed inset-0 z-40 bg-black/20" onClick={() => setDeleteConfirm(null)} />
+        <>
+          {/* Backdrop */}
+          <div
+            className="fixed inset-0 bg-black/40 z-50"
+            onClick={() => setDeleteConfirm(null)}
+          />
+          {/* Modal */}
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 pointer-events-none">
+            <div
+              className="bg-white rounded-2xl shadow-2xl w-full max-w-sm pointer-events-auto overflow-hidden"
+              style={{ border: "1px solid #E5E7EB" }}
+            >
+              {/* Modal header */}
+              <div className="px-6 py-4 flex items-center gap-3" style={{ background: "#FEF2F2", borderBottom: "1px solid #FECACA" }}>
+                <div className="w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0" style={{ background: "#DC2626" }}>
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5">
+                    <polyline points="3 6 5 6 21 6"/>
+                    <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+                    <path d="M10 11v6M14 11v6"/>
+                    <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
+                  </svg>
+                </div>
+                <div>
+                  <h3 className="font-black text-gray-800 text-base">Delete Transaction?</h3>
+                  <p className="text-xs text-gray-500 mt-0.5">This action cannot be undone</p>
+                </div>
+              </div>
+              {/* Modal body */}
+              <div className="px-6 py-4">
+                <p className="text-sm text-gray-600">
+                  You are about to permanently delete the transaction for{" "}
+                  <span className="font-bold text-gray-800">{deleteTargetName}</span>.
+                </p>
+              </div>
+              {/* Modal footer */}
+              <div className="px-6 pb-5 flex gap-3">
+                <button
+                  onClick={() => handleDelete(deleteConfirm)}
+                  className="flex-1 py-2.5 rounded-xl text-sm font-bold text-white transition hover:opacity-90"
+                  style={{ background: "#DC2626" }}
+                >
+                  Yes, Delete
+                </button>
+                <button
+                  onClick={() => setDeleteConfirm(null)}
+                  className="flex-1 py-2.5 rounded-xl text-sm font-bold border-2 text-gray-600 hover:bg-gray-50 transition"
+                  style={{ borderColor: "#D1D5DB" }}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        </>
       )}
     </div>
   );
