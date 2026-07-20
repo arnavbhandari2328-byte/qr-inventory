@@ -1,6 +1,19 @@
 import { useEffect, useState, useCallback } from "react";
 import { supabase } from "../supabase";
 
+async function fetchAllRows(baseQuery, pageSize = 1000) {
+  const all = [];
+  let from = 0;
+  while (true) {
+    const { data, error } = await baseQuery.range(from, from + pageSize - 1);
+    if (error || !data || data.length === 0) break;
+    all.push(...data);
+    if (data.length < pageSize) break;
+    from += pageSize;
+  }
+  return all;
+}
+
 /* ─────────────────────────────────────────
    NIVEE BRAND COLORS  (mirrors Products.jsx)
    Primary : Deep Steel Blue  #1B3A6B

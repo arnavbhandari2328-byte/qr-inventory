@@ -125,14 +125,48 @@ function extractGrade(name, catKey) {
   return "Standard";
 }
 
+function parseInchFraction(raw) {
+  const s = String(raw || "").trim();
+
+  const mixed = s.match(/^(\d+)\s*[- ]\s*(\d+)\s*\/\s*(\d+)$/);
+  if (mixed) {
+    const whole = Number(mixed[1]);
+    const num = Number(mixed[2]);
+    const den = Number(mixed[3]);
+    return den ? whole + (num / den) : whole;
+  }
+
+  const simple = s.match(/^(\d+)\s*\/\s*\d+$/);
+  if (simple) {
+    const num = Number(simple[1]);
+    const den = Number(simple[2]);
+    return den ? num / den : 0;
+  }
+
+  const decimal = Number(s);
+  return Number.isFinite(decimal) ? decimal : 9999;
+}
+
 function extractSizeKey(name) {
-  const s = (name || "").toLowerCase();
-  const nbMatch = s.match(/(\d+(?:\.\d+)?)\s*(?:nb|mm)/);
-  if (nbMatch) return parseFloat(nbMatch[1]);
-  const fracs = { "1/4":0.25,"3/8":0.375,"1/2":0.5,"3/4":0.75,"1/8":0.125 };
-  for (const [k,v] of Object.entries(fracs)) { if (s.includes(k)) return v; }
+  const s = String(name || "").toLowerCase();
+
+  const inchMatch = s.match(/(\d+(?:\s*[- ]\s*\d+\s*\/\s*\d+|\s*\/\s*\d+|\.\d+)?)\s*"/);
+  if (inchMatch) return parseInchFraction(inchMatch[1]);
+
+  const nbMatch = s.match(/(\d+(?:\.\d+)?)\s*nb/);
+  if (nbMatch) return Number(nbMatch[1]);
+
+  const mmMatch = s.match(/(\d+(?:\.\d+)?)\s*mm/);
+  if (mmMatch) return Number(mmMatch[1]);
+
+  const anyMixedFraction = s.match(/\d+\s*[- ]\s*\d+\s*\/\s*\d+/);
+  if (anyMixedFraction) return parseInchFraction(anyMixedFraction[0]);
+
+  const anySimpleFraction = s.match(/\d+\s*\/\s*\d+/);
+  if (anySimpleFraction) return parseInchFraction(anySimpleFraction[0]);
+
   const numMatch = s.match(/(\d+(?:\.\d+)?)/);
-  return numMatch ? parseFloat(numMatch[1]) : 9999;
+  return numMatch ? Number(numMatch[1]) : 9999;
 }
 
 function safeStock(v) {
