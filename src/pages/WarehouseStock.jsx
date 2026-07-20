@@ -137,7 +137,11 @@ function extractGrade(name, catKey) {
 function parseInchFraction(raw) {
   const s = String(raw || "").trim();
 
-  const mixed = s.match(/^(\d+)\s*[- ]\s*(\d+)\s*\/\s*(\d+)$/);
+  const normalized = s.replace(/^(\d{1,2})(1\/2|1\/4|3\/4|1\/8|3\/8|5\/8|7\/8)$/, (_, whole, frac) => {
+    return `${whole}-${frac}`;
+  });
+
+  const mixed = normalized.match(/^(\d+)\s*[- ]\s*(\d+)\s*\/\s*(\d+)$/);
   if (mixed) {
     const whole = Number(mixed[1]);
     const num = Number(mixed[2]);
@@ -145,14 +149,14 @@ function parseInchFraction(raw) {
     return den ? whole + (num / den) : whole;
   }
 
-  const simple = s.match(/^(\d+)\s*\/\s*(\d+)$/);
+  const simple = normalized.match(/^(\d+)\s*\/\s*(\d+)$/);
   if (simple) {
     const num = Number(simple[1]);
     const den = Number(simple[2]);
     return den ? num / den : 0;
   }
 
-  const decimal = Number(s);
+  const decimal = Number(normalized);
   return Number.isFinite(decimal) ? decimal : 9999;
 }
 
@@ -161,6 +165,9 @@ function extractSizeKey(name) {
 
   const inchMatch = s.match(/(\d+(?:\s*[- ]\s*\d+\s*\/\s*\d+|\s*\/\s*\d+|\.\d+)?)\s*"/);
   if (inchMatch) return parseInchFraction(inchMatch[1]);
+
+  const compactMixedMatch = s.match(/\b(\d{1,2}(?:1\/2|1\/4|3\/4|1\/8|3\/8|5\/8|7\/8))\b/);
+  if (compactMixedMatch) return parseInchFraction(compactMixedMatch[1]);
 
   const nbMatch = s.match(/(\d+(?:\.\d+)?)\s*nb\b/);
   if (nbMatch) return Number(nbMatch[1]);
