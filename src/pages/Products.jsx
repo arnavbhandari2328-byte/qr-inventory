@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useRef } from "react";
+﻿import { useEffect, useState, useCallback, useRef } from "react";
 import { supabase } from "../supabase";
 import * as XLSX from "xlsx";
 import jsPDF from "jspdf";
@@ -136,7 +136,7 @@ function parseInchFraction(raw) {
     return den ? whole + (num / den) : whole;
   }
 
-  const simple = s.match(/^(\d+)\s*\/\s*\d+$/);
+  const simple = s.match(/^(\d+)\s*\/\s*(\d+)$/);
   if (simple) {
     const num = Number(simple[1]);
     const den = Number(simple[2]);
@@ -153,10 +153,10 @@ function extractSizeKey(name) {
   const inchMatch = s.match(/(\d+(?:\s*[- ]\s*\d+\s*\/\s*\d+|\s*\/\s*\d+|\.\d+)?)\s*"/);
   if (inchMatch) return parseInchFraction(inchMatch[1]);
 
-  const nbMatch = s.match(/(\d+(?:\.\d+)?)\s*nb/);
+  const nbMatch = s.match(/(\d+(?:\.\d+)?)\s*nb\b/);
   if (nbMatch) return Number(nbMatch[1]);
 
-  const mmMatch = s.match(/(\d+(?:\.\d+)?)\s*mm/);
+  const mmMatch = s.match(/(\d+(?:\.\d+)?)\s*mm\b/);
   if (mmMatch) return Number(mmMatch[1]);
 
   const anyMixedFraction = s.match(/\d+\s*[- ]\s*\d+\s*\/\s*\d+/);
