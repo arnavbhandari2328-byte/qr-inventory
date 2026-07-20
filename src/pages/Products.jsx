@@ -176,6 +176,34 @@ function extractSizeKey(name) {
   return numMatch ? Number(numMatch[1]) : 9999;
 }
 
+function extractRectKey(name) {
+  const s = String(name || "").toUpperCase();
+  const m = s.match(/(\d+(?:\.\d+)?)\s*X\s*(\d+(?:\.\d+)?)\s*X\s*(\d+(?:\.\d+)?)\s*SWG/);
+  if (!m) return null;
+  return {
+    width: Number(m[1]),
+    height: Number(m[2]),
+    swg: Number(m[3]),
+  };
+}
+
+function compareProductsByDisplayOrder(a, b) {
+  const rectA = extractRectKey(a.product_name);
+  const rectB = extractRectKey(b.product_name);
+
+  if (rectA && rectB) {
+    if (rectA.width !== rectB.width) return rectA.width - rectB.width;
+    if (rectA.height !== rectB.height) return rectA.height - rectB.height;
+    if (rectA.swg !== rectB.swg) return rectA.swg - rectB.swg;
+    return String(a.product_name || "").localeCompare(String(b.product_name || ""));
+  }
+
+  const sizeDiff = extractSizeKey(a.product_name) - extractSizeKey(b.product_name);
+  if (sizeDiff !== 0) return sizeDiff;
+
+  return String(a.product_name || "").localeCompare(String(b.product_name || ""));
+}
+
 function safeStock(v) {
   const n = Number(v) || 0;
   return Object.is(n, -0) ? 0 : n;
@@ -611,7 +639,7 @@ export default function Products() {
   });
   Object.values(grouped).forEach(({ grades }) => {
     Object.keys(grades).forEach(g => {
-      grades[g].sort((a,b) => extractSizeKey(a.product_name) - extractSizeKey(b.product_name));
+      grades[g].sort(compareProductsByDisplayOrder);
     });
   });
 
