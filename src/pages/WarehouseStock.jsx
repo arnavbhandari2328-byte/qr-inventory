@@ -157,20 +157,15 @@ function parseInchFraction(raw) {
 }
 
 function extractSizeKey(name) {
-  const s = (name || "").toLowerCase();
-  const nbMatch = s.match(/(\d+(?:\.\d+)?)\s*(?:nb|mm)/);
-  if (nbMatch) return parseFloat(nbMatch[1]);
-  const fracs = { "1/4":0.25,"3/8":0.375,"1/2":0.5,"3/4":0.75,"1/8":0.125 };
-  for (const [k,v] of Object.entries(fracs)) { if (s.includes(k)) return v; }
   const s = String(name || "").toLowerCase();
 
   const inchMatch = s.match(/(\d+(?:\s*[- ]\s*\d+\s*\/\s*\d+|\s*\/\s*\d+|\.\d+)?)\s*"/);
   if (inchMatch) return parseInchFraction(inchMatch[1]);
 
-  const nbMatch = s.match(/(\d+(?:\.\d+)?)\s*nb/);
+  const nbMatch = s.match(/(\d+(?:\.\d+)?)\s*nb\b/);
   if (nbMatch) return Number(nbMatch[1]);
 
-  const mmMatch = s.match(/(\d+(?:\.\d+)?)\s*mm/);
+  const mmMatch = s.match(/(\d+(?:\.\d+)?)\s*mm\b/);
   if (mmMatch) return Number(mmMatch[1]);
 
   const anyMixedFraction = s.match(/\d+\s*[- ]\s*\d+\s*\/\s*\d+/);
@@ -180,8 +175,7 @@ function extractSizeKey(name) {
   if (anySimpleFraction) return parseInchFraction(anySimpleFraction[0]);
 
   const numMatch = s.match(/(\d+(?:\.\d+)?)/);
-  return numMatch ? parseFloat(numMatch[1]) : 9999;
-  return numMatch ? Number(numMatch[0]) : 9999;
+  return numMatch ? Number(numMatch[1]) : 9999;
 }
 
 function safeStock(v) {
@@ -220,14 +214,12 @@ export default function WarehouseStock() {
   };
 
   const loadProducts = async () => {
-    const { data, error } = await supabase
     const data = await fetchAllRows(
       supabase
-      .from("products")
-      .select("*")
-      .order("product_name", { ascending: true });
-    if (!error) setProducts(data || []);
-      .order("product_name", { ascending: true }));
+        .from("products")
+        .select("*")
+        .order("product_name", { ascending: true })
+    );
     setProducts(data || []);
   };
 
