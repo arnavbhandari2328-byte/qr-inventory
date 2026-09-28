@@ -145,6 +145,21 @@ function buildOrderedProductList(products) {
   return ordered;
 }
 
+// Fetch all products in pages because Supabase defaults to a maximum of 1,000 rows per request.
+async function fetchAllProductRows(baseQuery, pageSize = 1000) {
+  const all = [];
+  let from = 0;
+  while (true) {
+    const { data, error } = await baseQuery.range(from, from + pageSize - 1);
+    if (error) throw error;
+    if (!data || data.length === 0) break;
+    all.push(...data);
+    if (data.length < pageSize) break;
+    from += pageSize;
+  }
+  return all;
+}
+
 // ── Product Picker ────────────────────────────────────────────────────────────
 
 function ProductPicker({ products, value, onChange }) {
@@ -386,11 +401,12 @@ export default function Transactions() {
   };
 
   async function fetchDropdowns() {
-    const [{ data: prod }, { data: loc }] = await Promise.all([
-      supabase.from("products").select("*"),
+    const [pList, { data: loc }] = await Promise.all([
+      fetchAllProductRows(
+        supabase.from("products").select("*").order("product_name", { ascending: true })
+      ),
       supabase.from("locations").select("*"),
     ]);
-    const pList = prod || [];
     setProducts(pList);
     // Build a fast lookup map by UUID
     const map = {};
