@@ -253,7 +253,7 @@ export default function Products() {
   const [ledgerLoading, setLedgerLoading] = useState(false);
 
   const [showAddForm, setShowAddForm] = useState(false);
-  const [form, setForm]             = useState({ product_id:"", product_name:"", low_stock_alert:"" });
+  const [form, setForm]             = useState({ product_id:"", product_name:"", category:"", low_stock_alert:"" });
   const [saving, setSaving]         = useState(false);
 
   const [stockModal, setStockModal] = useState(null);
@@ -369,10 +369,11 @@ export default function Products() {
     const { error } = await supabase.from("products").insert([{
       product_id: form.product_id.trim() || null,
       product_name: form.product_name.trim(),
+      category: form.category || getCategory(form.product_id, form.product_name).key,
       low_stock_alert: form.low_stock_alert ? Number(form.low_stock_alert) : null,
     }]);
     setSaving(false);
-    if (!error) { setForm({ product_id:"", product_name:"", low_stock_alert:"" }); setShowAddForm(false); await loadProducts(); }
+    if (!error) { setForm({ product_id:"", product_name:"", category:"", low_stock_alert:"" }); setShowAddForm(false); await loadProducts(); }
   };
 
   const downloadTemplate = () => {
@@ -476,9 +477,9 @@ export default function Products() {
     await loadStockFromTransactions();
   };
 
-  const startEdit = (p) => { setEditingId(p.id); setEditForm({ product_name: p.product_name, product_id: p.product_id, low_stock_alert: p.low_stock_alert }); };
+  const startEdit = (p) => { setEditingId(p.id); setEditForm({ product_name: p.product_name, product_id: p.product_id, category: p.category || getCategory(p.product_id, p.product_name).key, low_stock_alert: p.low_stock_alert }); };
   const saveEdit  = async (id) => {
-    await supabase.from("products").update({ product_name: editForm.product_name, product_id: editForm.product_id, low_stock_alert: editForm.low_stock_alert ? Number(editForm.low_stock_alert) : null }).eq("id", id);
+    await supabase.from("products").update({ product_name: editForm.product_name, product_id: editForm.product_id, category: editForm.category || getCategory(editForm.product_id, editForm.product_name).key, low_stock_alert: editForm.low_stock_alert ? Number(editForm.low_stock_alert) : null }).eq("id", id);
     setEditingId(null);
     await loadProducts();
   };
@@ -792,6 +793,13 @@ export default function Products() {
               <input value={form.product_name} onChange={e => setForm(f => ({ ...f, product_name: e.target.value }))} placeholder="e.g. 25NB SS 304 Seamless Pipe" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-300" />
             </div>
             <div>
+              <label className="block text-xs font-semibold text-gray-500 mb-1">Category</label>
+              <select value={form.category} onChange={e => setForm(f => ({ ...f, category: e.target.value }))} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-orange-300">
+                <option value="">Auto-detect</option>
+                {CATEGORIES.map(cat => <option key={cat.key} value={cat.key}>{cat.label}</option>)}
+              </select>
+            </div>
+            <div>
               <label className="block text-xs font-semibold text-gray-500 mb-1">Low Stock Alert</label>
               <input type="number" value={form.low_stock_alert} onChange={e => setForm(f => ({ ...f, low_stock_alert: e.target.value }))} placeholder="e.g. 10" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-300" />
             </div>
@@ -913,6 +921,7 @@ export default function Products() {
                             <th className="px-4 py-2.5 text-center text-xs font-bold text-gray-400 w-20">Office</th>
                             <th className="px-4 py-2.5 text-center text-xs font-bold text-gray-400 w-24">Warehouse</th>
                             <th className="px-4 py-2.5 text-center text-xs font-bold text-gray-400 w-20">Total</th>
+                            <th className="px-4 py-2.5 text-center text-xs font-bold text-gray-400 w-36">Category</th>
                             <th className="px-4 py-2.5 text-center text-xs font-bold text-gray-400 w-20">Alert</th>
                             <th className="px-4 py-2.5 text-center text-xs font-bold text-gray-400 w-44">Actions</th>
                           </tr>
@@ -951,6 +960,15 @@ export default function Products() {
                                 </td>
                                 <td className="px-4 py-2.5 text-center">
                                   <span className={`font-black text-sm ${isLow ? "text-orange-500" : "text-gray-800"}`}>{total}</span>
+                                </td>
+                                <td className="px-4 py-2.5 text-center">
+                                  {isEditing
+                                    ? <select value={editForm.category || ""} onChange={e => setEditForm(f => ({ ...f, category: e.target.value }))} className="w-32 border border-gray-200 rounded px-2 py-1 text-xs bg-white">
+                                        <option value="">Auto-detect</option>
+                                        {CATEGORIES.map(cat => <option key={cat.key} value={cat.key}>{cat.label}</option>)}
+                                      </select>
+                                    : <span className="text-xs text-gray-500">{CATEGORIES.find(c => c.key === p.category)?.label || getCategory(p.product_id, p.product_name).label}</span>
+                                  }
                                 </td>
                                 <td className="px-4 py-2.5 text-center">
                                   {isEditing
